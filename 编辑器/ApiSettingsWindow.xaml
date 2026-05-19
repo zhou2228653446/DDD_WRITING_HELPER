@@ -1,0 +1,113 @@
+<Window x:Class="编辑器.ApiSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="API设置" Height="480" Width="560"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        ResizeMode="CanResize" SizeToContent="Height">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- 标签切换 -->
+        <TabControl x:Name="ModeTabControl" Grid.Row="0" SelectionChanged="ModeTabControl_SelectionChanged">
+            <!-- 表单编辑 -->
+            <TabItem Header="表单编辑">
+                <Grid Margin="5">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- 配置方案选择 -->
+                    <TextBlock Grid.Row="0" Text="配置方案" FontWeight="Bold" Margin="0,0,0,5"/>
+                    <Grid Grid.Row="1" Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <ComboBox x:Name="ProfileComboBox" Grid.Column="0" Margin="0,0,6,0"
+                                  SelectionChanged="ProfileComboBox_SelectionChanged"/>
+                        <Button Name="NewProfileBtn" Grid.Column="1" Content="+ 新建" Width="70" Margin="0,0,4,0"
+                                Click="NewProfile_Click"/>
+                        <Button Name="SaveProfileBtn" Grid.Column="2" Content="覆盖保存" Width="80" Margin="0,0,4,0"
+                                Click="SaveProfile_Click"/>
+                        <Button Name="DeleteProfileBtn" Grid.Column="3" Content="删除" Width="60"
+                                Click="DeleteProfile_Click"/>
+                    </Grid>
+
+                    <!-- Provider 选择 -->
+                    <TextBlock Grid.Row="2" Text="AI提供商" FontWeight="Bold" Margin="0,0,0,5"/>
+                    <ComboBox x:Name="ProviderComboBox" Grid.Row="3" Margin="0,0,0,8"
+                              SelectionChanged="ProviderComboBox_SelectionChanged"/>
+
+                    <!-- API URL -->
+                    <TextBlock Grid.Row="4" Text="API地址" FontWeight="Bold" Margin="0,0,0,5"/>
+                    <TextBox x:Name="ApiUrlTextBox" Grid.Row="5" Margin="0,0,0,8" FontSize="13"/>
+
+                    <!-- Model -->
+                    <TextBlock Grid.Row="6" Text="模型名称" FontWeight="Bold" Margin="0,0,0,5"/>
+                    <TextBox x:Name="ModelTextBox" Grid.Row="7" Margin="0,0,0,8" FontSize="13"/>
+
+                    <!-- API Key -->
+                    <TextBlock Grid.Row="8" Text="API Key" FontWeight="Bold" Margin="0,0,0,5"/>
+                    <PasswordBox x:Name="ApiKeyPasswordBox" Grid.Row="9" Margin="0,0,0,10" FontSize="13"/>
+
+                    <!-- 按钮 -->
+                    <StackPanel Grid.Row="11" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Name="TestButton" Content="测试连接" Width="100" Height="32" Margin="0,0,10,0"
+                                Click="TestConnection_Click"/>
+                        <Button Content="确定" Width="80" Height="32" Margin="0,0,10,0"
+                                Click="OkButton_Click" IsDefault="True"/>
+                        <Button Content="取消" Width="80" Height="32" Click="CancelButton_Click" IsCancel="True"/>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+
+            <!-- JSON 编辑 -->
+            <TabItem x:Name="JsonTabItem" Header="JSON编辑">
+                <Grid Margin="5">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Text="直接编辑 api_profiles.json 配置文件" FontWeight="Bold" Margin="0,0,0,6"/>
+
+                    <TextBox x:Name="JsonEditorTextBox" Grid.Row="1"
+                             FontFamily="Consolas" FontSize="13"
+                             AcceptsReturn="True" AcceptsTab="True"
+                             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                             TextWrapping="NoWrap"
+                             BorderBrush="#CCC" BorderThickness="1"
+                             Padding="8"/>
+
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                        <TextBlock x:Name="JsonValidationText" VerticalAlignment="Center" Margin="0,0,10,0"
+                                   Foreground="#999" FontSize="13"/>
+                        <Button Content="格式化" Width="80" Height="32" Margin="0,0,8,0"
+                                Click="FormatJson_Click"/>
+                        <Button Content="保存JSON并刷新" Width="130" Height="32" Margin="0,0,8,0"
+                                Click="SaveJson_Click" Background="#4CAF50" Foreground="White"/>
+                        <Button Content="取消" Width="80" Height="32"
+                                Click="CancelButton_Click" IsCancel="True"/>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+        </TabControl>
+    </Grid>
+</Window>

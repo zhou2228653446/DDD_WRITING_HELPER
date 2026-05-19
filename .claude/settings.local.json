@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build *)",
+      "Bash(grep -v -E '\\(\\\\\\\\obj\\\\\\\\|\\\\\\\\bin\\\\\\\\\\)')",
+      "Bash(taskkill //F //IM \"编辑器.exe\")"
+    ]
+  }
+}

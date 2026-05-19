@@ -1,0 +1,265 @@
+<Window x:Class="编辑器.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:编辑器"
+        mc:Ignorable="d"
+        Title="AI写作助手" Height="800" Width="1200">
+    <Window.Resources>
+        <!-- 可动态切换的背景色资源 -->
+        <SolidColorBrush x:Key="EditorBgBrush" Color="#FFFFFF"/>
+
+        <!-- 章节编辑器模板 -->
+        <DataTemplate x:Key="ChapterEditorTemplate">
+            <Grid Background="{DynamicResource EditorBgBrush}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <TextBox Grid.Row="0" Text="{Binding Title, UpdateSourceTrigger=PropertyChanged}"
+                         FontSize="16" FontWeight="Bold" Padding="10" BorderThickness="0,0,0,1"
+                         Background="{DynamicResource EditorBgBrush}"/>
+                <TextBox Grid.Row="1" Text="{Binding Content, UpdateSourceTrigger=PropertyChanged}"
+                         AcceptsReturn="True" AcceptsTab="True"
+                         VerticalScrollBarVisibility="Auto" TextWrapping="Wrap"
+                         FontSize="14" Padding="10" BorderThickness="0"
+                         Background="{DynamicResource EditorBgBrush}"/>
+            </Grid>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 菜单栏 -->
+        <Menu x:Name="MainMenu" Grid.Row="0">
+            <MenuItem Header="文件(_F)">
+                <MenuItem Header="新建项目(_N)" Click="NewProject_Click"/>
+                <MenuItem Header="打开项目(_O)" Click="OpenProject_Click"/>
+                <MenuItem Header="保存项目(_S)" Click="SaveProject_Click"/>
+                <Separator/>
+                <MenuItem Header="新建章节(_C)" Click="NewChapter_Click"/>
+                <MenuItem Header="保存章节(_H)" Click="SaveChapter_Click"/>
+                <Separator/>
+                <MenuItem Header="导出(_E)">
+                    <MenuItem Header="导出为Word" Click="ExportWord_Click"/>
+                    <MenuItem Header="导出为PDF" Click="ExportPdf_Click"/>
+                    <MenuItem Header="导出为TXT" Click="ExportTxt_Click"/>
+                </MenuItem>
+                <Separator/>
+                <MenuItem Header="退出(_X)" Click="Exit_Click"/>
+            </MenuItem>
+            <MenuItem Header="编辑(_E)">
+                <MenuItem Header="撤销(_U)" Command="ApplicationCommands.Undo"/>
+                <MenuItem Header="重做(_R)" Command="ApplicationCommands.Redo"/>
+                <Separator/>
+                <MenuItem Header="剪切(_T)" Command="ApplicationCommands.Cut"/>
+                <MenuItem Header="复制(_C)" Command="ApplicationCommands.Copy"/>
+                <MenuItem Header="粘贴(_P)" Command="ApplicationCommands.Paste"/>
+            </MenuItem>
+            <MenuItem Header="AI助手(_A)">
+                <MenuItem Header="续写(_W)" Click="ContinueWriting_Click"/>
+                <MenuItem Header="润色(_P)" Click="PolishText_Click"/>
+                <MenuItem Header="人名生成(_N)" Click="GenerateName_Click"/>
+                <MenuItem Header="万能聊天(_C)" Click="Chat_Click"/>
+                <Separator/>
+                <MenuItem Header="API设置(_S)" Click="ApiSettings_Click"/>
+            </MenuItem>
+            <MenuItem Header="视图(_V)">
+                <MenuItem x:Name="ProjectManagerMenuItem" Header="项目管理器(_P)" IsCheckable="True" IsChecked="True"/>
+                <MenuItem x:Name="AiPanelMenuItem" Header="AI助手面板(_A)" IsCheckable="True" IsChecked="True"/>
+                <Separator/>
+                <MenuItem Header="外观设置(_S)..." Click="AppearanceSettings_Click"/>
+                <MenuItem Header="路径设置(_P)..." Click="PathSettings_Click"/>
+            </MenuItem>
+            <MenuItem Header="帮助(_H)">
+                <MenuItem Header="关于(_A)" Click="About_Click"/>
+            </MenuItem>
+        </Menu>
+
+        <!-- 通知栏 -->
+        <Border x:Name="NotificationBorder" Grid.Row="1" Height="0" Padding="8,4"
+                Background="#4CAF50" Visibility="Collapsed">
+            <TextBlock x:Name="NotificationText" Foreground="White" FontWeight="Bold"
+                       HorizontalAlignment="Center" FontSize="13"/>
+        </Border>
+
+        <!-- 主内容区 -->
+        <Grid x:Name="MainContentGrid" Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="250" x:Name="ProjectPanelColumn"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="300" x:Name="AiPanelColumn"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- 项目管理器 + 版本历史 -->
+            <Border x:Name="ProjectPanelBorder" Grid.Column="0" BorderBrush="#DDD" BorderThickness="0,0,1,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="3*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="2*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- 项目管理器 -->
+                    <Grid Grid.Row="0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="项目管理器" FontWeight="Bold" Padding="10" Background="#F5F5F5"/>
+                        <TreeView Grid.Row="1" x:Name="ProjectTreeView" SelectedItemChanged="ProjectTreeView_SelectedItemChanged">
+                            <TreeView.Resources>
+                                <HierarchicalDataTemplate DataType="{x:Type local:NovelProject}" ItemsSource="{Binding Chapters}">
+                                    <TextBlock Text="{Binding ProjectName}"/>
+                                </HierarchicalDataTemplate>
+                                <DataTemplate DataType="{x:Type local:Chapter}">
+                                    <TextBlock Text="{Binding Title}"/>
+                                </DataTemplate>
+                            </TreeView.Resources>
+                        </TreeView>
+                    </Grid>
+
+                    <GridSplitter Grid.Row="1" Height="4" HorizontalAlignment="Stretch"
+                                  Background="#DDD" ResizeBehavior="PreviousAndNext"/>
+
+                    <!-- 版本历史 -->
+                    <Grid Grid.Row="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="版本历史" FontWeight="Bold" Padding="10" Background="#F0F0F0"/>
+                        <ListBox Grid.Row="1" x:Name="SnapshotListBox"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                 MouseDoubleClick="SnapshotListBox_MouseDoubleClick"
+                                 SelectionChanged="SnapshotListBox_SelectionChanged"
+                                 FontSize="13">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding DisplayText}" Padding="4,2"/>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="6,4">
+                            <Button x:Name="RestoreSnapshotBtn" Content="恢复选中版本" Padding="8,2"
+                                    FontSize="12" IsEnabled="False"
+                                    Click="RestoreSnapshot_Click"/>
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <!-- 编辑器区域 -->
+            <Grid Grid.Column="1">
+                <TabControl x:Name="EditorTabControl" SelectionChanged="EditorTabControl_SelectionChanged"/>
+            </Grid>
+
+            <!-- AI助手面板 -->
+            <Border x:Name="AiPanelBorder" Grid.Column="2" BorderBrush="#DDD" BorderThickness="1,0,0,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="AI助手" FontWeight="Bold" Padding="10" Background="#F5F5F5"/>
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="10">
+
+                            <!-- 功能按钮 -->
+                            <WrapPanel Margin="0,0,0,8">
+                                <Button Content="续写" Click="ContinueWriting_Click"
+                                        Width="75" Margin="0,0,4,4" Padding="6"/>
+                                <Button Content="润色" Click="PolishText_Click"
+                                        Width="75" Margin="0,0,4,4" Padding="6"/>
+                                <Button Content="人名生成" Click="GenerateName_Click"
+                                        Width="75" Margin="0,0,4,4" Padding="6"/>
+                                <Button Content="万能聊天" Click="Chat_Click"
+                                        Width="75" Padding="6"/>
+                            </WrapPanel>
+
+                            <!-- 润色预设（可开关、可自定义） -->
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                <CheckBox x:Name="PolishStyleToggle" IsChecked="True"
+                                          VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                <TextBlock Text="润色风格:" VerticalAlignment="Center" FontSize="13" Margin="0,0,6,0"/>
+                                <ComboBox x:Name="PolishStyleCombo" Width="110" FontSize="13" IsEditable="True"
+                                          IsEnabled="{Binding IsChecked, ElementName=PolishStyleToggle}"/>
+                                <Button Content="+" Width="26" Height="24" Margin="2,0,2,0" FontSize="14" FontWeight="Bold"
+                                        ToolTip="将当前内容保存为预设" Click="AddPolishPreset_Click"
+                                        IsEnabled="{Binding IsChecked, ElementName=PolishStyleToggle}"/>
+                                <Button Content="−" Width="26" Height="24" FontSize="14" FontWeight="Bold"
+                                        ToolTip="删除选中预设" Click="RemovePolishPreset_Click"
+                                        IsEnabled="{Binding IsChecked, ElementName=PolishStyleToggle}"/>
+                            </StackPanel>
+
+                            <!-- 要求/输入 -->
+                            <TextBlock Text="要求 / 输入" FontWeight="Bold" Margin="0,0,0,3" FontSize="13"/>
+                            <TextBox x:Name="AiInputTextBox" Height="70" AcceptsReturn="True" TextWrapping="Wrap"
+                                     VerticalScrollBarVisibility="Auto" FontSize="13" Padding="4" BorderBrush="#DDD"/>
+
+                            <!-- AI回复 -->
+                            <TextBlock Text="AI 回复" FontWeight="Bold" Margin="0,8,0,3" FontSize="13"/>
+                            <TextBox x:Name="AiResultTextBox" Height="100" AcceptsReturn="True" TextWrapping="Wrap"
+                                     VerticalScrollBarVisibility="Auto" FontSize="13" Padding="4" BorderBrush="#DDD"
+                                     IsReadOnly="True" Background="#F5F5F5"/>
+
+                            <Separator Margin="0,10"/>
+
+                            <!-- 上下文设定（常驻） -->
+                            <TextBlock Text="AI上下文设定（AI将参考以下内容）" FontWeight="Bold" Margin="0,0,0,6" FontSize="13"/>
+                            <TextBlock Text="全文大纲" FontWeight="Bold" Margin="0,0,0,2" FontSize="12" Foreground="#555"/>
+                            <TextBox x:Name="FullOutlineTextBox" Height="45" AcceptsReturn="True"
+                                     TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                     FontSize="12" Padding="4" BorderBrush="#DDD"/>
+                            <TextBlock Text="章节大纲" FontWeight="Bold" Margin="0,5,0,2" FontSize="12" Foreground="#555"/>
+                            <TextBox x:Name="ChapterOutlineTextBox" Height="45" AcceptsReturn="True"
+                                     TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                     FontSize="12" Padding="4" BorderBrush="#DDD"/>
+                            <TextBlock Text="主要人物设定" FontWeight="Bold" Margin="0,5,0,2" FontSize="12" Foreground="#555"/>
+                            <TextBox x:Name="CharacterSettingsTextBox" Height="45" AcceptsReturn="True"
+                                     TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                     FontSize="12" Padding="4" BorderBrush="#DDD"/>
+                            <TextBlock Text="主要背景设定" FontWeight="Bold" Margin="0,5,0,2" FontSize="12" Foreground="#555"/>
+                            <TextBox x:Name="BackgroundSettingsTextBox" Height="45" AcceptsReturn="True"
+                                     TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                     FontSize="12" Padding="4" BorderBrush="#DDD"/>
+                            <TextBlock Text="文风设定" FontWeight="Bold" Margin="0,5,0,2" FontSize="12" Foreground="#555"/>
+                            <TextBox x:Name="WritingStyleTextBox" Height="45" AcceptsReturn="True"
+                                     TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                     FontSize="12" Padding="4" BorderBrush="#DDD"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- 状态栏 -->
+        <StatusBar x:Name="MainStatusBar" Grid.Row="3">
+            <StatusBarItem>
+                <TextBlock x:Name="StatusTextBlock" Text="就绪"/>
+            </StatusBarItem>
+            <StatusBarItem>
+                <TextBlock x:Name="WordCountTextBlock" Text="字数: 0"/>
+            </StatusBarItem>
+            <StatusBarItem>
+                <TextBlock x:Name="ChapterInfoTextBlock" Text="章节: 未选择"/>
+            </StatusBarItem>
+            <Separator/>
+            <StatusBarItem>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="API: " VerticalAlignment="Center" Margin="0,0,4,0"/>
+                    <ComboBox x:Name="ProfileSwitcher" Width="160"
+                              SelectionChanged="ProfileSwitcher_SelectionChanged"/>
+                </StackPanel>
+            </StatusBarItem>
+        </StatusBar>
+    </Grid>
+</Window>

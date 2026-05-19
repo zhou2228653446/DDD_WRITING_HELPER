@@ -1,0 +1,67 @@
+<Window x:Class="编辑器.PathSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="路径设置" Height="260" Width="560"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        ResizeMode="CanResize" SizeToContent="Height">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="可自定义应用程序使用的目录路径，适用于将数据存放在不同位置（如云盘、移动硬盘等）。"
+                   TextWrapping="Wrap" FontSize="12" Foreground="#666" Margin="0,0,0,14"/>
+
+        <!-- 项目文件目录 -->
+        <Grid Grid.Row="1" Margin="0,0,0,10">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="项目文件目录" FontWeight="Bold" Margin="0,0,0,4"/>
+            <TextBox x:Name="ProjectsPathTextBox" Grid.Row="1" Grid.Column="0"
+                     FontSize="13" Padding="4"/>
+            <Button Grid.Row="1" Grid.Column="1" Content="浏览..." Width="70" Margin="6,0,0,0"
+                    Padding="4,2" Click="BrowseProjects_Click"/>
+        </Grid>
+
+        <!-- 配置文件目录 -->
+        <Grid Grid.Row="2" Margin="0,0,0,8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="配置文件目录" FontWeight="Bold" Margin="0,0,0,4"/>
+            <TextBox x:Name="ConfigPathTextBox" Grid.Row="1" Grid.Column="0"
+                     FontSize="13" Padding="4"/>
+            <Button Grid.Row="1" Grid.Column="1" Content="浏览..." Width="70" Margin="6,0,0,0"
+                    Padding="4,2" Click="BrowseConfig_Click"/>
+        </Grid>
+
+        <!-- 配置目录提示 -->
+        <TextBlock Grid.Row="3" Text="修改配置文件目录后需重启应用生效。"
+                   FontSize="11" Foreground="#999" Margin="0,0,0,12"/>
+
+        <!-- 按钮 -->
+        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="恢复默认" Width="90" Height="32" Margin="0,0,10,0"
+                    Click="ResetDefaults_Click"/>
+            <Button Content="确定" Width="80" Height="32" Margin="0,0,10,0"
+                    Click="OkButton_Click" IsDefault="True"/>
+            <Button Content="取消" Width="80" Height="32" Click="CancelButton_Click" IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</Window>

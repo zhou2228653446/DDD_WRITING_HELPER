@@ -174,7 +174,7 @@
                         <StackPanel Margin="10">
 
                             <!-- 功能按钮 -->
-                            <WrapPanel Margin="0,0,0,8">
+                            <WrapPanel Margin="0,0,0,6">
                                 <Button Content="续写" Click="ContinueWriting_Click"
                                         Width="75" Margin="0,0,4,4" Padding="6"/>
                                 <Button Content="润色" Click="PolishText_Click"
@@ -182,7 +182,19 @@
                                 <Button Content="人名生成" Click="GenerateName_Click"
                                         Width="75" Margin="0,0,4,4" Padding="6"/>
                                 <Button Content="万能聊天" Click="Chat_Click"
-                                        Width="75" Padding="6"/>
+                                        Width="75" Margin="0,0,4,4" Padding="6"/>
+                            </WrapPanel>
+
+                            <!-- 快速生成上下文 -->
+                            <WrapPanel Margin="0,0,0,6">
+                                <Button Content="生成大纲" Click="GenOutline_Click"
+                                        Width="75" Margin="0,0,4,4" Padding="6" FontSize="12"/>
+                                <Button Content="生成人物" Click="GenCharacter_Click"
+                                        Width="75" Margin="0,0,4,4" Padding="6" FontSize="12"/>
+                                <Button Content="生成背景" Click="GenBackground_Click"
+                                        Width="75" Margin="0,0,4,4" Padding="6" FontSize="12"/>
+                                <Button Content="生成章节" Click="GenChapterOutline_Click"
+                                        Width="75" Padding="6" FontSize="12"/>
                             </WrapPanel>
 
                             <!-- 润色预设（可开关、可自定义） -->
@@ -210,31 +222,52 @@
                             <TextBox x:Name="AiResultTextBox" Height="100" AcceptsReturn="True" TextWrapping="Wrap"
                                      VerticalScrollBarVisibility="Auto" FontSize="13" Padding="4" BorderBrush="#DDD"
                                      IsReadOnly="True" Background="#F5F5F5"/>
+                            <WrapPanel Margin="0,4,0,0">
+                                <Button Content="复制" Click="CopyAiResult_Click"
+                                        Width="55" Margin="0,0,4,0" Padding="4,2" FontSize="12"/>
+                                <Button x:Name="ApplyToContextBtn" Content="应用到 ▾" Click="ApplyToContext_Click"
+                                        Width="75" Padding="4,2" FontSize="12"/>
+                            </WrapPanel>
 
                             <Separator Margin="0,10"/>
 
-                            <!-- 上下文设定（常驻） -->
+                            <!-- 上下文设定（常驻，可折叠） -->
                             <TextBlock Text="AI上下文设定（AI将参考以下内容）" FontWeight="Bold" Margin="0,0,0,6" FontSize="13"/>
-                            <TextBlock Text="全文大纲" FontWeight="Bold" Margin="0,0,0,2" FontSize="12" Foreground="#555"/>
-                            <TextBox x:Name="FullOutlineTextBox" Height="45" AcceptsReturn="True"
-                                     TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                                     FontSize="12" Padding="4" BorderBrush="#DDD"/>
-                            <TextBlock Text="章节大纲" FontWeight="Bold" Margin="0,5,0,2" FontSize="12" Foreground="#555"/>
-                            <TextBox x:Name="ChapterOutlineTextBox" Height="45" AcceptsReturn="True"
-                                     TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                                     FontSize="12" Padding="4" BorderBrush="#DDD"/>
-                            <TextBlock Text="主要人物设定" FontWeight="Bold" Margin="0,5,0,2" FontSize="12" Foreground="#555"/>
-                            <TextBox x:Name="CharacterSettingsTextBox" Height="45" AcceptsReturn="True"
-                                     TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                                     FontSize="12" Padding="4" BorderBrush="#DDD"/>
-                            <TextBlock Text="主要背景设定" FontWeight="Bold" Margin="0,5,0,2" FontSize="12" Foreground="#555"/>
-                            <TextBox x:Name="BackgroundSettingsTextBox" Height="45" AcceptsReturn="True"
-                                     TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                                     FontSize="12" Padding="4" BorderBrush="#DDD"/>
-                            <TextBlock Text="文风设定" FontWeight="Bold" Margin="0,5,0,2" FontSize="12" Foreground="#555"/>
-                            <TextBox x:Name="WritingStyleTextBox" Height="45" AcceptsReturn="True"
-                                     TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                                     FontSize="12" Padding="4" BorderBrush="#DDD"/>
+
+                            <Expander x:Name="FullOutlineExpander" Header="全文大纲" IsExpanded="False"
+                                      Margin="0,0,0,4" FontSize="12" FontWeight="Bold" Foreground="#555">
+                                <TextBox x:Name="FullOutlineTextBox" Height="80" AcceptsReturn="True"
+                                         TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                         FontSize="12" Padding="4" BorderBrush="#DDD" Margin="0,4,0,0"/>
+                            </Expander>
+
+                            <Expander x:Name="ChapterOutlineExpander" Header="章节大纲" IsExpanded="False"
+                                      Margin="0,0,0,4" FontSize="12" FontWeight="Bold" Foreground="#555">
+                                <TextBox x:Name="ChapterOutlineTextBox" Height="80" AcceptsReturn="True"
+                                         TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                         FontSize="12" Padding="4" BorderBrush="#DDD" Margin="0,4,0,0"/>
+                            </Expander>
+
+                            <Expander x:Name="CharacterSettingsExpander" Header="主要人物设定" IsExpanded="False"
+                                      Margin="0,0,0,4" FontSize="12" FontWeight="Bold" Foreground="#555">
+                                <TextBox x:Name="CharacterSettingsTextBox" Height="80" AcceptsReturn="True"
+                                         TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                         FontSize="12" Padding="4" BorderBrush="#DDD" Margin="0,4,0,0"/>
+                            </Expander>
+
+                            <Expander x:Name="BackgroundSettingsExpander" Header="主要背景设定" IsExpanded="False"
+                                      Margin="0,0,0,4" FontSize="12" FontWeight="Bold" Foreground="#555">
+                                <TextBox x:Name="BackgroundSettingsTextBox" Height="80" AcceptsReturn="True"
+                                         TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                         FontSize="12" Padding="4" BorderBrush="#DDD" Margin="0,4,0,0"/>
+                            </Expander>
+
+                            <Expander x:Name="WritingStyleExpander" Header="文风设定" IsExpanded="False"
+                                      Margin="0,0,0,4" FontSize="12" FontWeight="Bold" Foreground="#555">
+                                <TextBox x:Name="WritingStyleTextBox" Height="80" AcceptsReturn="True"
+                                         TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                         FontSize="12" Padding="4" BorderBrush="#DDD" Margin="0,4,0,0"/>
+                            </Expander>
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>

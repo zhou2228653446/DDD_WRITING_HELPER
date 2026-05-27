@@ -456,6 +456,203 @@ namespace 编辑器
             }
         }
 
+        // ---- 快速生成上下文 ----
+
+        private async void GenOutline_Click(object sender, RoutedEventArgs e)
+        {
+            var input = AiInputTextBox.Text.Trim();
+            var chapter = GetSelectedChapter();
+            var existingContext = BuildAiContext();
+
+            string existingOutline = FullOutlineTextBox.Text.Trim();
+            string prompt;
+            if (!string.IsNullOrEmpty(existingOutline))
+            {
+                prompt = $"以下是已有的全文大纲：\n\n{existingOutline}\n\n" +
+                         $"请在此基础上扩展、完善或修改该大纲。{(string.IsNullOrEmpty(input) ? "" : $"要求：{input}")}\n" +
+                         "请直接输出修改后的完整大纲，不要额外说明。";
+            }
+            else
+            {
+                var chapterContent = chapter?.Content ?? "";
+                var topicHint = !string.IsNullOrEmpty(chapterContent)
+                    ? $"以下是当前章节内容，请据此生成全文大纲：\n\n{chapterContent}\n\n"
+                    : "";
+                prompt = $"{existingContext}{topicHint}" +
+                         $"请为这部小说生成一份详细的全文大纲，包含主要情节线、冲突、转折点和结局。" +
+                         $"{(string.IsNullOrEmpty(input) ? "" : $"额外要求：{input}")}\n" +
+                         "请直接输出大纲内容，不要额外说明。";
+            }
+
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000 }));
+            if (result != null)
+            {
+                FullOutlineTextBox.Text = result;
+                FullOutlineExpander.IsExpanded = true;
+                AiResultTextBox.Text = result;
+                _chatLogger?.Log("生成大纲", input, result);
+                ShowNotification("已生成全文大纲");
+            }
+        }
+
+        private async void GenCharacter_Click(object sender, RoutedEventArgs e)
+        {
+            var input = AiInputTextBox.Text.Trim();
+            var existingContext = BuildAiContext();
+
+            string existing = CharacterSettingsTextBox.Text.Trim();
+            string prompt;
+            if (!string.IsNullOrEmpty(existing))
+            {
+                prompt = $"以下是已有的人物设定：\n\n{existing}\n\n" +
+                         $"请在此基础上扩展、完善或添加新人物。{(string.IsNullOrEmpty(input) ? "" : $"要求：{input}")}\n" +
+                         "请直接输出完整的人物设定，不要额外说明。";
+            }
+            else
+            {
+                prompt = $"{existingContext}" +
+                         $"请为这部小说生成主要角色设定，每个角色包含：姓名、年龄、性别、外貌、性格、背景故事、角色定位。" +
+                         $"{(string.IsNullOrEmpty(input) ? "" : $"额外要求：{input}")}\n" +
+                         "请直接输出人物设定，不要额外说明。";
+            }
+
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000 }));
+            if (result != null)
+            {
+                CharacterSettingsTextBox.Text = result;
+                CharacterSettingsExpander.IsExpanded = true;
+                AiResultTextBox.Text = result;
+                _chatLogger?.Log("生成人物", input, result);
+                ShowNotification("已生成人物设定");
+            }
+        }
+
+        private async void GenBackground_Click(object sender, RoutedEventArgs e)
+        {
+            var input = AiInputTextBox.Text.Trim();
+            var existingContext = BuildAiContext();
+
+            string existing = BackgroundSettingsTextBox.Text.Trim();
+            string prompt;
+            if (!string.IsNullOrEmpty(existing))
+            {
+                prompt = $"以下是已有的背景设定：\n\n{existing}\n\n" +
+                         $"请在此基础上扩展、完善。{(string.IsNullOrEmpty(input) ? "" : $"要求：{input}")}\n" +
+                         "请直接输出完整的背景设定，不要额外说明。";
+            }
+            else
+            {
+                prompt = $"{existingContext}" +
+                         $"请为这部小说生成详细的世界观和背景设定，包含：时代背景、地理环境、社会体系、特殊设定（如魔法/科技体系）等。" +
+                         $"{(string.IsNullOrEmpty(input) ? "" : $"额外要求：{input}")}\n" +
+                         "请直接输出背景设定，不要额外说明。";
+            }
+
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000 }));
+            if (result != null)
+            {
+                BackgroundSettingsTextBox.Text = result;
+                BackgroundSettingsExpander.IsExpanded = true;
+                AiResultTextBox.Text = result;
+                _chatLogger?.Log("生成背景", input, result);
+                ShowNotification("已生成背景设定");
+            }
+        }
+
+        private async void GenChapterOutline_Click(object sender, RoutedEventArgs e)
+        {
+            var input = AiInputTextBox.Text.Trim();
+            var existingContext = BuildAiContext();
+            var chapter = GetSelectedChapter();
+
+            string existing = ChapterOutlineTextBox.Text.Trim();
+            string prompt;
+            if (!string.IsNullOrEmpty(existing))
+            {
+                prompt = $"以下是已有的章节大纲：\n\n{existing}\n\n" +
+                         $"请在此基础上扩展、完善。{(string.IsNullOrEmpty(input) ? "" : $"要求：{input}")}\n" +
+                         "请直接输出完整的章节大纲，不要额外说明。";
+            }
+            else
+            {
+                var chapterHint = chapter != null
+                    ? $"当前章节「{chapter.Title}」的内容：\n{chapter.Content}\n\n"
+                    : "";
+                prompt = $"{existingContext}{chapterHint}" +
+                         $"请为这部小说生成详细的章节大纲，列出每一章的标题、主要事件和推进方向。" +
+                         $"{(string.IsNullOrEmpty(input) ? "" : $"额外要求：{input}")}\n" +
+                         "请直接输出章节大纲，不要额外说明。";
+            }
+
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000 }));
+            if (result != null)
+            {
+                ChapterOutlineTextBox.Text = result;
+                ChapterOutlineExpander.IsExpanded = true;
+                AiResultTextBox.Text = result;
+                _chatLogger?.Log("生成章节大纲", input, result);
+                ShowNotification("已生成章节大纲");
+            }
+        }
+
+        // ---- AI 回复操作 ----
+
+        private void CopyAiResult_Click(object sender, RoutedEventArgs e)
+        {
+            var text = AiResultTextBox.Text;
+            if (string.IsNullOrEmpty(text))
+            {
+                ShowNotification("AI 回复为空", isError: true);
+                return;
+            }
+            System.Windows.Clipboard.SetText(text);
+            ShowNotification("已复制到剪贴板");
+        }
+
+        private void ApplyToContext_Click(object sender, RoutedEventArgs e)
+        {
+            var text = AiResultTextBox.Text;
+            if (string.IsNullOrEmpty(text))
+            {
+                ShowNotification("AI 回复为空，请先生成内容", isError: true);
+                return;
+            }
+
+            var btn = sender as System.Windows.Controls.Button;
+            var menu = new System.Windows.Controls.ContextMenu();
+
+            var targets = new (string Label, System.Windows.Controls.TextBox Box, System.Windows.Controls.Expander Expander)[]
+            {
+                ("全文大纲", FullOutlineTextBox, FullOutlineExpander),
+                ("章节大纲", ChapterOutlineTextBox, ChapterOutlineExpander),
+                ("主要人物设定", CharacterSettingsTextBox, CharacterSettingsExpander),
+                ("主要背景设定", BackgroundSettingsTextBox, BackgroundSettingsExpander),
+                ("文风设定", WritingStyleTextBox, WritingStyleExpander),
+            };
+
+            foreach (var (label, box, expander) in targets)
+            {
+                var item = new System.Windows.Controls.MenuItem { Header = label };
+                item.Click += (_, _) =>
+                {
+                    if (!string.IsNullOrEmpty(box.Text.Trim()))
+                    {
+                        var answer = MessageBox.Show($"「{label}」已有内容，是否覆盖？", "确认",
+                            MessageBoxButton.YesNo, MessageBoxImage.Question);
+                        if (answer != MessageBoxResult.Yes) return;
+                    }
+                    box.Text = text;
+                    expander.IsExpanded = true;
+                    ShowNotification($"已应用到「{label}」");
+                };
+                menu.Items.Add(item);
+            }
+
+            menu.PlacementTarget = btn;
+            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            menu.IsOpen = true;
+        }
+
         private async void ApiSettings_Click(object sender, RoutedEventArgs e)
         {
             ShowApiSettings();

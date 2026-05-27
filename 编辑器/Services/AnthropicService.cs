@@ -8,24 +8,28 @@ using System.Threading.Tasks;
 
 namespace 编辑器.Services
 {
-    public class OpenAIService : IApiService
+    public class AnthropicService : IApiService
     {
         private readonly HttpClient _httpClient;
         private readonly ApiConfig _config;
 
-        public OpenAIService(ApiConfig config)
+        public AnthropicService(ApiConfig config)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             if (string.IsNullOrWhiteSpace(config.ApiKey))
                 throw new ArgumentException("API Key 不能为空", nameof(config));
 
             _httpClient = new HttpClient();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
-        }
-
-        // 兼容旧版：仅传 API Key 时使用默认配置
-        public OpenAIService(string apiKey) : this(new ApiConfig { ApiKey = apiKey })
-        {
+            // Mimo Token Plan 使用 api-key 头认证，不发送 anthropic-version
+            if (config.Provider == KnownProviders.Mimo)
+            {
+                _httpClient.DefaultRequestHeaders.Add("api-key", config.ApiKey);
+            }
+            else
+            {
+                _httpClient.DefaultRequestHeaders.Add("x-api-key", config.ApiKey);
+                _httpClient.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
+            }
         }
 
         public async Task<AiResult> CompleteTextAsync(string prompt, CompletionOptions? options = null)
@@ -37,13 +41,12 @@ namespace 编辑器.Services
             {
                 model,
                 stream = true,
-                stream_options = new { include_usage = true },
+                max_tokens = options.MaxTokens,
+                temperature = options.Temperature,
                 messages = new[]
                 {
                     new { role = "user", content = prompt }
-                },
-                max_tokens = options.MaxTokens,
-                temperature = options.Temperature
+                }
             };
 
             return await SendStreamingRequestAsync(request, options.CancellationToken, options.OnProgress);
@@ -88,16 +91,19 @@ namespace 编辑器.Services
 
                 var httpRequest = new HttpRequestMessage(HttpMethod.Post, _config.ApiUrl) { Content = content };
                 var response = await _httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, ct);
-                response.EnsureSuccessStatusCode();
+                if (!response.IsSuccessStatusCode)
+                {
+                    var errBody = await response.Content.ReadAsStringAsync(ct);
+                    return new AiResult { Text = $"API错误 ({(int)response.StatusCode}): {errBody}" };
+                }
 
                 using var stream = await response.Content.ReadAsStreamAsync(ct);
                 using var reader = new StreamReader(stream);
 
                 var sb = new StringBuilder();
                 int inputTokens = 0, outputTokens = 0;
-                bool done = false;
 
-                while (!done)
+                while (true)
                 {
                     var line = await reader.ReadLineAsync(ct);
                     if (line == null) break;
@@ -105,50 +111,64 @@ namespace 编辑器.Services
                     if (!line.StartsWith("data: ")) continue;
 
                     var data = line[6..].Trim();
-                    if (data == "[DONE]") break;
 
                     JsonElement jsonObj;
                     try { jsonObj = JsonSerializer.Deserialize<JsonElement>(data); }
                     catch { continue; }
 
-                    // 提取 usage（OpenAI 在最后一个 chunk 返回）
-                    if (jsonObj.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
-                    {
-                        inputTokens = usage.TryGetProperty("prompt_tokens", out var pt) ? pt.GetInt32() : inputTokens;
-                        outputTokens = usage.TryGetProperty("completion_tokens", out var cpt) ? cpt.GetInt32() : outputTokens;
-                        onProgress?.Invoke(inputTokens, outputTokens);
-                        done = true;
-                    }
+                    if (!jsonObj.TryGetProperty("type", out var typeElement))
+                        continue;
 
-                    // 提取 delta.content
-                    if (jsonObj.TryGetProperty("choices", out var choices) && choices.GetArrayLength() > 0)
+                    var eventType = typeElement.GetString();
+
+                    switch (eventType)
                     {
-                        var choice = choices[0];
-                        if (choice.TryGetProperty("delta", out var delta) &&
-                            delta.TryGetProperty("content", out var contentElement) &&
-                            contentElement.ValueKind == JsonValueKind.String)
-                        {
-                            var token = contentElement.GetString();
-                            if (!string.IsNullOrEmpty(token))
+                        // message_start → 包含 input_tokens
+                        case "message_start":
+                            if (jsonObj.TryGetProperty("message", out var msg) &&
+                                msg.TryGetProperty("usage", out var startUsage))
                             {
-                                sb.Append(token);
-                                // 估算输出 token（中文约 1~2 字/token，取 1.5）
-                                int estimated = (int)(sb.Length / 1.5);
-                                if (estimated > outputTokens)
-                                    onProgress?.Invoke(inputTokens, estimated);
+                                inputTokens = startUsage.TryGetProperty("input_tokens", out var it) ? it.GetInt32() : 0;
+                                onProgress?.Invoke(inputTokens, 0);
                             }
-                        }
+                            break;
 
-                        if (choice.TryGetProperty("finish_reason", out var fr) && fr.ValueKind == JsonValueKind.String)
-                            done = true;
+                        // content_block_delta → 文本增量
+                        case "content_block_delta":
+                            if (jsonObj.TryGetProperty("delta", out var delta) &&
+                                delta.TryGetProperty("text", out var textElement) &&
+                                textElement.ValueKind == JsonValueKind.String)
+                            {
+                                var token = textElement.GetString();
+                                if (!string.IsNullOrEmpty(token))
+                                {
+                                    sb.Append(token);
+                                    // 估算输出 token（中文约 1~2 字/token，取 1.5）
+                                    int estimated = (int)(sb.Length / 1.5);
+                                    if (estimated > outputTokens)
+                                    {
+                                        outputTokens = estimated;
+                                        onProgress?.Invoke(inputTokens, outputTokens);
+                                    }
+                                }
+                            }
+                            break;
+
+                        // message_delta → 包含最终 output_tokens
+                        case "message_delta":
+                            if (jsonObj.TryGetProperty("usage", out var deltaUsage) &&
+                                deltaUsage.TryGetProperty("output_tokens", out var ot))
+                            {
+                                outputTokens = ot.GetInt32();
+                                onProgress?.Invoke(inputTokens, outputTokens);
+                            }
+                            break;
                     }
                 }
 
-                // 如果流中没有返回 usage，用估算值
+                // 如果没有从流中获得 output_tokens，用估算值
                 if (outputTokens == 0)
                     outputTokens = (int)(sb.Length / 1.5);
-                if (inputTokens == 0 && outputTokens > 0)
-                    onProgress?.Invoke(0, outputTokens);
 
                 return new AiResult
                 {

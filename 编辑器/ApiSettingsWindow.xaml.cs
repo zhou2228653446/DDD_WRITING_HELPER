@@ -168,17 +168,10 @@ namespace 编辑器
             if (_isSwitchingProfile) return;
             if (ProviderComboBox.SelectedItem is ProviderOption option && option.Name != KnownProviders.Custom)
             {
-                if (string.IsNullOrWhiteSpace(ApiUrlTextBox.Text) || !IsUrlModified())
-                    ApiUrlTextBox.Text = option.DefaultUrl;
-                if (string.IsNullOrWhiteSpace(ModelTextBox.Text))
-                    ModelTextBox.Text = option.DefaultModel;
+                // 切换提供商时自动填充 URL 和 Model
+                ApiUrlTextBox.Text = option.DefaultUrl;
+                ModelTextBox.Text = option.DefaultModel;
             }
-        }
-
-        private bool IsUrlModified()
-        {
-            // 如果当前 URL 匹配某个已知提供商的默认值，认为是"未修改"
-            return !KnownProviders.All.Any(p => p.DefaultUrl == ApiUrlTextBox.Text);
         }
 
         // ---- 测试连接 ----
@@ -199,18 +192,42 @@ namespace 编辑器
             try
             {
                 using var client = new HttpClient();
-                client.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
                 client.Timeout = TimeSpan.FromSeconds(15);
 
-                var request = new
+                string json;
+                if (KnownProviders.UsesAnthropicFormat(config.Provider))
                 {
-                    model = config.Model,
-                    messages = new[] { new { role = "user", content = "Hello" } },
-                    max_tokens = 10
-                };
-                var json = JsonSerializer.Serialize(request);
-                var content = new StringContent(json, Encoding.UTF8, "application/json");
+                    // Mimo Token Plan 使用 api-key 头认证，不发送 anthropic-version
+                    if (config.Provider == KnownProviders.Mimo)
+                        client.DefaultRequestHeaders.Add("api-key", config.ApiKey);
+                    else
+                    {
+                        client.DefaultRequestHeaders.Add("x-api-key", config.ApiKey);
+                        client.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
+                    }
 
+                    var request = new
+                    {
+                        model = config.Model,
+                        max_tokens = 10,
+                        messages = new[] { new { role = "user", content = "Hello" } }
+                    };
+                    json = JsonSerializer.Serialize(request);
+                }
+                else
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
+
+                    var request = new
+                    {
+                        model = config.Model,
+                        messages = new[] { new { role = "user", content = "Hello" } },
+                        max_tokens = 10
+                    };
+                    json = JsonSerializer.Serialize(request);
+                }
+
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
                 var response = await client.PostAsync(config.ApiUrl, content);
 
                 if (response.IsSuccessStatusCode)
@@ -220,7 +237,6 @@ namespace 编辑器
                 else
                 {
                     var err = await response.Content.ReadAsStringAsync();
-                    // 401/403 等认证错误也提示，但说明是配置问题
                     MessageBox.Show($"API 返回错误 ({(int)response.StatusCode}):\n{err}", "连接失败",
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                 }

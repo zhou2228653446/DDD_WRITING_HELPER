@@ -2,6 +2,7 @@ using System;
 using System.Collections.ObjectModel;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
@@ -24,10 +25,15 @@ namespace 编辑器
         private AppearanceManager _appearanceManager = null!;
         private ProjectSnapshotManager? _snapshotManager;
         private ChatLogger? _chatLogger;
+        private AiMemoryManager? _memoryManager;
         private readonly DispatcherTimer _notificationTimer = new();
+        private CancellationTokenSource? _aiCts;
+        private Action<int, int>? _tokenProgress;
 
-        private readonly ObservableCollection<string> _polishPresets = new();
-        private static readonly string[] DefaultPolishPresets = { "正式严谨", "简洁干练", "优美文学", "口语化", "古风雅韵", "幽默风趣" };
+        // AI 面板分离
+        private AiPanelControl _aiPanel = null!;
+        private FloatingAiWindow? _floatingWindow;
+        private bool _isDetached;
         private static readonly string _settingsFile = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TdxClaw", "settings.json");
 
@@ -49,6 +55,7 @@ namespace 编辑器
             };
             InitializeData();
             Loaded += WelcomeDialog_DeferIfNeeded;
+            Closing += MainWindow_Closing;
         }
 
         private void InitializeData()
@@ -71,8 +78,12 @@ namespace 编辑器
             AiPanelMenuItem.Checked += AiPanel_Checked;
             AiPanelMenuItem.Unchecked += AiPanel_Unchecked;
 
-            // 初始化润色风格预设
-            LoadPolishPresets();
+            // 初始化 AI 面板
+            _aiPanel = new AiPanelControl();
+            _aiPanel.Initialize(_configDir);
+            _aiPanel.DetachRequested += ToggleDetachAiPanel;
+            WireUpAiPanelCallbacks();
+            AiPanelHost.Content = _aiPanel;
 
             // 初始化外观管理并应用保存的主题
             _appearanceManager = new AppearanceManager(_configDir);
@@ -88,6 +99,23 @@ namespace 编辑器
             ApplyActiveProfile();
 
             UpdateStatus("就绪");
+        }
+
+        private void WireUpAiPanelCallbacks()
+        {
+            _aiPanel.OnContinueWriting = () => ContinueWritingAsync();
+            _aiPanel.OnPolishText = () => PolishTextAsync();
+            _aiPanel.OnGenerateName = () => GenerateNameAsync();
+            _aiPanel.OnChat = () => ChatAsync();
+            _aiPanel.OnGenOutline = () => GenOutlineAsync();
+            _aiPanel.OnGenCharacter = () => GenCharacterAsync();
+            _aiPanel.OnGenBackground = () => GenBackgroundAsync();
+            _aiPanel.OnGenChapterOutline = () => GenChapterOutlineAsync();
+            _aiPanel.OnCopyResult = CopyAiResult;
+            _aiPanel.OnApplyToContext = ApplyToContext;
+            _aiPanel.OnSaveMemory = SaveMemory;
+            _aiPanel.OnClearMemory = ClearMemory;
+            _aiPanel.OnStopAi = StopAi;
         }
 
         private void WelcomeDialog_DeferIfNeeded(object? sender, EventArgs e)
@@ -139,7 +167,9 @@ namespace 编辑器
             var active = _profileManager.ActiveProfile;
             if (active != null && !string.IsNullOrWhiteSpace(active.ApiKey))
             {
-                _apiService = new OpenAIService(active);
+                _apiService = KnownProviders.UsesAnthropicFormat(active.Provider)
+                    ? new AnthropicService(active)
+                    : new OpenAIService(active);
                 UpdateStatus($"API: {_profileManager.ActiveProfileName} ({active.Provider} / {active.Model})");
             }
             else
@@ -198,6 +228,9 @@ namespace 编辑器
                     SaveProject();
                     _snapshotManager = new ProjectSnapshotManager(_currentProject.FilePath);
                     _chatLogger = new ChatLogger(_currentProject.FilePath);
+                    _memoryManager = new AiMemoryManager(_currentProject.FilePath);
+                    _memoryManager.Load();
+                    _aiPanel.MemoryTextBox.Text = _memoryManager.GetRawMemory();
                     RefreshProjectView();
                     SyncAiContextFromProject();
                     RefreshSnapshotList();
@@ -235,6 +268,9 @@ namespace 编辑器
                     EditorTabControl.Items.Clear();
                     _snapshotManager = new ProjectSnapshotManager(_currentProject.FilePath);
                     _chatLogger = new ChatLogger(_currentProject.FilePath);
+                    _memoryManager = new AiMemoryManager(_currentProject.FilePath);
+                    _memoryManager.Load();
+                    _aiPanel.MemoryTextBox.Text = _memoryManager.GetRawMemory();
                     RefreshProjectView();
                     SyncAiContextFromProject();
                     RefreshSnapshotList();
@@ -294,6 +330,8 @@ namespace 编辑器
 
             _currentProject.Chapters.Add(chapter);
             RefreshProjectView();
+            // 直接为新章节打开编辑标签页
+            OpenChapterTab(chapter);
             UpdateStatus("新建章节成功");
         }
 
@@ -314,125 +352,314 @@ namespace 编辑器
             }
         }
 
-        private void ExportWord_Click(object sender, RoutedEventArgs e) => ShowComingSoon("导出Word");
+        // ---- 章节管理 ----
+
+        private Chapter? GetSelectedChapterFromTree()
+        {
+            return ProjectTreeView.SelectedItem as Chapter;
+        }
+
+        private void DeleteChapter_Click(object sender, RoutedEventArgs e)
+        {
+            var chapter = GetSelectedChapterFromTree();
+            if (chapter == null || _currentProject == null)
+            {
+                ShowNotification("请先选中要删除的章节", isError: true);
+                return;
+            }
+
+            var result = MessageBox.Show($"确定删除章节「{chapter.Title}」吗？\n此操作不可撤销。",
+                "确认删除", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (result != MessageBoxResult.Yes) return;
+
+            _currentProject.Chapters.Remove(chapter);
+            SaveProject();
+
+            // 关闭对应标签页
+            var tab = EditorTabControl.Items.OfType<TabItem>()
+                .FirstOrDefault(t => t.Tag is Chapter c && c.ChapterId == chapter.ChapterId);
+            if (tab != null) EditorTabControl.Items.Remove(tab);
+
+            RefreshProjectView();
+            UpdateStatus($"已删除章节: {chapter.Title}");
+        }
+
+        private void RenameChapter_Click(object sender, RoutedEventArgs e)
+        {
+            var chapter = GetSelectedChapterFromTree();
+            if (chapter == null)
+            {
+                ShowNotification("请先选中要重命名的章节", isError: true);
+                return;
+            }
+            RenameChapter(chapter);
+        }
+
+        private void RenameChapter(Chapter chapter)
+        {
+            var newName = ShowInputDialog("重命名章节", "请输入新的章节名称：", chapter.Title);
+            if (!string.IsNullOrWhiteSpace(newName) && newName != chapter.Title)
+            {
+                chapter.Title = newName;
+                chapter.ModifiedDate = DateTime.Now;
+                if (_currentProject != null)
+                {
+                    SaveProject();
+                    _aiPanel.RefreshChapterList(_currentProject.Chapters);
+                }
+                UpdateChapterInfo(chapter);
+                UpdateStatus($"已重命名章节: {newName}");
+            }
+        }
+
+        private void MoveChapterUp_Click(object sender, RoutedEventArgs e) => MoveChapter(-1);
+        private void MoveChapterDown_Click(object sender, RoutedEventArgs e) => MoveChapter(1);
+
+        private void MoveChapterMenu_Click(object sender, RoutedEventArgs e)
+        {
+            var chapter = GetSelectedChapterFromTree();
+            if (chapter == null || _currentProject == null)
+            {
+                ShowNotification("请先选中要排序的章节", isError: true);
+                return;
+            }
+
+            var btn = sender as System.Windows.Controls.Button;
+            var menu = new System.Windows.Controls.ContextMenu();
+
+            var upItem = new System.Windows.Controls.MenuItem { Header = "上移" };
+            upItem.Click += (_, _) => MoveChapter(-1);
+            menu.Items.Add(upItem);
+
+            var downItem = new System.Windows.Controls.MenuItem { Header = "下移" };
+            downItem.Click += (_, _) => MoveChapter(1);
+            menu.Items.Add(downItem);
+
+            menu.PlacementTarget = btn;
+            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            menu.IsOpen = true;
+        }
+
+        private void MoveChapter(int direction)
+        {
+            var chapter = GetSelectedChapterFromTree();
+            if (chapter == null || _currentProject == null) return;
+
+            var index = _currentProject.Chapters.IndexOf(chapter);
+            var newIndex = index + direction;
+            if (newIndex < 0 || newIndex >= _currentProject.Chapters.Count) return;
+
+            _currentProject.Chapters.RemoveAt(index);
+            _currentProject.Chapters.Insert(newIndex, chapter);
+
+            // 更新章节编号
+            for (int i = 0; i < _currentProject.Chapters.Count; i++)
+                _currentProject.Chapters[i].ChapterNumber = i + 1;
+
+            SaveProject();
+            RefreshProjectView();
+            UpdateStatus($"「{chapter.Title}」已{(direction < 0 ? "上移" : "下移")}");
+        }
+
+        private void ExportWord_Click(object sender, RoutedEventArgs e)
+        {
+            if (_currentProject == null)
+            {
+                ShowNotification("请先创建或打开项目", isError: true);
+                return;
+            }
+
+            // 先同步上下文到项目
+            SyncAiContextToProject();
+
+            var dialog = new SaveFileDialog
+            {
+                Filter = "Word 文档 (*.docx)|*.docx",
+                FileName = $"{_currentProject.ProjectName}.docx",
+                InitialDirectory = _projectsPath
+            };
+
+            if (dialog.ShowDialog() == true)
+            {
+                try
+                {
+                    WordExportService.Export(dialog.FileName, _currentProject);
+                    ShowNotification($"已导出为 Word：{Path.GetFileName(dialog.FileName)}");
+
+                    // 询问是否打开
+                    var open = MessageBox.Show("导出成功！是否立即打开文件？", "导出完成",
+                        MessageBoxButton.YesNo, MessageBoxImage.Information);
+                    if (open == MessageBoxResult.Yes)
+                    {
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = dialog.FileName,
+                            UseShellExecute = true
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"导出失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
+        }
         private void ExportPdf_Click(object sender, RoutedEventArgs e) => ShowComingSoon("导出PDF");
         private void ExportTxt_Click(object sender, RoutedEventArgs e) => ShowComingSoon("导出TXT");
         private void Exit_Click(object sender, RoutedEventArgs e) => Application.Current.Shutdown();
 
-        // AI功能
-        private async void ContinueWriting_Click(object sender, RoutedEventArgs e)
+        private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
         {
-            var chapter = GetSelectedChapter();
-            if (chapter != null && !string.IsNullOrEmpty(chapter.Content))
+            if (_currentProject == null) return;
+
+            var result = MessageBox.Show(
+                $"是否保存项目「{_currentProject.ProjectName}」的更改？",
+                "退出确认",
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Question);
+
+            if (result == MessageBoxResult.Cancel)
             {
-                TakeSnapshot("续写前备份");
-                var context = BuildAiContext();
-                var requirement = AiInputTextBox.Text.Trim();
-                var direction = string.IsNullOrEmpty(requirement) ? "" : $"\n\n续写要求：{requirement}";
-                var result = await CallAiFunctionWithResult(async (apiService) =>
-                    await apiService.ContinueWritingAsync(context + chapter.Content + direction));
-                if (result != null)
+                e.Cancel = true;
+                return;
+            }
+
+            if (result == MessageBoxResult.Yes)
+            {
+                try
                 {
-                    chapter.Content += "\n\n" + result;
-                    AiResultTextBox.Text = result;
-                    _chatLogger?.Log("续写", requirement, result);
-                    ShowNotification("续写完成，已追加到章节");
+                    SaveProject();
                 }
-            }
-            else if (chapter == null)
-            {
-                MessageBox.Show("请先选择要编辑的章节", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            else
-            {
-                MessageBox.Show("当前章节内容为空，请先写一些内容", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"保存失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+                    e.Cancel = true;
+                }
             }
         }
 
-        private async void PolishText_Click(object sender, RoutedEventArgs e)
-        {
-            var chapter = GetSelectedChapter();
-            if (chapter != null && !string.IsNullOrEmpty(chapter.Content))
-            {
-                TakeSnapshot("润色前备份");
-                var context = BuildAiContext();
+        // 菜单快捷入口（委托给 AiPanelControl 回调）
+        private async void ContinueWriting_Click(object sender, RoutedEventArgs e) => await ContinueWritingAsync();
+        private async void PolishText_Click(object sender, RoutedEventArgs e) => await PolishTextAsync();
+        private async void GenerateName_Click(object sender, RoutedEventArgs e) => await GenerateNameAsync();
+        private async void Chat_Click(object sender, RoutedEventArgs e) => await ChatAsync();
 
-                // 读取用户额外要求
-                var requirement = AiInputTextBox.Text.Trim();
-
-                // 读取预设风格（受开关控制）
-                string? presetStyle = null;
-                if (PolishStyleToggle.IsChecked == true)
-                {
-                    var styleText = PolishStyleCombo.Text?.Trim();
-                    if (styleText != "（无预设）" && !string.IsNullOrEmpty(styleText))
-                        presetStyle = styleText;
-                }
-
-                // 组合风格：预设 + 用户要求
-                string? combinedStyle;
-                if (presetStyle != null && !string.IsNullOrEmpty(requirement))
-                    combinedStyle = $"{presetStyle}，{requirement}";
-                else if (presetStyle != null)
-                    combinedStyle = presetStyle;
-                else if (!string.IsNullOrEmpty(requirement))
-                    combinedStyle = requirement;
-                else
-                    combinedStyle = null;
-
-                var result = await CallAiFunctionWithResult(async (apiService) =>
-                    await apiService.PolishTextAsync(context + chapter.Content, combinedStyle));
-                if (result != null)
-                {
-                    chapter.Content = result;
-                    AiResultTextBox.Text = result;
-                    _chatLogger?.Log("润色", combinedStyle ?? "默认", result);
-                    ShowNotification("润色完成，已替换章节内容");
-                }
-            }
-            else if (chapter == null)
-            {
-                MessageBox.Show("请先选择要编辑的章节", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            else
-            {
-                MessageBox.Show("当前章节内容为空，请先写一些内容", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-        }
-
-        private async void GenerateName_Click(object sender, RoutedEventArgs e)
+        // AI功能（由 AiPanelControl 回调触发）
+        private async Task<AiResult?> ContinueWritingAsync()
         {
             var chapter = GetSelectedChapter();
             if (chapter == null)
             {
                 MessageBox.Show("请先选择要编辑的章节", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
-                return;
+                return null;
+            }
+            if (string.IsNullOrEmpty(chapter.Content))
+            {
+                MessageBox.Show("当前章节内容为空，请先写一些内容", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return null;
+            }
+
+            TakeSnapshot("续写前备份");
+            var context = BuildAiContext();
+            var requirement = _aiPanel.InputTextBox.Text.Trim();
+            var direction = string.IsNullOrEmpty(requirement) ? "" : $"\n\n续写要求：{requirement}";
+            var result = await CallAiFunctionWithResult(async (apiService) =>
+                await apiService.ContinueWritingAsync(context + chapter.Content + direction, ct: _aiCts!.Token, onProgress: _tokenProgress));
+            if (result != null)
+            {
+                chapter.Content += "\n\n" + result.Text;
+                _aiPanel.ResultTextBox.Text = result.Text;
+                _chatLogger?.Log("续写", requirement, result.Text);
+                RecordAiInteraction("续写", requirement, result.Text);
+                ShowNotification("续写完成，已追加到章节");
+            }
+            return result;
+        }
+
+        private async Task<AiResult?> PolishTextAsync()
+        {
+            var chapter = GetSelectedChapter();
+            if (chapter == null)
+            {
+                MessageBox.Show("请先选择要编辑的章节", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return null;
+            }
+            if (string.IsNullOrEmpty(chapter.Content))
+            {
+                MessageBox.Show("当前章节内容为空，请先写一些内容", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return null;
+            }
+
+            TakeSnapshot("润色前备份");
+            var context = BuildAiContext();
+            var requirement = _aiPanel.InputTextBox.Text.Trim();
+
+            string? presetStyle = null;
+            if (_aiPanel.StyleToggle.IsChecked == true)
+            {
+                var styleText = _aiPanel.StyleTextBox.Text?.Trim();
+                if (!string.IsNullOrEmpty(styleText))
+                    presetStyle = styleText;
+            }
+
+            string? combinedStyle;
+            if (presetStyle != null && !string.IsNullOrEmpty(requirement))
+                combinedStyle = $"{presetStyle}，{requirement}";
+            else if (presetStyle != null)
+                combinedStyle = presetStyle;
+            else if (!string.IsNullOrEmpty(requirement))
+                combinedStyle = requirement;
+            else
+                combinedStyle = null;
+
+            var result = await CallAiFunctionWithResult(async (apiService) =>
+                await apiService.PolishTextAsync(context + chapter.Content, combinedStyle, _aiCts!.Token, _tokenProgress));
+            if (result != null)
+            {
+                chapter.Content = result.Text;
+                _aiPanel.ResultTextBox.Text = result.Text;
+                _chatLogger?.Log("润色", combinedStyle ?? "默认", result.Text);
+                RecordAiInteraction("润色", combinedStyle ?? "", result.Text);
+                ShowNotification("润色完成，已替换章节内容");
+            }
+            return result;
+        }
+
+        private async Task<AiResult?> GenerateNameAsync()
+        {
+            var chapter = GetSelectedChapter();
+            if (chapter == null)
+            {
+                MessageBox.Show("请先选择要编辑的章节", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return null;
             }
 
             TakeSnapshot("人名生成前备份");
             var context = BuildAiContext();
-            var input = AiInputTextBox.Text.Trim();
+            var input = _aiPanel.InputTextBox.Text.Trim();
             if (string.IsNullOrEmpty(input)) input = "请生成适合小说风格的中文人名";
             var prompt = $"{context}请为小说生成角色名字。要求：{input}\n\n返回一组适合的名字，每个名字附简短说明。";
 
             var result = await CallAiFunctionWithResult(async (apiService) =>
-                await apiService.CompleteTextAsync(prompt));
+                await apiService.CompleteTextAsync(prompt, new CompletionOptions { CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
             if (result != null)
             {
-                chapter.Content += $"\n\n【生成的角色名 — {DateTime.Now:HH:mm}】\n{result}\n";
-                AiResultTextBox.Text = result;
-                _chatLogger?.Log("人名生成", input, result);
+                chapter.Content += $"\n\n【生成的角色名 — {DateTime.Now:HH:mm}】\n{result.Text}\n";
+                _aiPanel.ResultTextBox.Text = result.Text;
+                _chatLogger?.Log("人名生成", input, result.Text);
+                RecordAiInteraction("人名生成", input, result.Text);
                 ShowNotification("人名生成完成，已追加到章节");
             }
+            return result;
         }
 
-        private async void Chat_Click(object sender, RoutedEventArgs e)
+        private async Task<AiResult?> ChatAsync()
         {
-            var input = AiInputTextBox.Text.Trim();
+            var input = _aiPanel.InputTextBox.Text.Trim();
             if (string.IsNullOrEmpty(input))
             {
                 MessageBox.Show("请在输入框中输入你想让AI写的内容", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
-                return;
+                return null;
             }
 
             var chapter = GetSelectedChapter();
@@ -443,28 +670,39 @@ namespace 编辑器
                 TakeSnapshot("万能写作前备份");
 
             var result = await CallAiFunctionWithResult(async (apiService) =>
-                await apiService.CompleteTextAsync(prompt));
+                await apiService.CompleteTextAsync(prompt, new CompletionOptions { CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
             if (result != null)
             {
                 if (chapter != null)
                 {
-                    chapter.Content += $"\n\n{result}\n";
+                    chapter.Content += $"\n\n{result.Text}\n";
                     ShowNotification("已按输入生成内容并追加到章节");
                 }
-                AiResultTextBox.Text = result;
-                _chatLogger?.Log("万能聊天", input, result);
+                _aiPanel.ResultTextBox.Text = result.Text;
+                _chatLogger?.Log("万能聊天", input, result.Text);
+                RecordAiInteraction("万能聊天", input, result.Text);
             }
+            return result;
         }
 
         // ---- 快速生成上下文 ----
 
-        private async void GenOutline_Click(object sender, RoutedEventArgs e)
+        private async Task<AiResult?> GenOutlineAsync()
         {
-            var input = AiInputTextBox.Text.Trim();
+            var input = _aiPanel.InputTextBox.Text.Trim();
             var chapter = GetSelectedChapter();
             var existingContext = BuildAiContext();
 
-            string existingOutline = FullOutlineTextBox.Text.Trim();
+            // 新建大纲时弹出规模选择
+            string? scaleHint = null;
+            string existingOutline = _aiPanel.OutlineTextBox.Text.Trim();
+            if (string.IsNullOrEmpty(existingOutline))
+            {
+                var scaleDialog = new NovelScaleDialog { Owner = this };
+                if (scaleDialog.ShowDialog() == true)
+                    scaleHint = scaleDialog.ScaleDescription;
+            }
+
             string prompt;
             if (!string.IsNullOrEmpty(existingOutline))
             {
@@ -478,29 +716,34 @@ namespace 编辑器
                 var topicHint = !string.IsNullOrEmpty(chapterContent)
                     ? $"以下是当前章节内容，请据此生成全文大纲：\n\n{chapterContent}\n\n"
                     : "";
-                prompt = $"{existingContext}{topicHint}" +
+                var scaleLine = !string.IsNullOrEmpty(scaleHint)
+                    ? $"小说规模：{scaleHint}\n请根据此规模合理规划章节数量、情节复杂度和人物数量。\n\n"
+                    : "";
+                prompt = $"{existingContext}{topicHint}{scaleLine}" +
                          $"请为这部小说生成一份详细的全文大纲，包含主要情节线、冲突、转折点和结局。" +
                          $"{(string.IsNullOrEmpty(input) ? "" : $"额外要求：{input}")}\n" +
                          "请直接输出大纲内容，不要额外说明。";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000 }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
             if (result != null)
             {
-                FullOutlineTextBox.Text = result;
-                FullOutlineExpander.IsExpanded = true;
-                AiResultTextBox.Text = result;
-                _chatLogger?.Log("生成大纲", input, result);
+                _aiPanel.OutlineTextBox.Text = result.Text;
+                _aiPanel.OutlineExpander.IsExpanded = true;
+                _aiPanel.ResultTextBox.Text = result.Text;
+                _chatLogger?.Log("生成大纲", input, result.Text);
+                RecordAiInteraction("生成大纲", input, result.Text);
                 ShowNotification("已生成全文大纲");
             }
+            return result;
         }
 
-        private async void GenCharacter_Click(object sender, RoutedEventArgs e)
+        private async Task<AiResult?> GenCharacterAsync()
         {
-            var input = AiInputTextBox.Text.Trim();
+            var input = _aiPanel.InputTextBox.Text.Trim();
             var existingContext = BuildAiContext();
 
-            string existing = CharacterSettingsTextBox.Text.Trim();
+            string existing = _aiPanel.CharacterTextBox.Text.Trim();
             string prompt;
             if (!string.IsNullOrEmpty(existing))
             {
@@ -516,23 +759,25 @@ namespace 编辑器
                          "请直接输出人物设定，不要额外说明。";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000 }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
             if (result != null)
             {
-                CharacterSettingsTextBox.Text = result;
-                CharacterSettingsExpander.IsExpanded = true;
-                AiResultTextBox.Text = result;
-                _chatLogger?.Log("生成人物", input, result);
+                _aiPanel.CharacterTextBox.Text = result.Text;
+                _aiPanel.CharacterExpander.IsExpanded = true;
+                _aiPanel.ResultTextBox.Text = result.Text;
+                _chatLogger?.Log("生成人物", input, result.Text);
+                RecordAiInteraction("生成人物", input, result.Text);
                 ShowNotification("已生成人物设定");
             }
+            return result;
         }
 
-        private async void GenBackground_Click(object sender, RoutedEventArgs e)
+        private async Task<AiResult?> GenBackgroundAsync()
         {
-            var input = AiInputTextBox.Text.Trim();
+            var input = _aiPanel.InputTextBox.Text.Trim();
             var existingContext = BuildAiContext();
 
-            string existing = BackgroundSettingsTextBox.Text.Trim();
+            string existing = _aiPanel.BackgroundTextBox.Text.Trim();
             string prompt;
             if (!string.IsNullOrEmpty(existing))
             {
@@ -548,24 +793,26 @@ namespace 编辑器
                          "请直接输出背景设定，不要额外说明。";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000 }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
             if (result != null)
             {
-                BackgroundSettingsTextBox.Text = result;
-                BackgroundSettingsExpander.IsExpanded = true;
-                AiResultTextBox.Text = result;
-                _chatLogger?.Log("生成背景", input, result);
+                _aiPanel.BackgroundTextBox.Text = result.Text;
+                _aiPanel.BackgroundExpander.IsExpanded = true;
+                _aiPanel.ResultTextBox.Text = result.Text;
+                _chatLogger?.Log("生成背景", input, result.Text);
+                RecordAiInteraction("生成背景", input, result.Text);
                 ShowNotification("已生成背景设定");
             }
+            return result;
         }
 
-        private async void GenChapterOutline_Click(object sender, RoutedEventArgs e)
+        private async Task<AiResult?> GenChapterOutlineAsync()
         {
-            var input = AiInputTextBox.Text.Trim();
+            var input = _aiPanel.InputTextBox.Text.Trim();
             var existingContext = BuildAiContext();
             var chapter = GetSelectedChapter();
 
-            string existing = ChapterOutlineTextBox.Text.Trim();
+            string existing = _aiPanel.ChapterTextBox.Text.Trim();
             string prompt;
             if (!string.IsNullOrEmpty(existing))
             {
@@ -584,22 +831,24 @@ namespace 编辑器
                          "请直接输出章节大纲，不要额外说明。";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000 }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
             if (result != null)
             {
-                ChapterOutlineTextBox.Text = result;
-                ChapterOutlineExpander.IsExpanded = true;
-                AiResultTextBox.Text = result;
-                _chatLogger?.Log("生成章节大纲", input, result);
+                _aiPanel.ChapterTextBox.Text = result.Text;
+                _aiPanel.ChapterExpander.IsExpanded = true;
+                _aiPanel.ResultTextBox.Text = result.Text;
+                _chatLogger?.Log("生成章节大纲", input, result.Text);
+                RecordAiInteraction("生成章节大纲", input, result.Text);
                 ShowNotification("已生成章节大纲");
             }
+            return result;
         }
 
         // ---- AI 回复操作 ----
 
-        private void CopyAiResult_Click(object sender, RoutedEventArgs e)
+        private void CopyAiResult()
         {
-            var text = AiResultTextBox.Text;
+            var text = _aiPanel.ResultTextBox.Text;
             if (string.IsNullOrEmpty(text))
             {
                 ShowNotification("AI 回复为空", isError: true);
@@ -609,25 +858,24 @@ namespace 编辑器
             ShowNotification("已复制到剪贴板");
         }
 
-        private void ApplyToContext_Click(object sender, RoutedEventArgs e)
+        private void ApplyToContext(System.Windows.Controls.Button btn)
         {
-            var text = AiResultTextBox.Text;
+            var text = _aiPanel.ResultTextBox.Text;
             if (string.IsNullOrEmpty(text))
             {
                 ShowNotification("AI 回复为空，请先生成内容", isError: true);
                 return;
             }
 
-            var btn = sender as System.Windows.Controls.Button;
             var menu = new System.Windows.Controls.ContextMenu();
 
-            var targets = new (string Label, System.Windows.Controls.TextBox Box, System.Windows.Controls.Expander Expander)[]
+            var targets = new (string Label, TextBox Box, Expander Expander)[]
             {
-                ("全文大纲", FullOutlineTextBox, FullOutlineExpander),
-                ("章节大纲", ChapterOutlineTextBox, ChapterOutlineExpander),
-                ("主要人物设定", CharacterSettingsTextBox, CharacterSettingsExpander),
-                ("主要背景设定", BackgroundSettingsTextBox, BackgroundSettingsExpander),
-                ("文风设定", WritingStyleTextBox, WritingStyleExpander),
+                ("全文大纲", _aiPanel.OutlineTextBox, _aiPanel.OutlineExpander),
+                ("章节大纲", _aiPanel.ChapterTextBox, _aiPanel.ChapterExpander),
+                ("主要人物设定", _aiPanel.CharacterTextBox, _aiPanel.CharacterExpander),
+                ("主要背景设定", _aiPanel.BackgroundTextBox, _aiPanel.BackgroundExpander),
+                ("文风设定", _aiPanel.WritingStyleTextBox, _aiPanel.WritingStyleExpander),
             };
 
             foreach (var (label, box, expander) in targets)
@@ -660,8 +908,70 @@ namespace 编辑器
 
         private void ProjectManager_Checked(object sender, RoutedEventArgs e) => ProjectPanelColumn.Width = new GridLength(250);
         private void ProjectManager_Unchecked(object sender, RoutedEventArgs e) => ProjectPanelColumn.Width = new GridLength(0);
-        private void AiPanel_Checked(object sender, RoutedEventArgs e) => AiPanelColumn.Width = new GridLength(300);
-        private void AiPanel_Unchecked(object sender, RoutedEventArgs e) => AiPanelColumn.Width = new GridLength(0);
+        private void AiPanel_Checked(object sender, RoutedEventArgs e)
+        {
+            if (_isDetached && _floatingWindow != null)
+                _floatingWindow.Show();
+            else
+                AiPanelColumn.Width = new GridLength(300);
+        }
+
+        private void AiPanel_Unchecked(object sender, RoutedEventArgs e)
+        {
+            if (_isDetached && _floatingWindow != null)
+                _floatingWindow.Hide();
+            else
+                AiPanelColumn.Width = new GridLength(0);
+        }
+
+        // ---- AI 面板分离/合并 ----
+
+        private void ToggleDetachAiPanel()
+        {
+            if (_isDetached)
+                AttachAiPanel();
+            else
+                DetachAiPanel();
+        }
+
+        private void DetachAiPanel()
+        {
+            if (_isDetached) return;
+
+            // 从主窗口移除面板
+            AiPanelHost.Content = null;
+
+            // 创建浮动窗口并放入面板
+            _floatingWindow = new FloatingAiWindow();
+            _floatingWindow.Owner = this;
+            _floatingWindow.SetContent(_aiPanel);
+            _floatingWindow.ClosingRequested += AttachAiPanel;
+            _floatingWindow.Closed += (_, _) => { _floatingWindow = null; };
+
+            // 收起主窗口的 AI 面板列
+            AiPanelColumn.Width = new GridLength(0);
+
+            _isDetached = true;
+            _aiPanel.SetDetached(true);
+            _floatingWindow.Show();
+        }
+
+        private void AttachAiPanel()
+        {
+            if (!_isDetached) return;
+
+            // 从浮动窗口移除面板
+            _floatingWindow?.ClearContent();
+            _floatingWindow?.Close();
+            _floatingWindow = null;
+
+            // 放回主窗口
+            AiPanelHost.Content = _aiPanel;
+            AiPanelColumn.Width = new GridLength(300);
+
+            _isDetached = false;
+            _aiPanel.SetDetached(false);
+        }
 
         private void About_Click(object sender, RoutedEventArgs e) =>
             MessageBox.Show("TdxClaw AI写作助手 v1.0", "关于", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -670,33 +980,41 @@ namespace 编辑器
         private void ProjectTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
         {
             if (ProjectTreeView.SelectedItem is Chapter chapter)
+                OpenChapterTab(chapter);
+        }
+
+        private void ProjectTreeView_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            // 双击章节标题触发重命名
+            if (ProjectTreeView.SelectedItem is Chapter chapter)
+                RenameChapter(chapter);
+        }
+
+        private void OpenChapterTab(Chapter chapter)
+        {
+            var existingTab = EditorTabControl.Items.OfType<TabItem>()
+                .FirstOrDefault(t => t.Tag is Chapter c && c.ChapterId == chapter.ChapterId);
+
+            if (existingTab == null)
             {
-                // 检查该章节是否已在标签页中打开
-                var existingTab = EditorTabControl.Items.OfType<TabItem>()
-                    .FirstOrDefault(t => t.Tag is Chapter c && c.ChapterId == chapter.ChapterId);
+                var headerBlock = new System.Windows.Controls.TextBlock();
+                System.Windows.Data.BindingOperations.SetBinding(headerBlock,
+                    System.Windows.Controls.TextBlock.TextProperty,
+                    new System.Windows.Data.Binding("Title") { Source = chapter });
 
-                if (existingTab == null)
+                var tabItem = new TabItem
                 {
-                    // 创建绑定到章节标题的标签头（实时跟随标题修改）
-                    var headerBlock = new System.Windows.Controls.TextBlock();
-                    System.Windows.Data.BindingOperations.SetBinding(headerBlock,
-                        System.Windows.Controls.TextBlock.TextProperty,
-                        new System.Windows.Data.Binding("Title") { Source = chapter });
-
-                    var tabItem = new TabItem
-                    {
-                        Header = headerBlock,
-                        Content = chapter,
-                        ContentTemplate = (System.Windows.DataTemplate)FindResource("ChapterEditorTemplate"),
-                        Tag = chapter
-                    };
-                    EditorTabControl.Items.Add(tabItem);
-                    existingTab = tabItem;
-                }
-
-                EditorTabControl.SelectedItem = existingTab;
-                UpdateChapterInfo(chapter);
+                    Header = headerBlock,
+                    Content = chapter,
+                    ContentTemplate = (System.Windows.DataTemplate)FindResource("ChapterEditorTemplate"),
+                    Tag = chapter
+                };
+                EditorTabControl.Items.Add(tabItem);
+                existingTab = tabItem;
             }
+
+            EditorTabControl.SelectedItem = existingTab;
+            UpdateChapterInfo(chapter);
         }
 
         private void EditorTabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -855,7 +1173,7 @@ namespace 编辑器
         private void ReloadConfigurations()
         {
             // 重新加载润色预设
-            LoadPolishPresets();
+            _aiPanel.LoadPolishPresets();
 
             // 重新加载外观
             _appearanceManager = new AppearanceManager(_configDir);
@@ -879,7 +1197,7 @@ namespace 编辑器
             }
         }
 
-        private async Task CallAiFunction(Func<IApiService, Task<string>> function)
+        private async Task CallAiFunction(Func<IApiService, Task<AiResult>> function)
         {
             if (_apiService == null)
             {
@@ -889,22 +1207,37 @@ namespace 编辑器
                 return;
             }
 
+            _aiCts = new CancellationTokenSource();
+            _aiPanel.SetStopButtonVisible(true);
             try
             {
                 UpdateStatus("正在调用AI...");
-                var result = await function(_apiService);
-                AiResultTextBox.Text = result;
+                var aiResult = await function(_apiService);
+                _aiPanel.ResultTextBox.Text = aiResult.Text;
+                ShowTokenUsage(aiResult);
                 UpdateStatus("AI调用成功");
+            }
+            catch (OperationCanceledException)
+            {
+                _aiPanel.ResultTextBox.Text = "[已停止生成]";
+                UpdateStatus("已停止");
             }
             catch (Exception ex)
             {
-                AiResultTextBox.Text = $"AI调用失败: {ex.Message}";
+                _aiPanel.ResultTextBox.Text = $"AI调用失败: {ex.Message}";
                 MessageBox.Show($"AI调用失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
                 UpdateStatus("AI调用失败");
             }
+            finally
+            {
+                _aiCts.Dispose();
+                _aiCts = null;
+                _tokenProgress = null;
+                _aiPanel.SetStopButtonVisible(false);
+            }
         }
 
-        private async Task<string?> CallAiFunctionWithResult(Func<IApiService, Task<string>> function)
+        private async Task<AiResult?> CallAiFunctionWithResult(Func<IApiService, Task<AiResult>> function)
         {
             if (_apiService == null)
             {
@@ -914,18 +1247,49 @@ namespace 编辑器
                 return null;
             }
 
+            _aiCts = new CancellationTokenSource();
+            _tokenProgress = (input, output) =>
+                Dispatcher.Invoke(() =>
+                    TokenUsageTextBlock.Text = $"Token: 输入 {input} + 输出 {output} = {input + output}");
+            _aiPanel.SetStopButtonVisible(true);
             try
             {
                 UpdateStatus("正在调用AI...");
-                return await function(_apiService);
+                var aiResult = await function(_apiService);
+                ShowTokenUsage(aiResult);
+                return aiResult;
+            }
+            catch (OperationCanceledException)
+            {
+                _aiPanel.ResultTextBox.Text = "[已停止生成]";
+                UpdateStatus("已停止");
+                return new AiResult { Text = "[已停止生成]" };
             }
             catch (Exception ex)
             {
-                AiResultTextBox.Text = $"AI调用失败: {ex.Message}";
+                _aiPanel.ResultTextBox.Text = $"AI调用失败: {ex.Message}";
                 MessageBox.Show($"AI调用失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
                 UpdateStatus("AI调用失败");
                 return null;
             }
+            finally
+            {
+                _aiCts.Dispose();
+                _aiCts = null;
+                _tokenProgress = null;
+                _aiPanel.SetStopButtonVisible(false);
+            }
+        }
+
+        private void ShowTokenUsage(AiResult result)
+        {
+            if (result.TotalTokens > 0)
+                TokenUsageTextBlock.Text = $"Token: 输入 {result.InputTokens} + 输出 {result.OutputTokens} = {result.TotalTokens}";
+        }
+
+        private void StopAi()
+        {
+            _aiCts?.Cancel();
         }
 
         private void RefreshProjectView()
@@ -934,6 +1298,7 @@ namespace 编辑器
             {
                 ProjectTreeView.ItemsSource = null;
                 ProjectTreeView.ItemsSource = new List<NovelProject> { _currentProject };
+                _aiPanel.RefreshChapterList(_currentProject.Chapters);
             }
         }
 
@@ -963,21 +1328,21 @@ namespace 编辑器
         private void SyncAiContextToProject()
         {
             if (_currentProject == null) return;
-            _currentProject.FullOutline = FullOutlineTextBox.Text;
-            _currentProject.ChapterOutline = ChapterOutlineTextBox.Text;
-            _currentProject.CharacterSettings = CharacterSettingsTextBox.Text;
-            _currentProject.BackgroundSettings = BackgroundSettingsTextBox.Text;
-            _currentProject.WritingStyle = WritingStyleTextBox.Text;
+            _currentProject.FullOutline = _aiPanel.OutlineTextBox.Text;
+            _currentProject.ChapterOutline = _aiPanel.ChapterTextBox.Text;
+            _currentProject.CharacterSettings = _aiPanel.CharacterTextBox.Text;
+            _currentProject.BackgroundSettings = _aiPanel.BackgroundTextBox.Text;
+            _currentProject.WritingStyle = _aiPanel.WritingStyleTextBox.Text;
         }
 
         private void SyncAiContextFromProject()
         {
             if (_currentProject == null) return;
-            FullOutlineTextBox.Text = _currentProject.FullOutline ?? "";
-            ChapterOutlineTextBox.Text = _currentProject.ChapterOutline ?? "";
-            CharacterSettingsTextBox.Text = _currentProject.CharacterSettings ?? "";
-            BackgroundSettingsTextBox.Text = _currentProject.BackgroundSettings ?? "";
-            WritingStyleTextBox.Text = _currentProject.WritingStyle ?? "";
+            _aiPanel.OutlineTextBox.Text = _currentProject.FullOutline ?? "";
+            _aiPanel.ChapterTextBox.Text = _currentProject.ChapterOutline ?? "";
+            _aiPanel.CharacterTextBox.Text = _currentProject.CharacterSettings ?? "";
+            _aiPanel.BackgroundTextBox.Text = _currentProject.BackgroundSettings ?? "";
+            _aiPanel.WritingStyleTextBox.Text = _currentProject.WritingStyle ?? "";
         }
 
         private string BuildAiContext()
@@ -997,11 +1362,88 @@ namespace 编辑器
             if (!string.IsNullOrWhiteSpace(_currentProject.WritingStyle))
                 parts.Add($"[文风设定]\n{_currentProject.WritingStyle}");
 
-            if (parts.Count == 0) return "";
+            if (parts.Count == 0 && (_memoryManager == null || string.IsNullOrWhiteSpace(_memoryManager.GetRawMemory())))
+                return "";
 
-            return "===== 创作上下文（项目设定） =====\n\n"
+            var context = "===== 创作上下文（项目设定） =====\n\n"
                 + string.Join("\n\n---\n\n", parts)
                 + "\n\n====================================\n\n";
+
+            // 注入选中章节内容
+            var selectedIds = _aiPanel.GetSelectedChapterIds();
+            if (selectedIds.Count > 0)
+            {
+                var chapterParts = new List<string>();
+                foreach (var ch in _currentProject.Chapters.Where(c => selectedIds.Contains(c.ChapterId)))
+                {
+                    if (!string.IsNullOrWhiteSpace(ch.Content))
+                        chapterParts.Add($"[第{ch.ChapterNumber}章: {ch.Title}]\n{ch.Content}");
+                }
+                if (chapterParts.Count > 0)
+                {
+                    context += "===== 相关章节内容 =====\n\n"
+                        + string.Join("\n\n---\n\n", chapterParts)
+                        + "\n\n==========================\n\n";
+                }
+            }
+
+            // 注入 AI 记忆
+            if (_memoryManager != null)
+                context += _memoryManager.GetMemoryContext();
+
+            return context;
+        }
+
+        private void RecordAiInteraction(string type, string input, string result)
+        {
+            _memoryManager?.RecordInteraction(type, input, result);
+            _ = TryUpdateMemoryAsync();
+        }
+
+        private async Task TryUpdateMemoryAsync()
+        {
+            if (_memoryManager == null || !_memoryManager.ShouldUpdateMemory() || _apiService == null)
+                return;
+
+            try
+            {
+                UpdateStatus("正在更新 AI 记忆...");
+                var prompt = _memoryManager.BuildMemoryUpdatePrompt();
+                var aiResult = await _apiService.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 1500 });
+                if (!string.IsNullOrWhiteSpace(aiResult.Text) && !aiResult.Text.StartsWith("API调用失败") && !aiResult.Text.StartsWith("API错误"))
+                {
+                    _memoryManager.SaveMemory(aiResult.Text);
+                    _aiPanel.MemoryTextBox.Text = _memoryManager.GetRawMemory();
+                    UpdateStatus("AI 记忆已更新");
+                }
+                else
+                {
+                    UpdateStatus("就绪");
+                }
+            }
+            catch
+            {
+                UpdateStatus("就绪");
+            }
+        }
+
+        private void SaveMemory()
+        {
+            if (_memoryManager == null) return;
+            _memoryManager.SetMemory(_aiPanel.MemoryTextBox.Text);
+            ShowNotification("AI 记忆已保存");
+        }
+
+        private void ClearMemory()
+        {
+            if (_memoryManager == null) return;
+            var result = MessageBox.Show("确定清空当前项目的所有 AI 记忆吗？\n此操作不可撤销。",
+                "确认清空", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (result != MessageBoxResult.Yes) return;
+
+            _memoryManager.ClearMemory();
+            _aiPanel.MemoryTextBox.Text = "";
+            ShowNotification("AI 记忆已清空");
         }
 
         private void ShowComingSoon(string feature)
@@ -1009,76 +1451,7 @@ namespace 编辑器
             MessageBox.Show($"{feature}功能即将推出", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
-        // ---- 润色预设管理 ----
-
-        private void LoadPolishPresets()
-        {
-            _polishPresets.Clear();
-            _polishPresets.Add("（无预设）");
-
-            var presetsPath = Path.Combine(_configDir, "polish_presets.json");
-            try
-            {
-                if (File.Exists(presetsPath))
-                {
-                    var json = File.ReadAllText(presetsPath);
-                    var saved = JsonSerializer.Deserialize<List<string>>(json, _jsonOptions);
-                    if (saved != null && saved.Count > 0)
-                    {
-                        foreach (var p in saved)
-                            _polishPresets.Add(p);
-                        PolishStyleCombo.ItemsSource = _polishPresets;
-                        PolishStyleCombo.SelectedIndex = 0;
-                        return;
-                    }
-                }
-            }
-            catch { }
-
-            // 首次运行或加载失败：使用默认预设
-            foreach (var p in DefaultPolishPresets)
-                _polishPresets.Add(p);
-            SavePolishPresets();
-
-            PolishStyleCombo.ItemsSource = _polishPresets;
-            PolishStyleCombo.SelectedIndex = 0;
-        }
-
-        private void SavePolishPresets()
-        {
-            var presetsPath = Path.Combine(_configDir, "polish_presets.json");
-            var toSave = _polishPresets.Where(p => p != "（无预设）").ToList();
-            File.WriteAllText(presetsPath, JsonSerializer.Serialize(toSave, _jsonOptions));
-        }
-
-        private void AddPolishPreset_Click(object sender, RoutedEventArgs e)
-        {
-            var text = PolishStyleCombo.Text?.Trim();
-            if (string.IsNullOrEmpty(text) || text == "（无预设）") return;
-            if (!_polishPresets.Contains(text))
-            {
-                _polishPresets.Add(text);
-                SavePolishPresets();
-                ShowNotification($"已添加预设：{text}");
-            }
-        }
-
-        private void RemovePolishPreset_Click(object sender, RoutedEventArgs e)
-        {
-            var text = PolishStyleCombo.Text?.Trim();
-            if (string.IsNullOrEmpty(text) || text == "（无预设）") return;
-            if (DefaultPolishPresets.Contains(text))
-            {
-                ShowNotification("默认预设不可删除", isError: true);
-                return;
-            }
-            if (_polishPresets.Remove(text))
-            {
-                PolishStyleCombo.SelectedIndex = 0;
-                SavePolishPresets();
-                ShowNotification($"已删除预设：{text}");
-            }
-        }
+        // ---- 润色预设管理（已移至 AiPanelControl）----
 
         // ---- 窗口通知 ----
 

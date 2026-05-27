@@ -361,3 +361,26 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# ============================
+# TdxClaw 项目专用
+# ============================
+
+# Claude Code 本地配置
+.claude/
+
+# 参考资料（不上传）
+*.pdf
+pdf_pages/
+*.html
+*_files/
+
+# 根目录示例项目文件
+/*.tdxproj
+
+# AI 记忆文件（用户数据）
+.ai_memory/
+
+# 项目快照（用户数据）
+.snapshots/
+.chat/

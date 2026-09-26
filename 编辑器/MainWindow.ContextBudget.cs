@@ -52,13 +52,14 @@ namespace 编辑器
         /// 才调 <see cref="AppendChatSummaryBlock"/> 拼 systemPrompt —— 否则用的是旧摘要。
         /// </summary>
         private async Task<IReadOnlyList<ChatMessage>> EnsureChatContextBudgetAsync(
-            string systemPrompt, string userPrompt, CancellationToken ct)
+            SystemPrompt systemPrompt, string userPrompt, CancellationToken ct)
         {
             if (_compactor == null || _apiService == null)
                 return _chatSession?.BuildHistory() ?? Array.Empty<ChatMessage>();
 
             var outcome = await _compactor.EnsureBudgetAsync(
-                systemPrompt,
+                // 压缩器只关心"这一条请求大概多大"，不关心分段，压平了给它。
+                systemPrompt.Flatten(),
                 userPrompt,
                 // 取消令牌在 options 里（压缩器构造 options 时已写入 ct），
                 // 所以这里用三参重载；摘要调用不带对话历史。
@@ -86,11 +87,11 @@ namespace 编辑器
         /// **同角色不能连续**，而摘要天然是一条 user 消息，插在保留轮次（首条也是 user）
         /// 前面会直接 400。放进 system 既绕开这个坑，语义上也更顺 —— system 里本来就是背景设定。
         /// </summary>
-        private string AppendChatSummaryBlock(string baseSystemPrompt)
+        private SystemPrompt AppendChatSummaryBlock(SystemPrompt baseSystemPrompt)
         {
             var block = _chatSession?.BuildSummaryBlock();
             if (string.IsNullOrWhiteSpace(block)) return baseSystemPrompt;
-            return baseSystemPrompt + "\n\n" + block;
+            return baseSystemPrompt.Append(block, cacheable: false);
         }
 
         /// <summary>

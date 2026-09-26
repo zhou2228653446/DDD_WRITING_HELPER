@@ -36,6 +36,12 @@ namespace 编辑器
         private CancellationTokenSource? _aiCts;
         private Action<int, int>? _tokenProgress;
 
+        /// <summary>
+        /// 阶段性提示（重试中、思考中）。接到状态栏上 —— 没有它的话，
+        /// 断线重试的十几秒里界面完全静止，用户只会以为卡死了。
+        /// </summary>
+        private Action<string>? _aiNotice;
+
         // AI 面板分离
         private AiPanelControl _aiPanel = null!;
         private FloatingAiWindow? _floatingWindow;
@@ -650,15 +656,22 @@ namespace 编辑器
                     {
                         MaxTokens = 2000,
                         CancellationToken = _aiCts!.Token,
+                        OnNotice = _aiNotice,
                         OnProgress = _tokenProgress
                     }));
-            if (IsUsable(result))
+            // ★ 用户点「停止」时，Service 会把**已经生成的部分**原样带回来
+            //   （见 AiResult.CanceledWithPartial）。续写是**追加**，把已写的接上去
+            //   不会破坏任何既有内容 —— 而用户按停止的意图通常正是"就写到这里"。
+            //   所以这里接受取消态的部分内容。（覆盖型的润色**不能**这样，见 PolishTextAsync。）
+            if (result != null && (result.IsUsable || result.CanceledWithPartial))
             {
                 chapter.Content += "\n\n" + result.Text;
                 _aiPanel.ResultTextBox.Text = result.Text;
                 _chatLogger?.Log("续写", requirement, result.Text);
                 RecordAiInteraction("续写", requirement, result.Text);
-                ShowNotification("续写完成，已追加到章节");
+                ShowNotification(result.CanceledWithPartial
+                    ? "已停止，保留的部分已追加到章节"
+                    : "续写完成，已追加到章节");
             }
             return result;
         }
@@ -714,6 +727,7 @@ namespace 编辑器
                     {
                         MaxTokens = CompletionOptions.BudgetForRewrite(chapter.Content),
                         CancellationToken = _aiCts!.Token,
+                        OnNotice = _aiNotice,
                         OnProgress = _tokenProgress
                     }));
             if (IsUsable(result))
@@ -759,7 +773,7 @@ namespace 编辑器
 
             var result = await CallAiFunctionWithResult(async (apiService) =>
                 await apiService.CompleteTextAsync(userPrompt, systemPrompt,
-                    new CompletionOptions { CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
+                    new CompletionOptions { CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
             if (IsUsable(result))
             {
                 chapter.Content += $"\n\n【生成的角色名 — {DateTime.Now:HH:mm}】\n{result.Text}\n";
@@ -815,7 +829,7 @@ namespace 编辑器
                 var systemPrompt = AppendChatSummaryBlock(baseSystemPrompt);
 
                 return await apiService.CompleteTextAsync(userPrompt, systemPrompt,
-                    new CompletionOptions { CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress },
+                    new CompletionOptions { CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress },
                     history);
             });
             if (IsUsable(result))
@@ -884,7 +898,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.FullOutline, result.Text);
@@ -918,7 +932,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.CharacterSettings, result.Text);
@@ -952,7 +966,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.4, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.4, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.BackgroundSettings, result.Text);
@@ -990,7 +1004,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.ChapterOutline, result.Text);
@@ -1032,7 +1046,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 1500, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 1500, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.WritingStyle, result.Text);
@@ -1518,6 +1532,7 @@ namespace 编辑器
             _tokenProgress = (input, output) =>
                 Dispatcher.Invoke(() =>
                     TokenUsageTextBlock.Text = $"Token: 输入 {input} + 输出 {output} = {input + output}");
+            _aiNotice = message => Dispatcher.Invoke(() => UpdateStatus(message));
             _aiPanel.SetStopButtonVisible(true);
             try
             {
@@ -1528,7 +1543,18 @@ namespace 编辑器
                 // 让用户看得见原因，同时把它标成"不可写回"，免得调用方拿去覆盖正文。
                 if (!aiResult.IsUsable)
                 {
-                    _aiPanel.ResultTextBox.Text = aiResult.Text;
+                    // ★ 用户点「停止」时，Service 会把**已经流式收到的内容**原样带回来
+                    //   （见 AiResult.CanceledWithPartial）。那段内容在用户眼里就是
+                    //   "已经写出来的东西"，拿一句「[已停止生成]」盖掉等于让他白等一场。
+                    if (aiResult.CanceledWithPartial)
+                    {
+                        _aiPanel.ResultTextBox.Text = aiResult.Text;
+                        ShowTokenUsage(aiResult);
+                        UpdateStatus($"已停止 · 保留了本次已生成的 {aiResult.Text.Trim().Length} 字");
+                        return aiResult;
+                    }
+
+                    _aiPanel.ResultTextBox.Text = aiResult.IsCanceled ? "[已停止生成]" : aiResult.Text;
                     UpdateStatus(aiResult.IsCanceled ? "已停止" : "AI调用失败");
                     if (!aiResult.IsCanceled)
                         MessageBox.Show(aiResult.Text, "AI 调用失败", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -1556,6 +1582,7 @@ namespace 编辑器
                 _aiCts.Dispose();
                 _aiCts = null;
                 _tokenProgress = null;
+                _aiNotice = null;
                 _aiPanel.SetStopButtonVisible(false);
             }
         }
@@ -1577,8 +1604,17 @@ namespace 编辑器
 
         private void ShowTokenUsage(AiResult result)
         {
-            if (result.TotalTokens > 0)
-                TokenUsageTextBlock.Text = $"Token: 输入 {result.InputTokens} + 输出 {result.OutputTokens} = {result.TotalTokens}";
+            if (result.TotalTokens <= 0) return;
+
+            // 缓存命中部分单独标出来。它**已经包含在"输入"里**，但只按 0.1 倍计价 ——
+            // 不显示的话，用户看到"输入 12000"会以为每次都这么贵，
+            // 而实际上其中一大半可能来自命中缓存的系统提示词。
+            var cache = result.CachedInputTokens > 0
+                ? $"（其中缓存命中 {result.CachedInputTokens}）"
+                : "";
+
+            TokenUsageTextBlock.Text =
+                $"Token: 输入 {result.InputTokens}{cache} + 输出 {result.OutputTokens} = {result.TotalTokens}";
         }
 
         private void StopAi()
@@ -1814,15 +1850,15 @@ namespace 编辑器
 
         /// <summary>
         /// 组装完整的 system 提示词：身份 + 项目设定 + 参考章节 + 本次任务 + 输出契约。
+        ///
+        /// 返回**分段**结果而不是拼好的字符串：设定段跨请求基本不变（可打缓存断点），
+        /// 勾选章节段随时可能变（不能打）。分段的意义与代价见 <see cref="AiPrompts.BuildSections"/>。
         /// </summary>
-        private string BuildSystemPrompt(string task, string? outputContract = null)
+        private SystemPrompt BuildSystemPrompt(string task, string? outputContract = null)
         {
-            var context = BuildProjectContext();
+            var stable = BuildProjectContext();
             var related = BuildRelatedChaptersContext();
-            if (!string.IsNullOrWhiteSpace(related))
-                context = string.IsNullOrWhiteSpace(context) ? related : context + "\n\n" + related;
-
-            return AiPrompts.Build(task, context, outputContract);
+            return AiPrompts.BuildSections(task, stable, related, outputContract);
         }
 
         private void RecordAiInteraction(string type, string input, string result)

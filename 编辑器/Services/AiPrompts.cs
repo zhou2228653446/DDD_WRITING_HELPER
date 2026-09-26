@@ -427,31 +427,55 @@ namespace 编辑器.Services
         // ==================================================================
 
         /// <summary>
-        /// 组装 system 提示词。
+        /// 组装 system 提示词（压平成一段纯文本）。
+        /// 新代码建议用 <see cref="BuildSections"/> —— 它能保住分段，让 prompt caching 生效。
         /// </summary>
         /// <param name="task">任务层说明（<see cref="Task"/> 中的属性）。</param>
         /// <param name="contextBlock">由 <see cref="BuildContextBlock"/> 生成的项目设定块，可为空。</param>
         /// <param name="outputContract">输出契约，默认使用 <see cref="CreativeOutput"/>。</param>
         public static string Build(string task, string? contextBlock = null, string? outputContract = null)
+            => BuildSections(task, contextBlock, null, outputContract).Flatten();
+
+        /// <summary>
+        /// 组装**分段**的 system 提示词 —— 这是让 Anthropic 的 prompt caching 真正生效的前提。
+        ///
+        /// 分段依据是**这一块会不会跨请求复用**，而不是内容类别：
+        ///   ① 身份 + 项目设定（含 AI 记忆）：只要还在同一个项目里就基本不变 → 打缓存断点
+        ///   ② 勾选章节正文：作者勾哪几章、写了多少，每次都可能不同 → 不打
+        ///   ③ 任务 + 输出契约：单个只有几百字，通常够不到服务端的最小缓存长度 → 不打
+        ///
+        /// ⚠ 为什么只给①打标记：打 cache_control 意味着**要写缓存**，而写入按 1.25 倍计价。
+        ///   给一个从不复用的前缀打标记就是白亏 25%。① 是唯一"真的会重复"的大块
+        ///   （长篇项目里五项设定动辄数千字，是 system 里最大的部分）。
+        ///
+        /// ⚠ 顺序刻意保持与改造前一致（身份 → 设定 → 章节 → 任务 → 契约）。
+        ///   把"稳定的往前挪"确实能多缓存一段，但会改掉用户已经调好的提示词语义，
+        ///   不值得为那点收益冒险。
+        /// </summary>
+        public static SystemPrompt BuildSections(
+            string task, string? stableContext = null, string? volatileContext = null, string? outputContract = null)
         {
-            var sb = new StringBuilder();
-            sb.AppendLine(Base);
-            sb.AppendLine();
+            var prompt = new SystemPrompt(Array.Empty<SystemPromptPart>());
 
-            if (!string.IsNullOrWhiteSpace(contextBlock))
+            var head = new StringBuilder();
+            head.AppendLine(Base);
+            if (!string.IsNullOrWhiteSpace(stableContext))
             {
-                sb.AppendLine(contextBlock);
-                sb.AppendLine();
+                head.AppendLine();
+                head.AppendLine(stableContext.Trim());
             }
+            prompt = prompt.Append(head.ToString().Trim(), cacheable: true);
 
+            if (!string.IsNullOrWhiteSpace(volatileContext))
+                prompt = prompt.Append(volatileContext.Trim(), cacheable: false);
+
+            var tail = new StringBuilder();
             if (!string.IsNullOrWhiteSpace(task))
-            {
-                sb.AppendLine(task.Trim());
-                sb.AppendLine();
-            }
+                tail.AppendLine(task.Trim());
+            tail.Append((outputContract ?? CreativeOutput).Trim());
+            prompt = prompt.Append(tail.ToString().Trim(), cacheable: false);
 
-            sb.Append((outputContract ?? CreativeOutput).Trim());
-            return sb.ToString();
+            return prompt;
         }
 
         /// <summary>

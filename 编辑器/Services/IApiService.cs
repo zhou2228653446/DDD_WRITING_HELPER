@@ -12,8 +12,9 @@ namespace 编辑器.Services
         /// </summary>
         /// <param name="prompt">user 消息内容（作者的实际请求 + 待处理文本）。</param>
         /// <param name="systemPrompt">
-        /// system 消息内容（身份 / 项目设定 / 任务说明 / 输出契约）。
-        /// 为空表示不发送 system 消息，退回单纯 user 消息的老行为。
+        /// system 消息内容（身份 / 项目设定 / 任务说明 / 输出契约）。支持**分段**，见
+        /// <see cref="SystemPrompt"/> —— 分段是为了让 Anthropic 的 prompt caching 能
+        /// 在"稳定段"上命中。为空表示不发送 system 消息，退回单纯 user 消息的老行为。
         /// </param>
         /// <param name="options">采样参数与取消令牌。</param>
         /// <param name="history">
@@ -26,7 +27,7 @@ namespace 编辑器.Services
         /// </param>
         Task<AiResult> CompleteTextAsync(
             string prompt,
-            string? systemPrompt = null,
+            SystemPrompt? systemPrompt = null,
             CompletionOptions? options = null,
             IReadOnlyList<ChatMessage>? history = null);
     }
@@ -161,6 +162,64 @@ namespace 编辑器.Services
         }
     }
 
+    /// <summary>
+    /// system 提示词的一段。<paramref name="Cacheable"/> = 这一段是否值得打缓存断点。
+    /// </summary>
+    /// <param name="Text">本段正文。</param>
+    /// <param name="Cacheable">
+    /// 是否在本段末尾打 prompt-caching 断点。判据是**这一段会不会跨请求复用**
+    /// （身份、项目设定这类每轮都一样 → true；勾选章节正文这类每次都在变 → false）。
+    /// 打多了无害（Anthropic 对不足最小长度的段会静默跳过），打错了只是白花钱。
+    /// </param>
+    public readonly record struct SystemPromptPart(string Text, bool Cacheable);
+
+    /// <summary>
+    /// 分段组织的 system 提示词。
+    ///
+    /// ★ 为什么要分段：Anthropic 的 prompt caching 是**前缀缓存** ——
+    ///   只有显式在某个 block 上打 <c>cache_control: {"type":"ephemeral"}</c>，
+    ///   服务端才会把「从开头到该 block 为止」的内容缓存下来。仅仅把稳定内容放在前面
+    ///   **是不够的**（这是本类出现前的误解），不打标记等于完全不缓存。
+    ///   分段之后，只要前面的段没变，后面的段变了也不影响前面命中。
+    ///
+    /// 从 <see cref="string"/> 有隐式转换，所以既有调用点（传一个字符串）
+    /// 一行都不用改 —— 它们会得到"单段、可缓存"，语义与改造前一致。
+    /// </summary>
+    public sealed class SystemPrompt
+    {
+        public IReadOnlyList<SystemPromptPart> Parts { get; }
+
+        public SystemPrompt(IReadOnlyList<SystemPromptPart> parts)
+        {
+            Parts = parts ?? Array.Empty<SystemPromptPart>();
+        }
+
+        /// <summary>没有任何有效内容（全是空白）→ 调用方应不发送 system。</summary>
+        public bool IsEmpty => Parts.All(p => string.IsNullOrWhiteSpace(p.Text));
+
+        /// <summary>
+        /// 拼成一整块纯文本。给**不支持分段**的协议（OpenAI 兼容）与本地 token 估算用。
+        /// 段间用空行连接，与改造前"一整块 system"的形态保持一致。
+        /// </summary>
+        public string Flatten() => string.Join("\n\n",
+            Parts.Where(p => !string.IsNullOrWhiteSpace(p.Text)).Select(p => p.Text.Trim()));
+
+        public static implicit operator SystemPrompt?(string? text) => FromText(text);
+
+        public static SystemPrompt? FromText(string? text) =>
+            string.IsNullOrWhiteSpace(text)
+                ? null
+                : new SystemPrompt(new[] { new SystemPromptPart(text, true) });
+
+        /// <summary>追加一段。返回新实例（本类型当作不可变用）。</summary>
+        public SystemPrompt Append(string? text, bool cacheable = false)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return this;
+            var list = new List<SystemPromptPart>(Parts) { new(text, cacheable) };
+            return new SystemPrompt(list);
+        }
+    }
+
     public class AiResult
     {
         public string Text { get; set; } = "";
@@ -169,7 +228,21 @@ namespace 编辑器.Services
         public int TotalTokens { get; set; }
 
         /// <summary>
-        /// 这次调用**失败**了（网络异常 / 401 / 400 …），<see cref="Text"/> 里是错误说明而不是正文。
+        /// 输入里**命中缓存**的那部分 token（Anthropic 的 <c>cache_read_input_tokens</c>、
+        /// OpenAI 的 <c>prompt_tokens_details.cached_tokens</c>）。
+        /// 它已经包含在 <see cref="InputTokens"/> 里，单独列出来是为了让用户看得见缓存有没有起作用
+        /// —— 缓存命中部分只按 0.1 倍计价，这是长篇小说场景下最可观的一项省钱。
+        /// </summary>
+        public int CachedInputTokens { get; set; }
+
+        /// <summary>
+        /// 思考内容（推理模型的 reasoning / thinking 块）。**不写入正文**，
+        /// 只在生成过程中给用户一个"它在思考"的信号，避免界面看上去像卡死了。
+        /// </summary>
+        public string Reasoning { get; set; } = "";
+
+        /// <summary>
+        /// 这次调用**失败**了（网络异常 / 401 / 400 / 空响应 …），<see cref="Text"/> 里是错误说明而不是正文。
         ///
         /// ★ 两个 Service 把失败包成 AiResult 返回（而不是抛异常），所以"结果非 null"
         ///   并不等于成功。凡是要把 Text 写回章节正文或设定的地方，必须先判这个标记 ——
@@ -177,7 +250,7 @@ namespace 编辑器.Services
         /// </summary>
         public bool IsError { get; set; }
 
-        /// <summary>被用户主动停止。<see cref="Text"/> 里是占位文案，同样不可写回。</summary>
+        /// <summary>被用户主动停止。</summary>
         public bool IsCanceled { get; set; }
 
         /// <summary>
@@ -185,6 +258,15 @@ namespace 编辑器.Services
         /// 正文被**截断**。改写类任务（润色）此时覆盖原文等于丢内容。
         /// </summary>
         public bool Truncated { get; set; }
+
+        /// <summary>
+        /// 用户停止时**保住了已经生成的那部分正文**（<see cref="Text"/> 非空）。
+        ///
+        /// 停止不等于丢弃：已经流式收到的内容在用户眼里就是"写出来的东西"，
+        /// 直接丢掉等于让他白等一场。调用方看到这个标记应当把 Text 留给用户
+        /// （写进正文或至少留在回复框），而不是当失败处理。
+        /// </summary>
+        public bool CanceledWithPartial => IsCanceled && !string.IsNullOrWhiteSpace(Text);
 
         /// <summary>正文可直接使用（非失败、非取消）。截断与否由调用方按任务性质自己决定。</summary>
         public bool IsUsable => !IsError && !IsCanceled;
@@ -197,6 +279,28 @@ namespace 编辑器.Services
         public string Model { get; set; } = "";
         public CancellationToken CancellationToken { get; set; } = default;
         public Action<int, int>? OnProgress { get; set; }
+
+        /// <summary>
+        /// 流空闲超时：多久没收到**任何字节**就认为连接卡死。
+        /// 为 <see cref="TimeSpan.Zero"/> 时用 <c>StreamingApiServiceBase.DefaultIdleTimeout</c>。
+        ///
+        /// ★ 为什么需要它：HttpClient 那个 Timeout 是**整个请求**的上限，对长文生成来说
+        ///   设短了会误杀（写 3000 字超过一分钟很正常），设长了又会让真卡死的连接干等。
+        ///   正确的做法是关掉/放宽总超时，改用"多久没数据"来判死。
+        /// </summary>
+        public TimeSpan IdleTimeout { get; set; } = TimeSpan.Zero;
+
+        /// <summary>
+        /// 允许服务端返回空正文。默认**不允许** —— 空正文一律按失败处理。
+        ///
+        /// ★ 这是数据安全阀：服务端可能返回 200 + finish_reason=stop 却没有任何内容
+        ///   （内容审查拦截、网关异常、流被静默切断）。此时若当成成功，
+        ///   调用方拿空字符串写回就是**把整章正文清空**。
+        /// </summary>
+        public bool AllowEmptyResponse { get; set; }
+
+        /// <summary>给用户看的阶段性提示（重试中、思考中等）。</summary>
+        public Action<string>? OnNotice { get; set; }
 
         /// <summary>
         /// 改写类任务（原文进、同量文本出）的输出预算。

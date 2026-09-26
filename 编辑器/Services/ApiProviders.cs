@@ -55,8 +55,18 @@ namespace 编辑器.Services
 
         public string DefaultModel { get; init; } = "";
 
-        /// <summary>常用模型，供下拉快捷选择；用户也可以自己输入任意模型名。</summary>
+        /// <summary>
+        /// 内置的常用模型，**只是写这段代码那一刻的参考**，服务商改了型号名就会过期。
+        /// 权威清单以「拉取列表」（<see cref="ModelCatalog"/>）为准，这里只作离线兜底。
+        /// </summary>
         public IReadOnlyList<string> Models { get; init; } = Array.Empty<string>();
+
+        /// <summary>
+        /// 模型列表接口的显式声明。**优先用对话地址推导**（用户可能换过中转地址），
+        /// 推导不出来时才用这里；推导成功且仍在官方域名上时，这里的查询参数会带过去
+        /// （Anthropic 不加 <c>?limit=1000</c> 只返回前 20 个）。
+        /// </summary>
+        public string ModelsEndpoint { get; init; } = "";
 
         /// <summary>申请 API Key 的控制台地址。</summary>
         public string ConsoleUrl { get; init; } = "";
@@ -305,7 +315,8 @@ namespace 编辑器.Services
         private static ProviderPreset Preset(
             string id, string name, string group, ApiWire wire, ApiAuth auth,
             string endpoint, string defaultModel, string[] models,
-            string console = "", string note = "", (string Key, string Value)[]? headers = null)
+            string console = "", string note = "", (string Key, string Value)[]? headers = null,
+            string modelsEndpoint = "")
         {
             var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             if (headers != null)
@@ -321,6 +332,7 @@ namespace 编辑器.Services
                 Endpoint = endpoint,
                 DefaultModel = defaultModel,
                 Models = models,
+                ModelsEndpoint = modelsEndpoint,
                 ConsoleUrl = console,
                 Note = note,
                 ExtraHeaders = dict,
@@ -434,7 +446,8 @@ namespace 编辑器.Services
                 "claude-sonnet-4-5",
                 new[] { "claude-sonnet-4-5", "claude-opus-4-1", "claude-haiku-4-5" },
                 "https://console.anthropic.com/settings/keys",
-                "Anthropic 格式：认证走 x-api-key，system 是顶层字段。"),
+                "Anthropic 格式：认证走 x-api-key，system 是顶层字段。模型名建议用「拉取列表」拿完整的带日期版本。",
+                modelsEndpoint: "https://api.anthropic.com/v1/models?limit=1000"),
 
             Preset("gemini", "Google Gemini", GroupGlobal, Oa, Bearer,
                 "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",

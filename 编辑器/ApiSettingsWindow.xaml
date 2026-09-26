@@ -84,21 +84,34 @@
                     <hc:TextBox x:Name="ApiUrlTextBox" Grid.Row="6" Margin="0,0,0,8" FontSize="13"
                                 TextChanged="ApiUrlTextBox_TextChanged"/>
 
-                    <!-- Model：左边自由输入，右边常用型号快捷选择 -->
+                    <!-- Model：左边自由输入，中间拉取真实清单，右边从清单里挑 -->
                     <Grid Grid.Row="7" Margin="0,0,0,5">
                         <TextBlock Text="模型名称" FontWeight="Bold"/>
-                        <TextBlock Text="可直接输入，也可从右侧下拉里挑"
-                                   FontSize="11" VerticalAlignment="Center" HorizontalAlignment="Right"
-                                   Foreground="{DynamicResource Brush.TextMuted}"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                    VerticalAlignment="Center">
+                            <TextBlock x:Name="ModelStatusText" FontSize="11" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" MaxWidth="420"
+                                       Foreground="{DynamicResource Brush.TextMuted}"/>
+                            <Button x:Name="ShowAllModelsBtn" Content="显示全部" FontSize="11"
+                                    Height="20" Padding="8,0" Margin="8,0,0,0"
+                                    Visibility="Collapsed" Click="ShowAllModels_Click"
+                                    ToolTip="默认把 embedding / 语音 / 图片模型排在列表末尾并折叠"/>
+                        </StackPanel>
                     </Grid>
                     <Grid Grid.Row="8" Margin="0,0,0,8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <hc:TextBox x:Name="ModelTextBox" Grid.Column="0" Margin="0,0,6,0" FontSize="13"/>
-                        <hc:ComboBox x:Name="ModelPresetComboBox" Grid.Column="1" Width="190"
-                                     hc:InfoElement.Placeholder="常用型号"
+                        <hc:TextBox x:Name="ModelTextBox" Grid.Column="0" Margin="0,0,6,0" FontSize="13"
+                                    TextChanged="ModelTextBox_TextChanged"/>
+                        <Button x:Name="FetchModelsBtn" Grid.Column="1" Content="拉取列表"
+                                Width="82" Height="30" Margin="0,0,6,0" FontSize="12"
+                                Click="FetchModels_Click"
+                                ToolTip="向服务商查询当前真实可用的模型名（内置型号表可能已过期，以拉取结果为准）"/>
+                        <hc:ComboBox x:Name="ModelPresetComboBox" Grid.Column="2" Width="190"
+                                     hc:InfoElement.Placeholder="可用型号"
                                      SelectionChanged="ModelPresetComboBox_SelectionChanged"/>
                     </Grid>
 

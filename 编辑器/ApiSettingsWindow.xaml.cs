@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using 编辑器.Services;
@@ -18,6 +19,17 @@ namespace 编辑器
         private readonly SystemPromptStore? _promptStore;
         private bool _isSwitchingProfile; // 防止切换时触发重复加载
         private bool _isSwitchingModel;   // 防止程序改写模型下拉时回填到输入框
+
+        // ---- 模型清单（真实可用型号靠拉取，内置表只作离线兜底） ----
+        private readonly ModelCacheStore _modelCache;
+        private readonly Dictionary<string, IReadOnlyList<ModelInfo>> _liveModels = new(StringComparer.Ordinal);
+        private IReadOnlyList<ModelInfo> _allModels = Array.Empty<ModelInfo>();
+        private ModelSource _modelSource = ModelSource.None;
+        private string _fetchedKey = "";       // 当前展示的清单属于哪个「服务商@主机」
+        private bool _showAllModels;           // 是否把非对话模型也摊开
+        private bool _isFetchingModels;
+
+        private enum ModelSource { None, BuiltIn, Cached, Live }
 
         // ---- 系统提示词编辑页状态 ----
         private readonly List<PromptItem> _promptItems = new();
@@ -56,9 +68,21 @@ namespace 编辑器
             };
             AuthComboBox.SelectedIndex = 0;
 
+            _modelCache = new ModelCacheStore(ResolveConfigDir(promptStore));
+
             RefreshProfileList();
             LoadProfileToUI(_profileManager.ActiveProfile);
             InitializePromptEditor();
+        }
+
+        /// <summary>配置目录。优先跟提示词存储同一个目录，拿不到才回落到默认位置。</summary>
+        private static string ResolveConfigDir(SystemPromptStore? store)
+        {
+            var dir = store == null ? null : Path.GetDirectoryName(store.FilePath);
+            if (!string.IsNullOrWhiteSpace(dir)) return dir!;
+
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TdxClaw");
         }
 
         // ---- Profile 管理 ----
@@ -213,11 +237,23 @@ namespace 编辑器
         private void ModelPresetComboBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
         {
             if (_isSwitchingModel) return;
-            if (ModelPresetComboBox.SelectedItem is string model && !string.IsNullOrWhiteSpace(model))
+            if (ModelPresetComboBox.SelectedItem is ModelInfo model && model.Id.Length > 0)
             {
-                ModelTextBox.Text = model;
+                ModelTextBox.Text = model.Id;
                 ModelTextBox.CaretIndex = ModelTextBox.Text.Length;
             }
+        }
+
+        private void ShowAllModels_Click(object sender, RoutedEventArgs e)
+        {
+            _showAllModels = !_showAllModels;
+            RenderModelList();
+        }
+
+        private void ModelTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_isSwitchingModel) return;
+            UpdateModelStatus();   // 手改模型名时立刻校验它是否在清单里
         }
 
         private void AuthComboBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -230,6 +266,10 @@ namespace 编辑器
             // 地址是协议判定的依据（出现 /messages 即按 Anthropic 处理），改了要跟着刷新提示
             if (_isSwitchingProfile) return;
             RefreshProviderHint();
+
+            // 主机变了 → 缓存键变了，型号下拉要跟着换成那一家的清单，
+            // 否则会显示上一家的型号
+            if (CurrentModelCacheKey() != _fetchedKey) RefreshModelSuggestions();
         }
 
         private void OpenProviderConsole_Click(object sender, RoutedEventArgs e)
@@ -268,19 +308,224 @@ namespace 编辑器
             RefreshProviderHint();
         }
 
+        // ---- 模型清单 ----
+        //
+        // 型号名的**唯一权威来源是服务商自己**：带日期版本号的名称（claude-sonnet-4-5-20250929
+        // 这类）改动比程序发版快，内置表迟早会变成一串用不了的死字符串。
+        // 所以下拉的优先级是：本次拉到的 > 上次拉到并缓存的 > 内置参考表。
+        // 界面会明说当前这批是哪来的，用户不会误以为内置表就是全部。
+
+        /// <summary>缓存键：服务商 + 主机。地址换了主机就重新拉，免得把中转的清单套到官网上。</summary>
+        private string CurrentModelCacheKey() =>
+            ModelCacheStore.KeyOf(
+                (ProviderComboBox.SelectedItem as ProviderPreset)?.Id,
+                ApiUrlTextBox.Text.Trim());
+
+        private static ModelInfo ToModel(string id) => new()
+        {
+            Id = id,
+            IsChatLike = ModelCatalog.IsChatLike(id),
+        };
+
         private void RefreshModelSuggestions()
         {
             var preset = ProviderComboBox.SelectedItem as ProviderPreset;
-            var models = preset?.Models ?? (IReadOnlyList<string>)Array.Empty<string>();
+            var key = CurrentModelCacheKey();
+
+            _fetchedKey = key;
+            _showAllModels = false;
+
+            IReadOnlyList<ModelInfo> models;
+            if (_liveModels.TryGetValue(key, out var live))
+            {
+                models = live;
+                _modelSource = ModelSource.Live;
+            }
+            else
+            {
+                var cached = _modelCache.Get(key);
+                if (cached != null && cached.Count > 0)
+                {
+                    models = cached.Select(ToModel).ToList();
+                    _modelSource = ModelSource.Cached;
+                }
+                else if (preset != null && preset.Models.Count > 0)
+                {
+                    models = preset.Models.Select(ToModel).ToList();
+                    _modelSource = ModelSource.BuiltIn;
+                }
+                else
+                {
+                    models = Array.Empty<ModelInfo>();
+                    _modelSource = ModelSource.None;
+                }
+            }
+
+            ApplyModelList(models);
+        }
+
+        private void ApplyModelList(IReadOnlyList<ModelInfo> models)
+        {
+            _allModels = models;
+            RenderModelList();
+            UpdateModelStatus();
+        }
+
+        /// <summary>把清单灌进下拉。对话模型排前面，非对话模型默认折叠（可点「显示其余 n 个」摊开）。</summary>
+        private void RenderModelList()
+        {
+            var ordered = ModelCatalog.SortForDisplay(_allModels);
+            var shown = _showAllModels
+                ? ordered
+                : ordered.Where(m => m.IsChatLike).ToList();
 
             _isSwitchingModel = true;
-            ModelPresetComboBox.ItemsSource = models.ToList();
+            ModelPresetComboBox.ItemsSource = shown.ToList();
             ModelPresetComboBox.SelectedIndex = -1;
-            ModelPresetComboBox.IsEnabled = models.Count > 0;
-            ModelPresetComboBox.ToolTip = models.Count > 0
-                ? "点一个填进左边的模型名称；也可以直接手写任意模型名（以服务商文档为准）。"
-                : "该服务商没有内置常用型号，请直接填写模型名称。";
             _isSwitchingModel = false;
+
+            ModelPresetComboBox.IsEnabled = _allModels.Count > 0;
+            ModelPresetComboBox.ToolTip = _modelSource switch
+            {
+                ModelSource.Live => $"刚从服务商拉到的真实清单（{_allModels.Count} 个）。点一个填进左边的模型名称。",
+                ModelSource.Cached => $"上次拉取并缓存的真实清单（{_allModels.Count} 个，{_modelCache.FetchedAt(CurrentModelCacheKey())}）。"
+                                      + "想确认是否有新模型，点「拉取列表」。",
+                ModelSource.BuiltIn => "这是内置的参考型号，**可能已经过期**。建议点「拉取列表」向服务商要真实清单。",
+                _ => "该服务商没有内置型号。点「拉取列表」获取，或按官方文档手填模型名称。",
+            };
+
+            var hidden = ModelCatalog.NonChatCount(_allModels);
+            ShowAllModelsBtn.Visibility = hidden > 0 ? Visibility.Visible : Visibility.Collapsed;
+            ShowAllModelsBtn.Content = _showAllModels ? "只看对话模型" : $"显示其余 {hidden} 个";
+        }
+
+        /// <summary>刷新型号那一行右侧的状态说明。传 error 则显示为错误（红色、可悬停看全文）。</summary>
+        private void UpdateModelStatus(string? error = null)
+        {
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                ModelStatusText.Text = error.Replace("\n", " ");
+                ModelStatusText.Foreground = (System.Windows.Media.Brush)FindResource("Brush.Danger");
+                ModelStatusText.ToolTip = error;
+                return;
+            }
+
+            ModelStatusText.Foreground = (System.Windows.Media.Brush)FindResource("Brush.TextMuted");
+            ModelStatusText.ToolTip = null;
+
+            var chat = _allModels.Count(m => m.IsChatLike);
+            var hidden = _allModels.Count - chat;
+            var extra = hidden > 0 ? $"（另有 {hidden} 个非对话模型）" : "";
+
+            ModelStatusText.Text = _modelSource switch
+            {
+                ModelSource.Live => $"已拉取 {chat} 个对话模型{extra}",
+                ModelSource.Cached => $"缓存 {chat} 个对话模型{extra}"
+                                      + $" · 拉取于 {_modelCache.FetchedAt(CurrentModelCacheKey())}",
+                ModelSource.BuiltIn => "内置参考型号，可能已过期 —— 建议点「拉取列表」",
+                _ => "尚未拉取模型清单",
+            };
+
+            // 拿服务商的真实清单校一下手上这个模型名 —— 这是"名字不对导致 400/404"最直接的拦截点
+            if (CurrentModelLooksUnknown())
+            {
+                ModelStatusText.Text += " · ⚠ 手上这个名字不在清单里";
+                ModelStatusText.Foreground = (System.Windows.Media.Brush)FindResource("Brush.Danger");
+            }
+        }
+
+        /// <summary>
+        /// 输入框里的模型名是否不在已知清单里。
+        /// 只有清单来自服务商（拉取 / 缓存）时才判断 —— 内置表自己就可能过期，拿它去质疑用户没意义。
+        /// </summary>
+        private bool CurrentModelLooksUnknown()
+        {
+            if (_modelSource != ModelSource.Live && _modelSource != ModelSource.Cached) return false;
+
+            var typed = ModelTextBox.Text.Trim();
+            if (typed.Length == 0) return false;
+
+            return !_allModels.Any(m => string.Equals(m.Id, typed, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private async void FetchModels_Click(object sender, RoutedEventArgs e) =>
+            await FetchModelsAsync(interactive: true);
+
+        /// <summary>
+        /// 拉取真实模型清单。
+        /// <paramref name="interactive"/> 为 false 时不出弹窗（「测试连接」成功后会顺手拉一次）。
+        /// </summary>
+        private async Task<bool> FetchModelsAsync(bool interactive)
+        {
+            if (_isFetchingModels) return false;
+
+            var preset = ProviderComboBox.SelectedItem as ProviderPreset;
+            var config = CurrentFormConfig;
+            var key = ModelCacheStore.KeyOf(preset?.Id, config.ApiUrl);
+
+            if (string.IsNullOrWhiteSpace(config.ApiKey) && !ModelCatalog.IsLocalHost(config.ApiUrl))
+            {
+                UpdateModelStatus("请先填 API Key —— 拉取模型列表同样要鉴权。");
+                if (interactive)
+                    MessageBox.Show(
+                        "请先填写 API Key。\n\n拉取模型列表和对话端点一样需要鉴权，所以必须先有 Key。",
+                        "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return false;
+            }
+
+            _isFetchingModels = true;
+            FetchModelsBtn.IsEnabled = false;
+            FetchModelsBtn.Content = "拉取中";
+            UpdateModelStatus("正在向服务商查询…");
+
+            try
+            {
+                var result = await ModelCatalog.FetchAsync(config);
+
+                if (result.Ok)
+                {
+                    // 结果按**它自己的**键写回；界面只在还停在同一家时才刷新，
+                    // 避免用户拉到一半换了服务商，A 家的清单显示到 B 家下面
+                    _modelCache.Set(key, result.Models.Select(m => m.Id));
+                    _liveModels[key] = result.Models;
+
+                    if (key == CurrentModelCacheKey())
+                    {
+                        _fetchedKey = key;
+                        _modelSource = ModelSource.Live;
+                        ApplyModelList(result.Models);
+                    }
+                }
+                else if (key == CurrentModelCacheKey())
+                {
+                    UpdateModelStatus(result.Error);
+                }
+
+                if (!interactive) return result.Ok;
+
+                if (result.Ok)
+                {
+                    var hidden = ModelCatalog.NonChatCount(result.Models);
+                    MessageBox.Show(
+                        $"拉到 {result.Models.Count} 个可用模型。"
+                        + (hidden > 0 ? $"（其中 {hidden} 个不是对话模型，已收起）" : "")
+                        + $"\n\n接口：{result.Url}"
+                        + "\n\n从「可用型号」下拉里挑一个，或直接手写模型名。",
+                        "拉取成功", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    MessageBox.Show(result.Error, "拉取失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+
+                return result.Ok;
+            }
+            finally
+            {
+                _isFetchingModels = false;
+                FetchModelsBtn.IsEnabled = true;
+                FetchModelsBtn.Content = "拉取列表";
+            }
         }
 
         /// <summary>
@@ -325,14 +570,23 @@ namespace 编辑器
 
         // ---- 测试连接 ----
 
-        private async void TestConnection_Click(object sender, RoutedEventArgs e)
+        private async void TestConnection_Click(object sender, RoutedEventArgs e) =>
+            await RunConnectionTestAsync(interactive: true);
+
+        /// <summary>
+        /// 测试连接的实现。
+        /// <paramref name="interactive"/> 为 false 时不出弹窗 —— 弹窗会阻塞线程，
+        /// 想让它能被无头回归调用，「要不要说话」必须从逻辑里摘出来。
+        /// </summary>
+        private async Task<bool> RunConnectionTestAsync(bool interactive)
         {
             var config = CurrentFormConfig;
 
             if (string.IsNullOrWhiteSpace(config.ApiKey))
             {
-                MessageBox.Show("请输入 API Key", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
-                return;
+                if (interactive)
+                    MessageBox.Show("请输入 API Key", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return false;
             }
 
             TestButton.IsEnabled = false;
@@ -376,31 +630,79 @@ namespace 编辑器
                 if (response.IsSuccessStatusCode)
                 {
                     var preset = ProviderComboBox.SelectedItem as ProviderPreset;
-                    MessageBox.Show(
-                        "连接成功！API 配置可用。\n\n"
-                        + $"服务商：{preset?.Name ?? "自定义"}\n"
-                        + $"协议：  {ApiProviders.WireLabel(ApiProviders.ResolveWire(config))}\n"
-                        + $"认证：  {authLabel}\n"
-                        + $"模型：  {config.Model}",
-                        "成功", MessageBoxButton.OK, MessageBoxImage.Information);
+
+                    // 连接既然通了，顺手把真实模型清单也拉回来 ——
+                    // 内置型号表可能已经过期，省得用户再去点一次「拉取列表」
+                    var fetched = await FetchModelsAsync(interactive: false);
+
+                    if (interactive)
+                        MessageBox.Show(
+                            "连接成功！API 配置可用。\n\n"
+                            + $"服务商：{preset?.Name ?? "自定义"}\n"
+                            + $"协议：  {ApiProviders.WireLabel(ApiProviders.ResolveWire(config))}\n"
+                            + $"认证：  {authLabel}\n"
+                            + $"模型：  {config.Model}\n"
+                            + (fetched ? $"型号：  已拉到 {_allModels.Count} 个可用型号，见右侧下拉"
+                                       : "型号：  未能自动拉取清单（可点「拉取列表」重试）"),
+                            "成功", MessageBoxButton.OK, MessageBoxImage.Information);
+
+                    return true;
                 }
                 else
                 {
                     var err = await response.Content.ReadAsStringAsync();
-                    MessageBox.Show($"API 返回错误 ({(int)response.StatusCode}):\n{err}", "连接失败",
-                        MessageBoxButton.OK, MessageBoxImage.Warning);
+
+                    // 最常撞的一种失败：模型名不对。此时把「去拉真实清单」这条出路直接指出来
+                    var hint = LooksLikeBadModel(err, response.StatusCode)
+                        ? "\n\n—— 这多半是模型名称不对。点「拉取列表」可以取到该服务商当前真实可用的模型名。"
+                        : "";
+
+                    // 失败原因同时落到型号那一行：弹窗关掉就没了，行内提示能留着对照着改
+                    UpdateModelStatus($"连接失败（{(int)response.StatusCode}）{FirstLine(err)}");
+
+                    if (interactive)
+                        MessageBox.Show($"API 返回错误 ({(int)response.StatusCode}):\n{err}{hint}", "连接失败",
+                            MessageBoxButton.OK, MessageBoxImage.Warning);
+
+                    return false;
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"无法连接到 API:\n{ex.Message}", "连接失败",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
+                UpdateModelStatus("连接失败：" + FirstLine(ex.Message));
+
+                if (interactive)
+                    MessageBox.Show($"无法连接到 API:\n{ex.Message}", "连接失败",
+                        MessageBoxButton.OK, MessageBoxImage.Error);
+
+                return false;
             }
             finally
             {
                 TestButton.IsEnabled = true;
                 TestButton.Content = "测试连接";
             }
+        }
+
+        /// <summary>压成一行并把长度截断（用于不用换行的提示位）。</summary>
+        private static string FirstLine(string? text, int max = 160)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return "";
+            var s = text.Replace("\r", " ").Replace("\n", " ").Trim();
+            return s.Length <= max ? s : s[..max] + "…";
+        }
+
+        /// <summary>响应内容像是在说「这个模型不存在」——用来把用户直接引到「拉取列表」。</summary>
+        private static bool LooksLikeBadModel(string? body, System.Net.HttpStatusCode status)
+        {
+            if (string.IsNullOrWhiteSpace(body)) return status == System.Net.HttpStatusCode.NotFound;
+
+            var s = body.ToLowerInvariant();
+            if (!s.Contains("model") && !s.Contains("模型")) return false;
+
+            return s.Contains("not found") || s.Contains("not exist") || s.Contains("does not exist")
+                || s.Contains("invalid model") || s.Contains("no such model") || s.Contains("unknown model")
+                || s.Contains("模型不存在") || s.Contains("无此模型") || s.Contains("模型名称");
         }
 
         // ==================================================================

@@ -794,23 +794,30 @@ namespace 编辑器
             }
 
             var chapter = GetSelectedChapter();
-            var systemPrompt = BuildSystemPrompt(AiPrompts.Task.Chat, AiPrompts.StructuredOutput);
+            var baseSystemPrompt = BuildSystemPrompt(AiPrompts.Task.Chat, AiPrompts.StructuredOutput);
 
             // 当前章节正文作为"待处理文本"放进 user 侧；设定类内容已在 system 里
             var userPrompt = chapter != null && !string.IsNullOrWhiteSpace(chapter.Content)
                 ? AiPrompts.Section($"当前章节（第{chapter.ChapterNumber}章 {chapter.Title}）", chapter.Content) + "\n" + input
                 : input;
 
-            // 历史只往回带已经聊成的轮次；失败/取消的轮次不进历史（见下方记录处）。
-            var history = _chatSession?.BuildHistory();
-
             if (chapter != null)
                 TakeSnapshot("万能写作前备份");
 
             var result = await CallAiFunctionWithResult(async (apiService) =>
-                await apiService.CompleteTextAsync(userPrompt, systemPrompt,
+            {
+                // ★ 发之前先过一遍上下文预算，装不下就压缩：先本地省略旧回复（免费），
+                //   再把更早的对话交给模型写成摘要（一次调用）。压缩会更新 _chatSession
+                //   里的摘要，所以摘要块必须在**压缩之后**才拼进 system —— 否则用的是旧摘要。
+                var history = await EnsureChatContextBudgetAsync(
+                    baseSystemPrompt, userPrompt, _aiCts?.Token ?? CancellationToken.None);
+
+                var systemPrompt = AppendChatSummaryBlock(baseSystemPrompt);
+
+                return await apiService.CompleteTextAsync(userPrompt, systemPrompt,
                     new CompletionOptions { CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress },
-                    history));
+                    history);
+            });
             if (IsUsable(result))
             {
                 if (chapter != null)
@@ -826,6 +833,13 @@ namespace 编辑器
                 //   正文每轮都会重新带一份，历史里再存一份等于白烧一遍 token，
                 //   而且章节改过之后，历史里那份旧正文还会跟新正文打架。
                 _chatSession?.Add(input, result.Text);
+
+                // 记下服务端报回的**真实**输入 token：下一轮做预算判断时，
+                // 「上轮真实输入 + 本轮新增内容的估算」比纯本地估算准得多
+                //（对应 ZCode 的 provider_usage 优先策略）。
+                if (_compactor != null)
+                    _compactor.LastRequestInputTokens = result.InputTokens > 0 ? result.InputTokens : null;
+
                 RefreshChatMemoryInfo();
             }
             return result;
@@ -1589,14 +1603,16 @@ namespace 编辑器
             _aiPanel.MemoryTextBox.Text = _memoryManager.GetRawMemory();
 
             _chatSession = new ChatSessionStore(_currentProject.FilePath);
+
+            // 压缩器挂在对话记忆上（阈值要按当前模型算，所以也依赖模型名）。
+            // 它自己会在空项目/无服务时安全退化，不需要额外的判空。
+            AttachCompactor();
+
             RefreshChatMemoryInfo();
         }
 
         /// <summary>把对话记忆的轮数刷到 AI 面板上（让用户看得见"它还记不记得"）。</summary>
-        private void RefreshChatMemoryInfo()
-        {
-            _aiPanel.SetChatMemoryInfo(_chatSession?.RoundCount ?? 0, ChatSessionStore.MaxRounds);
-        }
+        // RefreshChatMemoryInfo 见 MainWindow.ContextBudget.cs（连同上下文预算机制）
 
         private void ClearChatSession()
         {

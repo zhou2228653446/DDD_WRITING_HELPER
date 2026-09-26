@@ -230,13 +230,42 @@ namespace 编辑器
         /// 完全靠客户端每轮把历史重发一遍。轮数看不见时，用户分不清
         /// "AI 把刚才那句话忘了" 和 "本来就没记"。
         /// </summary>
-        public void SetChatMemoryInfo(int rounds, int maxRounds)
+        /// <summary>
+        /// 刷新「聊天记忆」提示行。
+        ///
+        /// 展示的是**对话记忆**这一部分：摘要（已压缩的轮数）+ 仍以原文保留的轮数
+        /// + 它的估算 token 占用。这里**不含**每轮都会重新带上的设定与章节正文 ——
+        /// 完整规模看状态栏那行由服务端报回的真实 Token 数。
+        /// </summary>
+        public void SetChatMemoryInfo(int rounds, int summarizedRounds, int usedTokens, int contextWindow)
         {
-            ChatMemoryText.Text = rounds <= 0
-                ? "聊天记忆：暂无 —— 用「万能聊天」问一句就记一句"
-                : $"聊天记忆：{rounds} / {maxRounds} 轮（超出丢最早的）";
-            ChatMemoryText.ToolTip = "只对「万能聊天」生效；续写、润色、生成类都是一次性任务，不带历史。";
+            if (rounds <= 0 && summarizedRounds <= 0)
+            {
+                ChatMemoryText.Text = "聊天记忆：暂无 —— 用「万能聊天」问一句就记一句";
+            }
+            else
+            {
+                var parts = new List<string>();
+                if (summarizedRounds > 0) parts.Add($"摘要含已压缩 {summarizedRounds} 轮");
+                if (rounds > 0) parts.Add($"原文 {rounds} 轮");
+
+                var body = parts.Count > 0 ? string.Join(" + ", parts) : "暂无";
+                var usage = contextWindow > 0
+                    ? $" · 约 {FormatTokenCount(usedTokens)} / {FormatTokenCount(contextWindow)}"
+                    : "";
+
+                ChatMemoryText.Text = $"聊天记忆：{body}{usage}";
+            }
+
+            ChatMemoryText.ToolTip =
+                "只对「万能聊天」生效；续写、润色、生成类都是一次性任务，不带历史。\n"
+                + "接近模型窗口上限时会**自动压缩**：先把较早的回复省略成占位符，"
+                + "再把更早的对话写成摘要 —— 摘要里的设定与硬性要求会保留，细节会有损失。\n"
+                + "这里显示的是对话记忆的占用，不含设定与章节正文。";
         }
+
+        private static string FormatTokenCount(int tokens) =>
+            tokens >= 1000 ? $"{tokens / 1000.0:0.#}K" : tokens.ToString();
 
         public void SetDetached(bool isDetached)
         {

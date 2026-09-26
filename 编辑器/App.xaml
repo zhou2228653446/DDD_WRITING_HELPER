@@ -1,9 +1,22 @@
-﻿<Application x:Class="编辑器.App"
+<Application x:Class="编辑器.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:编辑器"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
-         
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/HandyControl;component/Themes/SkinDefault.xaml"/>
+                <ResourceDictionary Source="pack://application:,,,/HandyControl;component/Themes/Theme.xaml"/>
+                <!-- 放在 HandyControl 之后：同名 token 以本字典为准，便于统一覆写 -->
+                <ResourceDictionary Source="Themes/Tokens.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- 全局文字：跟随主题（局部显式设值仍优先，如通知栏反白） -->
+            <Style TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+            </Style>
+
+        </ResourceDictionary>
     </Application.Resources>
 </Application>

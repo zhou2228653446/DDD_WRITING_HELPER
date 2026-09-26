@@ -6,12 +6,16 @@ namespace 编辑器.Services
 {
     public interface IApiService
     {
-        Task<AiResult> CompleteTextAsync(string prompt, CompletionOptions? options = null);
-        Task<AiResult> PolishTextAsync(string text, string? style = null, CancellationToken ct = default, Action<int, int>? onProgress = null);
-        Task<AiResult> ContinueWritingAsync(string context, string? direction = null, CancellationToken ct = default, Action<int, int>? onProgress = null);
-        Task<AiResult> GenerateCharacterAsync(string description, CancellationToken ct = default, Action<int, int>? onProgress = null);
-        Task<AiResult> GeneratePlotAsync(string theme, string genre, CancellationToken ct = default, Action<int, int>? onProgress = null);
-        Task<AiResult> GenerateDialogueAsync(string character1, string character2, string situation, CancellationToken ct = default, Action<int, int>? onProgress = null);
+        /// <summary>
+        /// 发送一次补全请求。
+        /// </summary>
+        /// <param name="prompt">user 消息内容（作者的实际请求 + 待处理文本）。</param>
+        /// <param name="systemPrompt">
+        /// system 消息内容（身份 / 项目设定 / 任务说明 / 输出契约）。
+        /// 为空表示不发送 system 消息，退回单纯 user 消息的老行为。
+        /// </param>
+        /// <param name="options">采样参数与取消令牌。</param>
+        Task<AiResult> CompleteTextAsync(string prompt, string? systemPrompt = null, CompletionOptions? options = null);
     }
 
     public class AiResult

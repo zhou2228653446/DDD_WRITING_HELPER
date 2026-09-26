@@ -17,32 +17,50 @@ namespace 编辑器.Services
 
         public static readonly List<ThemePreset> BuiltInPresets = new()
         {
+            // 配色三条原则：
+            //   1) 不用纯白（#FFF）做大面积底色 —— 换成带一点暖黄的象牙白，消除炫光；
+            //   2) 不用纯黑做正文 —— 用暖调深灰，长时间阅读不刺眼；
+            //   3) 强调色降饱和降亮度，做成"雾面"而非"荧光"。
+            // 底色本身是纸纹层的背景，面板会以 94% 左右的透明度叠在纸纹上（见 ThemeTokens）。
             new ThemePreset
             {
-                Name = "warm-paper",
-                DisplayName = "暖色纸页",
-                Description = "暖黄基调，模拟纸张阅读体验",
-                WindowBg = "#F5E6C8", PanelBg = "#EDD9B5", EditorBg = "#FFF8EF",
-                MenuBg = "#E8D5B0", StatusBarBg = "#E8D5B0",
-                TextColor = "#3A2A1A", BorderColor = "#D4C4A0", SplitterBg = "#D0BC98"
+                Name = "default-white",
+                DisplayName = "温润纸白",
+                Description = "象牙纸底，暖调低饱和，长时间阅读不累眼",
+                WindowBg = "#EBE6DC", PanelBg = "#F8F5EE", EditorBg = "#FDFBF6",
+                MenuBg = "#F4F0E7", StatusBarBg = "#E7E1D6",
+                TextColor = "#33302A", BorderColor = "#DCD3C6", SplitterBg = "#D8CFC1",
+                Accent = "#4A729C", TextMuted = "#7C7468", Danger = "#C2605C", IsDark = false
             },
             new ThemePreset
             {
-                Name = "night-bw",
-                DisplayName = "夜间黑白",
-                Description = "深色界面，适合夜间写作",
-                WindowBg = "#1A1A2E", PanelBg = "#16213E", EditorBg = "#FAFAFA",
-                MenuBg = "#0F3460", StatusBarBg = "#0F3460",
-                TextColor = "#E0E0E0", BorderColor = "#2A2A4A", SplitterBg = "#253050"
+                Name = "night-mode",
+                DisplayName = "墨色玻璃",
+                Description = "中性暖黑底，低对比护眼，夜间写作",
+                WindowBg = "#1A1C20", PanelBg = "#22252A", EditorBg = "#282C31",
+                MenuBg = "#2A2E34", StatusBarBg = "#17191D",
+                TextColor = "#CFCAC2", BorderColor = "#3F444D", SplitterBg = "#3F444D",
+                Accent = "#7BA3CC", TextMuted = "#8B9098", Danger = "#D2706B", IsDark = true
             },
             new ThemePreset
             {
-                Name = "green-eye",
-                DisplayName = "绿色护眼",
-                Description = "柔和绿色调，缓解视觉疲劳",
-                WindowBg = "#C7EDCC", PanelBg = "#B8D9BE", EditorBg = "#F5FFF5",
-                MenuBg = "#A8D0B0", StatusBarBg = "#A8D0B0",
-                TextColor = "#2D4A2D", BorderColor = "#9CC4A4", SplitterBg = "#90BA98"
+                Name = "green-theme",
+                DisplayName = "雾绿纸张",
+                Description = "灰绿纸调，柔和自然",
+                WindowBg = "#E4E8DF", PanelBg = "#EFF3EA", EditorBg = "#FAFBF6",
+                MenuBg = "#E1E7DB", StatusBarBg = "#D9E0D2",
+                TextColor = "#333A31", BorderColor = "#C5D1BB", SplitterBg = "#C5D1BB",
+                Accent = "#5B7F5E", TextMuted = "#6E7A68", Danger = "#BE625C", IsDark = false
+            },
+            new ThemePreset
+            {
+                Name = "yellow-theme",
+                DisplayName = "暖砂纸卷",
+                Description = "砂纸暖调，温润偏黄",
+                WindowBg = "#EFE8D7", PanelBg = "#F6F1E5", EditorBg = "#FCFAF3",
+                MenuBg = "#ECE3CF", StatusBarBg = "#E1D6BE",
+                TextColor = "#3A322A", BorderColor = "#D5C8AD", SplitterBg = "#D5C8AD",
+                Accent = "#A0742F", TextMuted = "#857460", Danger = "#BE605A", IsDark = false
             }
         };
 

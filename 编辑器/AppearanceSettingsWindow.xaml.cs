@@ -9,7 +9,7 @@ using 编辑器.Services;
 
 namespace 编辑器
 {
-    public partial class AppearanceSettingsWindow : Window
+    public partial class AppearanceSettingsWindow : HandyControl.Controls.Window
     {
         private readonly AppearanceManager _manager;
         private ThemePreset? _selectedPreset;

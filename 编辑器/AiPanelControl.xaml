@@ -3,86 +3,98 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:hc="https://handyorg.github.io/handycontrol"
              mc:Ignorable="d"
-             d:DesignHeight="600" d:DesignWidth="300">
+             d:DesignHeight="600" d:DesignWidth="320"
+             Background="{DynamicResource Brush.Panel}"
+             TextElement.Foreground="{DynamicResource Brush.Text}">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- 标题栏 -->
-        <Border Grid.Row="0" Background="#F5F5F5" Padding="10,6">
+        <!-- 面板头 -->
+        <Border Grid.Row="0" Style="{StaticResource PanelHeader}" Height="36">
             <Grid>
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="AI助手" FontWeight="Bold" VerticalAlignment="Center"/>
-                <Button x:Name="DetachBtn" Grid.Column="1" Content="📌 弹出" FontSize="12"
-                        Padding="6,2" ToolTip="将AI面板分离为独立窗口"
+
+                <TextBlock Grid.Column="0" Text="AI 助手" FontWeight="SemiBold"
+                           FontSize="{StaticResource FontSize.Subtitle}"
+                           VerticalAlignment="Center"/>
+
+                <!--
+                    当前生效的提示词方案。AI 的输出取向完全由它决定（小说 / 论文 / 公文…），
+                    而在面板里看不到方案名时，用户会以为"AI 变笨了"。
+                -->
+                <TextBlock x:Name="PresetHintText" Grid.Column="1"
+                           Margin="10,0,8,0" VerticalAlignment="Center"
+                           FontSize="{StaticResource FontSize.Caption}"
+                           Foreground="{DynamicResource Brush.TextMuted}"
+                           TextTrimming="CharacterEllipsis"
+                           Text="方案：小说创作"/>
+
+                <Button x:Name="DetachBtn" Grid.Column="2" Style="{StaticResource Btn.Ghost}"
+                        Content="弹出" Height="24" Padding="10,0" FontSize="{StaticResource FontSize.Caption}"
+                        ToolTip="将 AI 面板分离为独立窗口"
                         Click="DetachBtn_Click"/>
             </Grid>
         </Border>
 
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-            <StackPanel Margin="10">
+        <hc:ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="12,12,12,16">
 
-                <!-- 功能按钮 -->
-                <WrapPanel Margin="0,0,0,6">
-                    <Button Content="续写" Click="ContinueWriting_Click"
-                            Width="75" Margin="0,0,4,4" Padding="6"/>
-                    <Button Content="润色" Click="PolishText_Click"
-                            Width="75" Margin="0,0,4,4" Padding="6"/>
-                    <Button Content="人名生成" Click="GenerateName_Click"
-                            Width="75" Margin="0,0,4,4" Padding="6"/>
-                    <Button Content="万能聊天" Click="Chat_Click"
-                            Width="75" Margin="0,0,4,4" Padding="6"/>
+                <!-- ============ 主操作：生成 ============ -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Style="{StaticResource Btn.Primary}" Content="续写"
+                            Margin="0,0,4,0" Click="ContinueWriting_Click"/>
+                    <Button Grid.Column="1" Style="{StaticResource Btn.Primary}" Content="润色"
+                            Margin="4,0,0,0" Click="PolishText_Click"/>
+                </Grid>
+
+                <WrapPanel Margin="0,6,0,0">
+                    <Button Style="{StaticResource Btn.Chip}" Content="人名生成" Click="GenerateName_Click"/>
+                    <Button Style="{StaticResource Btn.Chip}" Content="万能聊天" Click="Chat_Click"/>
                 </WrapPanel>
 
-                <!-- 快速生成上下文 -->
-                <WrapPanel Margin="0,0,0,6">
-                    <Button Content="全文大纲" Click="GenOutline_Click"
-                            Width="75" Margin="0,0,4,4" Padding="6" FontSize="12"/>
-                    <Button Content="章节大纲" Click="GenChapterOutline_Click"
-                            Width="75" Margin="0,0,4,4" Padding="6" FontSize="12"/>
-                    <Button Content="生成人物" Click="GenCharacter_Click"
-                            Width="75" Margin="0,0,4,4" Padding="6" FontSize="12"/>
-                    <Button Content="生成背景" Click="GenBackground_Click"
-                            Width="75" Padding="6" FontSize="12"/>
-                </WrapPanel>
+                <Border Style="{StaticResource DividerLine}" Margin="0,14,0,0"/>
 
-                <!-- 润色风格（可开关、可自定义） -->
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,3">
-                    <CheckBox x:Name="PolishStyleToggle" IsChecked="True"
-                              VerticalAlignment="Center" Margin="0,0,4,0"/>
-                    <TextBlock Text="润色风格:" VerticalAlignment="Center" FontSize="13" Margin="0,0,6,0"/>
-                    <ComboBox x:Name="PolishStyleCombo" Width="110" FontSize="13"
-                              SelectionChanged="PolishStyleCombo_SelectionChanged"
-                              IsEnabled="{Binding IsChecked, ElementName=PolishStyleToggle}"/>
-                    <Button Content="+" Width="26" Height="24" Margin="2,0,2,0" FontSize="14" FontWeight="Bold"
-                            ToolTip="将当前内容保存为预设" Click="AddPolishPreset_Click"
-                            IsEnabled="{Binding IsChecked, ElementName=PolishStyleToggle}"/>
-                    <Button Content="−" Width="26" Height="24" FontSize="14" FontWeight="Bold"
-                            ToolTip="删除选中预设" Click="RemovePolishPreset_Click"
-                            IsEnabled="{Binding IsChecked, ElementName=PolishStyleToggle}"/>
-                </StackPanel>
-                <TextBox x:Name="PolishStyleTextBox" Height="60" AcceptsReturn="True" TextWrapping="Wrap"
-                         VerticalScrollBarVisibility="Auto" FontSize="12" Padding="4" BorderBrush="#DDD"
-                         Margin="0,0,0,6"
-                         IsEnabled="{Binding IsChecked, ElementName=PolishStyleToggle}"/>
+                <!-- ============ 快速生成上下文 ============ -->
+                <TextBlock Text="生成上下文" Style="{StaticResource SectionHeader}" Margin="0,12,0,0"/>
+                <WrapPanel Margin="0,6,0,0">
+                    <Button Style="{StaticResource Btn.Chip}" Content="全文大纲" Click="GenOutline_Click"/>
+                    <Button Style="{StaticResource Btn.Chip}" Content="章节大纲" Click="GenChapterOutline_Click"/>
+                    <Button Style="{StaticResource Btn.Chip}" Content="生成人物" Click="GenCharacter_Click"/>
+                    <Button Style="{StaticResource Btn.Chip}" Content="生成背景" Click="GenBackground_Click"/>
+                    <Button Style="{StaticResource Btn.Chip}" Content="文风" Click="GenWritingStyle_Click"/>
+                </WrapPanel>
 
                 <!-- 章节选择器 -->
-                <Expander x:Name="ChapterSelectorExpander" Header="上下文章节（勾选要让AI读取的章节）"
-                          IsExpanded="False" Margin="0,0,0,6" FontSize="12" FontWeight="Bold" Foreground="#555">
-                    <Grid Margin="0,4,0,0">
+                <Expander x:Name="ChapterSelectorExpander" Header="上下文章节"
+                          Foreground="{DynamicResource Brush.Text}"
+                          IsExpanded="False" Margin="0,4,0,0" FontSize="{StaticResource FontSize.Small}"
+                          FontWeight="SemiBold">
+                    <StackPanel Margin="0,6,0,0">
+                    <TextBlock Text="勾选要让 AI 读取的章节" FontSize="{StaticResource FontSize.Caption}"
+                               Foreground="{DynamicResource Brush.TextMuted}" Margin="0,0,0,6"/>
+                    <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <ListBox x:Name="ChapterListBox" Height="120"
+                                 Background="{DynamicResource Brush.InputBg}"
+                                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                 BorderBrush="#DDD" FontSize="12">
+                                 FontSize="{StaticResource FontSize.Small}">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
                                     <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}"
@@ -90,99 +102,139 @@
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                         </ListBox>
-                        <WrapPanel Grid.Row="1" Margin="0,4,0,0">
-                            <Button Content="全选" Click="SelectAllChapters_Click"
-                                    Width="45" Padding="4,2" FontSize="11" Margin="0,0,4,0"/>
-                            <Button Content="全不选" Click="DeselectAllChapters_Click"
-                                    Width="50" Padding="4,2" FontSize="11"/>
+                        <WrapPanel Grid.Row="1" Margin="0,6,0,0">
+                            <Button Style="{StaticResource Btn.Chip}" Content="全选"
+                                    Click="SelectAllChapters_Click"/>
+                            <Button Style="{StaticResource Btn.Chip}" Content="全不选"
+                                    Click="DeselectAllChapters_Click"/>
                         </WrapPanel>
                     </Grid>
+                    </StackPanel>
                 </Expander>
 
-                <!-- 要求/输入 -->
-                <TextBlock Text="要求 / 输入" FontWeight="Bold" Margin="0,0,0,3" FontSize="13"/>
-                <TextBox x:Name="AiInputTextBox" Height="70" AcceptsReturn="True" TextWrapping="Wrap"
-                         VerticalScrollBarVisibility="Auto" FontSize="13" Padding="4" BorderBrush="#DDD"/>
+                <Border Style="{StaticResource DividerLine}" Margin="0,14,0,0"/>
 
-                <!-- AI回复 -->
-                <TextBlock Text="AI 回复" FontWeight="Bold" Margin="0,8,0,3" FontSize="13"/>
-                <TextBox x:Name="AiResultTextBox" Height="100" AcceptsReturn="True" TextWrapping="Wrap"
-                         VerticalScrollBarVisibility="Auto" FontSize="13" Padding="4" BorderBrush="#DDD"
-                         IsReadOnly="True" Background="#F5F5F5"/>
-                <WrapPanel Margin="0,4,0,0">
-                    <Button Content="复制" Click="CopyAiResult_Click"
-                            Width="55" Margin="0,0,4,0" Padding="4,2" FontSize="12"/>
-                    <Button x:Name="ApplyToContextBtn" Content="应用到 ▾" Click="ApplyToContext_Click"
-                            Width="75" Margin="0,0,4,0" Padding="4,2" FontSize="12"/>
-                    <Button x:Name="StopAiBtn" Content="⏹ 停止" Click="StopAi_Click"
-                            Width="65" Padding="4,2" FontSize="12" Foreground="White"
-                            Background="#E53935" BorderBrush="#C62828"
-                            Visibility="Collapsed"/>
+                <!-- ============ 要求 / 输入 ============ -->
+                <!--
+                    这一节装两个框，它们都是"交给 AI 的话"，但作用域不同：
+                      · 上面的通用输入框 —— 除润色外的所有功能都读它
+                      · 下面的润色风格 —— 只有点「润色」时才读，且受左侧勾选框控制
+                    两者故意放在一起，因为润色时它们会被拼成一句（风格，要求），
+                    分开放会让用户来回滚动才凑齐一次润色的输入。
+                -->
+                <TextBlock Text="要求 / 输入" Style="{StaticResource SectionHeader}" Margin="0,12,0,0"/>
+                <TextBlock Text="续写、生成类作补充说明；万能聊天时即提问内容"
+                           FontSize="{StaticResource FontSize.Caption}" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Brush.TextMuted}" Margin="0,4,0,0"/>
+                <hc:TextBox x:Name="AiInputTextBox" Height="72" AcceptsReturn="True" TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto" FontSize="{StaticResource FontSize.Body}"
+                         Padding="6" Margin="0,6,0,0"
+                         VerticalContentAlignment="Top"
+                         hc:InfoElement.Placeholder="写给 AI 的具体要求，可留空"
+                         Background="{DynamicResource Brush.InputBg}"
+                         Foreground="{DynamicResource Brush.Text}"
+                         CaretBrush="{DynamicResource Brush.Text}"/>
+
+                <!-- 润色风格：紧挨通用输入框，但只在「润色」时生效 -->
+                <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                    <TextBlock Text="润色风格" FontSize="{StaticResource FontSize.Small}"
+                               FontWeight="SemiBold" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Brush.Text}"/>
+                    <Border Background="{DynamicResource Brush.SubtleBg}"
+                            CornerRadius="{StaticResource Radius.Sm}" Padding="5,1"
+                            Margin="6,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="仅「润色」生效" FontSize="{StaticResource FontSize.Caption}"
+                                   Foreground="{DynamicResource Brush.TextMuted}"/>
+                    </Border>
+                </StackPanel>
+                <TextBlock Text="点「润色」时与上面的要求合并成一句：风格，要求"
+                           FontSize="{StaticResource FontSize.Caption}" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Brush.TextMuted}" Margin="0,4,0,0"/>
+                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                    <CheckBox x:Name="PolishStyleToggle" IsChecked="True"
+                              VerticalAlignment="Center" Margin="0,0,6,0"
+                              ToolTip="取消勾选则本次润色不使用风格"/>
+                    <hc:ComboBox x:Name="PolishStyleCombo" Width="118" Height="26"
+                              FontSize="{StaticResource FontSize.Small}"
+                              VerticalAlignment="Center"
+                              SelectionChanged="PolishStyleCombo_SelectionChanged"
+                              IsEnabled="{Binding IsChecked, ElementName=PolishStyleToggle}"/>
+                    <Button Style="{StaticResource Btn.Tiny}" Content="&#xE710;"
+                            Margin="4,0,0,0" ToolTip="将当前内容保存为预设"
+                            Click="AddPolishPreset_Click"
+                            IsEnabled="{Binding IsChecked, ElementName=PolishStyleToggle}"/>
+                    <Button Style="{StaticResource Btn.Tiny}" Content="&#x2212;"
+                            FontFamily="{StaticResource Font.Ui}"
+                            ToolTip="删除选中预设" Click="RemovePolishPreset_Click"
+                            IsEnabled="{Binding IsChecked, ElementName=PolishStyleToggle}"/>
+                </StackPanel>
+                <hc:TextBox x:Name="PolishStyleTextBox" Height="60" AcceptsReturn="True" TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto" FontSize="{StaticResource FontSize.Small}"
+                         Padding="6" Margin="0,6,0,0"
+                         VerticalContentAlignment="Top"
+                         hc:InfoElement.Placeholder="点上方预设自动填入，也可自己写"
+                         Background="{DynamicResource Brush.InputBg}"
+                         Foreground="{DynamicResource Brush.Text}"
+                         CaretBrush="{DynamicResource Brush.Text}"
+                         IsEnabled="{Binding IsChecked, ElementName=PolishStyleToggle}"/>
+
+                <!-- ============ AI 回复 ============ -->
+                <TextBlock Text="AI 回复" Style="{StaticResource SectionHeader}" Margin="0,14,0,0"/>
+                <hc:TextBox x:Name="AiResultTextBox" Height="110" AcceptsReturn="True" TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto" FontSize="{StaticResource FontSize.Body}"
+                         Padding="6" Margin="0,6,0,0"
+                         VerticalContentAlignment="Top"
+                         IsReadOnly="True"
+                         Background="{DynamicResource Brush.SubtleBg}"
+                         Foreground="{DynamicResource Brush.Text}"
+                         CaretBrush="{DynamicResource Brush.Text}"/>
+                <WrapPanel Margin="0,8,0,0">
+                    <Button Style="{StaticResource Btn.Chip}" Content="复制" Click="CopyAiResult_Click"/>
+                    <Button x:Name="ApplyToContextBtn" Style="{StaticResource Btn.Chip}"
+                            Content="应用到 ▾" Click="ApplyToContext_Click"/>
+                    <Button x:Name="StopAiBtn" Style="{StaticResource Btn.Danger}"
+                            Content="停止" Click="StopAi_Click" Visibility="Collapsed"/>
                 </WrapPanel>
 
-                <Separator Margin="0,10"/>
+                <Border Style="{StaticResource DividerLine}" Margin="0,14,0,0"/>
 
-                <!-- AI 记忆 -->
-                <TextBlock Text="AI 记忆（自动积累的写作经验）" FontWeight="Bold" Margin="0,0,0,6" FontSize="13"/>
-                <Expander x:Name="MemoryExpander" Header="查看/编辑记忆" IsExpanded="False"
-                          Margin="0,0,0,4" FontSize="12" FontWeight="Bold" Foreground="#555">
-                    <Grid Margin="0,4,0,0">
+                <!-- ============ AI 记忆 ============ -->
+                <TextBlock Text="AI 记忆" Style="{StaticResource SectionHeader}" Margin="0,12,0,0"/>
+                <Expander x:Name="MemoryExpander" Header="查看 / 编辑写作经验"
+                          Foreground="{DynamicResource Brush.Text}"
+                          IsExpanded="False" Margin="0,4,0,0"
+                          FontSize="{StaticResource FontSize.Small}" FontWeight="SemiBold">
+                    <Grid Margin="0,6,0,0">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <TextBox x:Name="MemoryTb" Height="120" AcceptsReturn="True"
+                        <hc:TextBox x:Name="MemoryTb" Height="120" AcceptsReturn="True"
                                  TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                                 FontSize="12" Padding="4" BorderBrush="#DDD"/>
-                        <WrapPanel Grid.Row="1" Margin="0,4,0,0">
-                            <Button Content="保存修改" Click="SaveMemory_Click"
-                                    Width="65" Padding="4,2" FontSize="12" Margin="0,0,4,0"/>
-                            <Button Content="清空记忆" Click="ClearMemory_Click"
-                                    Width="65" Padding="4,2" FontSize="12"/>
+                                 FontSize="{StaticResource FontSize.Small}" Padding="6"
+                                 VerticalContentAlignment="Top"
+                                 Background="{DynamicResource Brush.InputBg}"
+                                 Foreground="{DynamicResource Brush.Text}"
+                                 CaretBrush="{DynamicResource Brush.Text}"/>
+                        <WrapPanel Grid.Row="1" Margin="0,6,0,0">
+                            <Button Style="{StaticResource Btn.Chip}" Content="保存修改"
+                                    Click="SaveMemory_Click"/>
+                            <Button Style="{StaticResource Btn.Chip}" Content="清空记忆"
+                                    Click="ClearMemory_Click"/>
                         </WrapPanel>
                     </Grid>
                 </Expander>
 
-                <Separator Margin="0,6"/>
+                <Border Style="{StaticResource DividerLine}" Margin="0,14,0,0"/>
 
-                <!-- 上下文设定（常驻，可折叠） -->
-                <TextBlock Text="AI上下文设定（AI将参考以下内容）" FontWeight="Bold" Margin="0,0,0,6" FontSize="13"/>
-
-                <Expander x:Name="FullOutlineExpander" Header="全文大纲" IsExpanded="False"
-                          Margin="0,0,0,4" FontSize="12" FontWeight="Bold" Foreground="#555">
-                    <TextBox x:Name="FullOutlineTextBox" Height="80" AcceptsReturn="True"
-                             TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                             FontSize="12" Padding="4" BorderBrush="#DDD" Margin="0,4,0,0"/>
-                </Expander>
-
-                <Expander x:Name="ChapterOutlineExpander" Header="章节大纲" IsExpanded="False"
-                          Margin="0,0,0,4" FontSize="12" FontWeight="Bold" Foreground="#555">
-                    <TextBox x:Name="ChapterOutlineTextBox" Height="80" AcceptsReturn="True"
-                             TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                             FontSize="12" Padding="4" BorderBrush="#DDD" Margin="0,4,0,0"/>
-                </Expander>
-
-                <Expander x:Name="CharacterSettingsExpander" Header="主要人物设定" IsExpanded="False"
-                          Margin="0,0,0,4" FontSize="12" FontWeight="Bold" Foreground="#555">
-                    <TextBox x:Name="CharacterSettingsTextBox" Height="80" AcceptsReturn="True"
-                             TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                             FontSize="12" Padding="4" BorderBrush="#DDD" Margin="0,4,0,0"/>
-                </Expander>
-
-                <Expander x:Name="BackgroundSettingsExpander" Header="主要背景设定" IsExpanded="False"
-                          Margin="0,0,0,4" FontSize="12" FontWeight="Bold" Foreground="#555">
-                    <TextBox x:Name="BackgroundSettingsTextBox" Height="80" AcceptsReturn="True"
-                             TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                             FontSize="12" Padding="4" BorderBrush="#DDD" Margin="0,4,0,0"/>
-                </Expander>
-
-                <Expander x:Name="WritingStyleExp" Header="文风设定" IsExpanded="False"
-                          Margin="0,0,0,4" FontSize="12" FontWeight="Bold" Foreground="#555">
-                    <TextBox x:Name="WritingStyleTb" Height="80" AcceptsReturn="True"
-                             TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                             FontSize="12" Padding="4" BorderBrush="#DDD" Margin="0,4,0,0"/>
-                </Expander>
+                <!-- ============ 设定（已移至独立窗口） ============ -->
+                <TextBlock Text="设定" Style="{StaticResource SectionHeader}" Margin="0,12,0,0"/>
+                <TextBlock Text="全文大纲、人物设定这类贯穿全书的设定已移到独立的「设定」窗口，AI 每次生成都会读取。"
+                           FontSize="{StaticResource FontSize.Caption}" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Brush.TextMuted}" Margin="0,4,0,0"/>
+                <Button Style="{StaticResource Btn.Ghost}" Content="打开设定窗口"
+                        HorizontalAlignment="Left" Margin="0,8,0,0" Click="OpenSettings_Click"/>
             </StackPanel>
-        </ScrollViewer>
+        </hc:ScrollViewer>
     </Grid>
 </UserControl>

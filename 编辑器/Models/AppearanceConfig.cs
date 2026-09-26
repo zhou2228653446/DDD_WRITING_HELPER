@@ -18,6 +18,18 @@ namespace 编辑器
         public string BorderColor { get; set; } = "#DDDDDD";
         public string SplitterBg { get; set; } = "#DDDDDD";
 
+        /// <summary>强调色：主操作按钮、选中指示条、链接。</summary>
+        public string Accent { get; set; } = "#2F6FEB";
+
+        /// <summary>次要文字色：分区标题、指标标签、图标。</summary>
+        public string TextMuted { get; set; } = "#6B7280";
+
+        /// <summary>危险色：停止生成等破坏性操作。</summary>
+        public string Danger { get; set; } = "#E5484D";
+
+        /// <summary>是否深色主题：决定悬浮态的叠加方向（深色叠白、浅色叠黑）。</summary>
+        public bool IsDark { get; set; }
+
         [JsonIgnore] public Brush WindowBgBrush => new SolidColorBrush(ParseColor(WindowBg));
         [JsonIgnore] public Brush PanelBgBrush => new SolidColorBrush(ParseColor(PanelBg));
         [JsonIgnore] public Brush EditorBgBrush => new SolidColorBrush(ParseColor(EditorBg));
@@ -26,6 +38,7 @@ namespace 编辑器
         [JsonIgnore] public Brush TextColorBrush => new SolidColorBrush(ParseColor(TextColor));
         [JsonIgnore] public Brush BorderColorBrush => new SolidColorBrush(ParseColor(BorderColor));
         [JsonIgnore] public Brush SplitterBgBrush => new SolidColorBrush(ParseColor(SplitterBg));
+        [JsonIgnore] public Brush AccentColorBrush => new SolidColorBrush(ParseColor(Accent));
 
         private static Color ParseColor(string hex) =>
             (Color)ColorConverter.ConvertFromString(hex)!;

@@ -13,7 +13,7 @@ using 编辑器.Services;
 
 namespace 编辑器
 {
-    public partial class MainWindow : Window
+    public partial class MainWindow : HandyControl.Controls.Window
     {
         private NovelProject? _currentProject;
         private string _projectsPath = null!;
@@ -23,6 +23,7 @@ namespace 编辑器
         private IApiService? _apiService;
         private ApiProfileManager _profileManager = null!;
         private AppearanceManager _appearanceManager = null!;
+        private SystemPromptStore _promptStore = null!;
         private ProjectSnapshotManager? _snapshotManager;
         private ChatLogger? _chatLogger;
         private AiMemoryManager? _memoryManager;
@@ -34,6 +35,9 @@ namespace 编辑器
         private AiPanelControl _aiPanel = null!;
         private FloatingAiWindow? _floatingWindow;
         private bool _isDetached;
+
+        /// <summary>「设定」窗口（全文大纲 / 人物设定等贯穿全书的设定）。关掉后置 null。</summary>
+        private SettingsWindow? _settingsWindow;
         private static readonly string _settingsFile = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TdxClaw", "settings.json");
 
@@ -49,9 +53,13 @@ namespace 编辑器
             _notificationTimer.Interval = TimeSpan.FromSeconds(3);
             _notificationTimer.Tick += (_, _) =>
             {
-                NotificationBorder.Visibility = Visibility.Collapsed;
-                NotificationBorder.Height = 0;
                 _notificationTimer.Stop();
+                // 淡出后再真正收起，避免通知条"啪"地消失
+                Motion.PlayFadeOut(NotificationBorder, () =>
+                {
+                    NotificationBorder.Visibility = Visibility.Collapsed;
+                    NotificationBorder.Height = 0;
+                });
             };
             InitializeData();
             Loaded += WelcomeDialog_DeferIfNeeded;
@@ -95,6 +103,10 @@ namespace 编辑器
             _profileManager.ProfilesChanged += OnProfilesChanged;
             _profileManager.ActiveProfileChanged += OnActiveProfileChanged;
 
+            // 初始化系统提示词（用户覆写层）。必须在任何 AI 调用之前注入，
+            // 否则首次生成会用内置默认而不是用户改过的文本。
+            InitPromptStore();
+
             RefreshProfileSwitcher();
             ApplyActiveProfile();
 
@@ -111,11 +123,13 @@ namespace 编辑器
             _aiPanel.OnGenCharacter = () => GenCharacterAsync();
             _aiPanel.OnGenBackground = () => GenBackgroundAsync();
             _aiPanel.OnGenChapterOutline = () => GenChapterOutlineAsync();
+            _aiPanel.OnGenWritingStyle = () => GenWritingStyleAsync();
             _aiPanel.OnCopyResult = CopyAiResult;
             _aiPanel.OnApplyToContext = ApplyToContext;
             _aiPanel.OnSaveMemory = SaveMemory;
             _aiPanel.OnClearMemory = ClearMemory;
             _aiPanel.OnStopAi = StopAi;
+            _aiPanel.OnOpenSettings = ShowSettingsWindow;
         }
 
         private void WelcomeDialog_DeferIfNeeded(object? sender, EventArgs e)
@@ -504,8 +518,70 @@ namespace 编辑器
                 }
             }
         }
-        private void ExportPdf_Click(object sender, RoutedEventArgs e) => ShowComingSoon("导出PDF");
-        private void ExportTxt_Click(object sender, RoutedEventArgs e) => ShowComingSoon("导出TXT");
+        private void ExportPdf_Click(object sender, RoutedEventArgs e) =>
+            ExportProjectFile("PDF 文档 (*.pdf)|*.pdf", ".pdf", "PDF",
+                (path, project) => PdfExportService.Export(path, project));
+
+        private void ExportTxt_Click(object sender, RoutedEventArgs e) =>
+            ExportProjectFile("文本文件 (*.txt)|*.txt", ".txt", "TXT",
+                (path, project) => TxtExportService.Export(path, project));
+
+        /// <summary>导出通用流程：校验项目 → 同步 AI 上下文 → 选路径 → 写文件 → 询问是否打开</summary>
+        private void ExportProjectFile(string filter, string extension, string displayName,
+            Action<string, NovelProject> exporter)
+        {
+            if (_currentProject == null)
+            {
+                ShowNotification("请先创建或打开项目", isError: true);
+                return;
+            }
+
+            // 先同步上下文到项目
+            SyncAiContextToProject();
+
+            var project = _currentProject;
+
+            var dialog = new SaveFileDialog
+            {
+                Filter = filter,
+                FileName = $"{SanitizeFileName(project.ProjectName)}{extension}",
+                InitialDirectory = _projectsPath
+            };
+
+            if (dialog.ShowDialog() != true) return;
+
+            try
+            {
+                exporter(dialog.FileName, project);
+                ShowNotification($"已导出为 {displayName}：{Path.GetFileName(dialog.FileName)}");
+
+                // 询问是否打开
+                var open = MessageBox.Show("导出成功！是否立即打开文件？", "导出完成",
+                    MessageBoxButton.YesNo, MessageBoxImage.Information);
+                if (open == MessageBoxResult.Yes)
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = dialog.FileName,
+                        UseShellExecute = true
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"导出失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        /// <summary>剔除文件名中的非法字符，避免项目名含 : / 等字符导致保存失败</summary>
+        private static string SanitizeFileName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return "未命名";
+
+            var invalid = Path.GetInvalidFileNameChars();
+            var cleaned = new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray()).Trim();
+            return cleaned.Length == 0 ? "未命名" : cleaned;
+        }
         private void Exit_Click(object sender, RoutedEventArgs e) => Application.Current.Shutdown();
 
         private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -560,11 +636,21 @@ namespace 编辑器
             }
 
             TakeSnapshot("续写前备份");
-            var context = BuildAiContext();
+            var systemPrompt = BuildSystemPrompt(AiPrompts.Task.Continue);
             var requirement = _aiPanel.InputTextBox.Text.Trim();
-            var direction = string.IsNullOrEmpty(requirement) ? "" : $"\n\n续写要求：{requirement}";
+
+            var userPrompt = AiPrompts.Section($"待续写的正文（第{chapter.ChapterNumber}章 {chapter.Title}）", chapter.Content);
+            if (!string.IsNullOrEmpty(requirement))
+                userPrompt += $"\n{requirement}";
+
             var result = await CallAiFunctionWithResult(async (apiService) =>
-                await apiService.ContinueWritingAsync(context + chapter.Content + direction, ct: _aiCts!.Token, onProgress: _tokenProgress));
+                await apiService.CompleteTextAsync(userPrompt, systemPrompt,
+                    new CompletionOptions
+                    {
+                        MaxTokens = 2000,
+                        CancellationToken = _aiCts!.Token,
+                        OnProgress = _tokenProgress
+                    }));
             if (result != null)
             {
                 chapter.Content += "\n\n" + result.Text;
@@ -591,7 +677,7 @@ namespace 编辑器
             }
 
             TakeSnapshot("润色前备份");
-            var context = BuildAiContext();
+            var systemPrompt = BuildSystemPrompt(AiPrompts.Task.Polish);
             var requirement = _aiPanel.InputTextBox.Text.Trim();
 
             string? presetStyle = null;
@@ -612,8 +698,18 @@ namespace 编辑器
             else
                 combinedStyle = null;
 
+            var userPrompt = AiPrompts.Section($"待润色的正文（第{chapter.ChapterNumber}章 {chapter.Title}）", chapter.Content);
+            userPrompt += string.IsNullOrEmpty(combinedStyle)
+                ? "\n请润色这段正文。"
+                : $"\n请按以下要求润色：{combinedStyle}";
+
             var result = await CallAiFunctionWithResult(async (apiService) =>
-                await apiService.PolishTextAsync(context + chapter.Content, combinedStyle, _aiCts!.Token, _tokenProgress));
+                await apiService.CompleteTextAsync(userPrompt, systemPrompt,
+                    new CompletionOptions
+                    {
+                        CancellationToken = _aiCts!.Token,
+                        OnProgress = _tokenProgress
+                    }));
             if (result != null)
             {
                 chapter.Content = result.Text;
@@ -635,13 +731,15 @@ namespace 编辑器
             }
 
             TakeSnapshot("人名生成前备份");
-            var context = BuildAiContext();
+            var systemPrompt = BuildSystemPrompt(AiPrompts.Task.Name, AiPrompts.StructuredOutput);
             var input = _aiPanel.InputTextBox.Text.Trim();
-            if (string.IsNullOrEmpty(input)) input = "请生成适合小说风格的中文人名";
-            var prompt = $"{context}请为小说生成角色名字。要求：{input}\n\n返回一组适合的名字，每个名字附简短说明。";
+            var userPrompt = string.IsNullOrEmpty(input)
+                ? "请为这部小说生成一批角色名字。"
+                : $"请为这部小说生成一批角色名字。要求：{input}";
 
             var result = await CallAiFunctionWithResult(async (apiService) =>
-                await apiService.CompleteTextAsync(prompt, new CompletionOptions { CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
+                await apiService.CompleteTextAsync(userPrompt, systemPrompt,
+                    new CompletionOptions { CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
             if (result != null)
             {
                 chapter.Content += $"\n\n【生成的角色名 — {DateTime.Now:HH:mm}】\n{result.Text}\n";
@@ -663,14 +761,19 @@ namespace 编辑器
             }
 
             var chapter = GetSelectedChapter();
-            var context = BuildAiContext();
-            var prompt = $"{context}{input}";
+            var systemPrompt = BuildSystemPrompt(AiPrompts.Task.Chat, AiPrompts.StructuredOutput);
+
+            // 当前章节正文作为"待处理文本"放进 user 侧；设定类内容已在 system 里
+            var userPrompt = chapter != null && !string.IsNullOrWhiteSpace(chapter.Content)
+                ? AiPrompts.Section($"当前章节（第{chapter.ChapterNumber}章 {chapter.Title}）", chapter.Content) + "\n" + input
+                : input;
 
             if (chapter != null)
                 TakeSnapshot("万能写作前备份");
 
             var result = await CallAiFunctionWithResult(async (apiService) =>
-                await apiService.CompleteTextAsync(prompt, new CompletionOptions { CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
+                await apiService.CompleteTextAsync(userPrompt, systemPrompt,
+                    new CompletionOptions { CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
             if (result != null)
             {
                 if (chapter != null)
@@ -691,11 +794,10 @@ namespace 编辑器
         {
             var input = _aiPanel.InputTextBox.Text.Trim();
             var chapter = GetSelectedChapter();
-            var existingContext = BuildAiContext();
 
             // 新建大纲时弹出规模选择
             string? scaleHint = null;
-            string existingOutline = _aiPanel.OutlineTextBox.Text.Trim();
+            string existingOutline = GetSettingValue(SettingSection.FullOutline).Trim();
             if (string.IsNullOrEmpty(existingOutline))
             {
                 var scaleDialog = new NovelScaleDialog { Owner = this };
@@ -703,33 +805,32 @@ namespace 编辑器
                     scaleHint = scaleDialog.ScaleDescription;
             }
 
-            string prompt;
-            if (!string.IsNullOrEmpty(existingOutline))
+            var isExpand = !string.IsNullOrEmpty(existingOutline);
+            var systemPrompt = BuildSystemPrompt(
+                isExpand ? AiPrompts.Task.Expand : AiPrompts.Task.Outline,
+                AiPrompts.StructuredOutput);
+
+            string userPrompt;
+            if (isExpand)
             {
-                prompt = $"以下是已有的全文大纲：\n\n{existingOutline}\n\n" +
-                         $"请在此基础上扩展、完善或修改该大纲。{(string.IsNullOrEmpty(input) ? "" : $"要求：{input}")}\n" +
-                         "请直接输出修改后的完整大纲，不要额外说明。";
+                userPrompt = AiPrompts.Section("已有的全文大纲", existingOutline);
+                if (!string.IsNullOrEmpty(input)) userPrompt += $"\n修改要求：{input}";
             }
             else
             {
-                var chapterContent = chapter?.Content ?? "";
-                var topicHint = !string.IsNullOrEmpty(chapterContent)
-                    ? $"以下是当前章节内容，请据此生成全文大纲：\n\n{chapterContent}\n\n"
-                    : "";
-                var scaleLine = !string.IsNullOrEmpty(scaleHint)
-                    ? $"小说规模：{scaleHint}\n请根据此规模合理规划章节数量、情节复杂度和人物数量。\n\n"
-                    : "";
-                prompt = $"{existingContext}{topicHint}{scaleLine}" +
-                         $"请为这部小说生成一份详细的全文大纲，包含主要情节线、冲突、转折点和结局。" +
-                         $"{(string.IsNullOrEmpty(input) ? "" : $"额外要求：{input}")}\n" +
-                         "请直接输出大纲内容，不要额外说明。";
+                userPrompt = "";
+                if (chapter != null && !string.IsNullOrWhiteSpace(chapter.Content))
+                    userPrompt += AiPrompts.Section("当前章节内容", chapter.Content) + "\n";
+                if (!string.IsNullOrEmpty(scaleHint))
+                    userPrompt += $"小说规模：{scaleHint}\n请据此合理规划章节数量、情节复杂度与人物数量。\n\n";
+                userPrompt += "请为这部小说生成一份详细的全文大纲。";
+                if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
             if (result != null)
             {
-                _aiPanel.OutlineTextBox.Text = result.Text;
-                _aiPanel.OutlineExpander.IsExpanded = true;
+                SetSettingValue(SettingSection.FullOutline, result.Text);
                 _aiPanel.ResultTextBox.Text = result.Text;
                 _chatLogger?.Log("生成大纲", input, result.Text);
                 RecordAiInteraction("生成大纲", input, result.Text);
@@ -741,29 +842,29 @@ namespace 编辑器
         private async Task<AiResult?> GenCharacterAsync()
         {
             var input = _aiPanel.InputTextBox.Text.Trim();
-            var existingContext = BuildAiContext();
 
-            string existing = _aiPanel.CharacterTextBox.Text.Trim();
-            string prompt;
-            if (!string.IsNullOrEmpty(existing))
+            string existing = GetSettingValue(SettingSection.CharacterSettings).Trim();
+            var isExpand = !string.IsNullOrEmpty(existing);
+            var systemPrompt = BuildSystemPrompt(
+                isExpand ? AiPrompts.Task.Expand : AiPrompts.Task.Character,
+                AiPrompts.StructuredOutput);
+
+            string userPrompt;
+            if (isExpand)
             {
-                prompt = $"以下是已有的人物设定：\n\n{existing}\n\n" +
-                         $"请在此基础上扩展、完善或添加新人物。{(string.IsNullOrEmpty(input) ? "" : $"要求：{input}")}\n" +
-                         "请直接输出完整的人物设定，不要额外说明。";
+                userPrompt = AiPrompts.Section("已有的人物设定", existing);
+                if (!string.IsNullOrEmpty(input)) userPrompt += $"\n修改要求：{input}";
             }
             else
             {
-                prompt = $"{existingContext}" +
-                         $"请为这部小说生成主要角色设定，每个角色包含：姓名、年龄、性别、外貌、性格、背景故事、角色定位。" +
-                         $"{(string.IsNullOrEmpty(input) ? "" : $"额外要求：{input}")}\n" +
-                         "请直接输出人物设定，不要额外说明。";
+                userPrompt = "请为这部小说生成主要角色设定。";
+                if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
             if (result != null)
             {
-                _aiPanel.CharacterTextBox.Text = result.Text;
-                _aiPanel.CharacterExpander.IsExpanded = true;
+                SetSettingValue(SettingSection.CharacterSettings, result.Text);
                 _aiPanel.ResultTextBox.Text = result.Text;
                 _chatLogger?.Log("生成人物", input, result.Text);
                 RecordAiInteraction("生成人物", input, result.Text);
@@ -775,29 +876,29 @@ namespace 编辑器
         private async Task<AiResult?> GenBackgroundAsync()
         {
             var input = _aiPanel.InputTextBox.Text.Trim();
-            var existingContext = BuildAiContext();
 
-            string existing = _aiPanel.BackgroundTextBox.Text.Trim();
-            string prompt;
-            if (!string.IsNullOrEmpty(existing))
+            string existing = GetSettingValue(SettingSection.BackgroundSettings).Trim();
+            var isExpand = !string.IsNullOrEmpty(existing);
+            var systemPrompt = BuildSystemPrompt(
+                isExpand ? AiPrompts.Task.Expand : AiPrompts.Task.Background,
+                AiPrompts.StructuredOutput);
+
+            string userPrompt;
+            if (isExpand)
             {
-                prompt = $"以下是已有的背景设定：\n\n{existing}\n\n" +
-                         $"请在此基础上扩展、完善。{(string.IsNullOrEmpty(input) ? "" : $"要求：{input}")}\n" +
-                         "请直接输出完整的背景设定，不要额外说明。";
+                userPrompt = AiPrompts.Section("已有的背景设定", existing);
+                if (!string.IsNullOrEmpty(input)) userPrompt += $"\n修改要求：{input}";
             }
             else
             {
-                prompt = $"{existingContext}" +
-                         $"请为这部小说生成详细的世界观和背景设定，包含：时代背景、地理环境、社会体系、特殊设定（如魔法/科技体系）等。" +
-                         $"{(string.IsNullOrEmpty(input) ? "" : $"额外要求：{input}")}\n" +
-                         "请直接输出背景设定，不要额外说明。";
+                userPrompt = "请为这部小说生成世界观和背景设定。";
+                if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.4, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
             if (result != null)
             {
-                _aiPanel.BackgroundTextBox.Text = result.Text;
-                _aiPanel.BackgroundExpander.IsExpanded = true;
+                SetSettingValue(SettingSection.BackgroundSettings, result.Text);
                 _aiPanel.ResultTextBox.Text = result.Text;
                 _chatLogger?.Log("生成背景", input, result.Text);
                 RecordAiInteraction("生成背景", input, result.Text);
@@ -809,37 +910,79 @@ namespace 编辑器
         private async Task<AiResult?> GenChapterOutlineAsync()
         {
             var input = _aiPanel.InputTextBox.Text.Trim();
-            var existingContext = BuildAiContext();
             var chapter = GetSelectedChapter();
 
-            string existing = _aiPanel.ChapterTextBox.Text.Trim();
-            string prompt;
-            if (!string.IsNullOrEmpty(existing))
+            string existing = GetSettingValue(SettingSection.ChapterOutline).Trim();
+            var isExpand = !string.IsNullOrEmpty(existing);
+            var systemPrompt = BuildSystemPrompt(
+                isExpand ? AiPrompts.Task.Expand : AiPrompts.Task.ChapterOutline,
+                AiPrompts.StructuredOutput);
+
+            string userPrompt;
+            if (isExpand)
             {
-                prompt = $"以下是已有的章节大纲：\n\n{existing}\n\n" +
-                         $"请在此基础上扩展、完善。{(string.IsNullOrEmpty(input) ? "" : $"要求：{input}")}\n" +
-                         "请直接输出完整的章节大纲，不要额外说明。";
+                userPrompt = AiPrompts.Section("已有的章节大纲", existing);
+                if (!string.IsNullOrEmpty(input)) userPrompt += $"\n修改要求：{input}";
             }
             else
             {
-                var chapterHint = chapter != null
-                    ? $"当前章节「{chapter.Title}」的内容：\n{chapter.Content}\n\n"
-                    : "";
-                prompt = $"{existingContext}{chapterHint}" +
-                         $"请为这部小说生成详细的章节大纲，列出每一章的标题、主要事件和推进方向。" +
-                         $"{(string.IsNullOrEmpty(input) ? "" : $"额外要求：{input}")}\n" +
-                         "请直接输出章节大纲，不要额外说明。";
+                userPrompt = "";
+                if (chapter != null && !string.IsNullOrWhiteSpace(chapter.Content))
+                    userPrompt += AiPrompts.Section($"当前章节（第{chapter.ChapterNumber}章 {chapter.Title}）", chapter.Content) + "\n";
+                userPrompt += "请为这部小说生成详细的章节大纲。";
+                if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
             if (result != null)
             {
-                _aiPanel.ChapterTextBox.Text = result.Text;
-                _aiPanel.ChapterExpander.IsExpanded = true;
+                SetSettingValue(SettingSection.ChapterOutline, result.Text);
                 _aiPanel.ResultTextBox.Text = result.Text;
                 _chatLogger?.Log("生成章节大纲", input, result.Text);
                 RecordAiInteraction("生成章节大纲", input, result.Text);
                 ShowNotification("已生成章节大纲");
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// 生成文风设定。首次生成时优先拿作者已写的正文当样本，
+        /// 从自己的文字里提炼风格，比凭空规定一种文风更贴合。
+        /// </summary>
+        private async Task<AiResult?> GenWritingStyleAsync()
+        {
+            var input = _aiPanel.InputTextBox.Text.Trim();
+
+            string existing = GetSettingValue(SettingSection.WritingStyle).Trim();
+            var isExpand = !string.IsNullOrEmpty(existing);
+            var systemPrompt = BuildSystemPrompt(
+                isExpand ? AiPrompts.Task.Expand : AiPrompts.Task.WriteStyle,
+                AiPrompts.StructuredOutput);
+
+            string userPrompt;
+            if (isExpand)
+            {
+                userPrompt = AiPrompts.Section("已有的文风设定", existing);
+                if (!string.IsNullOrEmpty(input)) userPrompt += $"\n修改要求：{input}";
+            }
+            else
+            {
+                userPrompt = "";
+                var chapter = GetSelectedChapter();
+                if (chapter != null && !string.IsNullOrWhiteSpace(chapter.Content))
+                    userPrompt += AiPrompts.Section("作者已有的文字（风格样本）", chapter.Content) + "\n";
+                userPrompt += "请据此提炼这部小说的文风设定。";
+                if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
+            }
+
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 1500, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
+            if (result != null)
+            {
+                SetSettingValue(SettingSection.WritingStyle, result.Text);
+                _aiPanel.ResultTextBox.Text = result.Text;
+                _chatLogger?.Log("生成文风", input, result.Text);
+                RecordAiInteraction("生成文风", input, result.Text);
+                ShowNotification("已生成文风设定");
             }
             return result;
         }
@@ -869,28 +1012,27 @@ namespace 编辑器
 
             var menu = new System.Windows.Controls.ContextMenu();
 
-            var targets = new (string Label, TextBox Box, Expander Expander)[]
+            var targets = new (string Label, SettingSection Kind)[]
             {
-                ("全文大纲", _aiPanel.OutlineTextBox, _aiPanel.OutlineExpander),
-                ("章节大纲", _aiPanel.ChapterTextBox, _aiPanel.ChapterExpander),
-                ("主要人物设定", _aiPanel.CharacterTextBox, _aiPanel.CharacterExpander),
-                ("主要背景设定", _aiPanel.BackgroundTextBox, _aiPanel.BackgroundExpander),
-                ("文风设定", _aiPanel.WritingStyleTextBox, _aiPanel.WritingStyleExpander),
+                ("全文大纲", SettingSection.FullOutline),
+                ("章节大纲", SettingSection.ChapterOutline),
+                ("主要人物设定", SettingSection.CharacterSettings),
+                ("主要背景设定", SettingSection.BackgroundSettings),
+                ("文风设定", SettingSection.WritingStyle),
             };
 
-            foreach (var (label, box, expander) in targets)
+            foreach (var (label, kind) in targets)
             {
                 var item = new System.Windows.Controls.MenuItem { Header = label };
                 item.Click += (_, _) =>
                 {
-                    if (!string.IsNullOrEmpty(box.Text.Trim()))
+                    if (!string.IsNullOrEmpty(GetSettingValue(kind).Trim()))
                     {
                         var answer = MessageBox.Show($"「{label}」已有内容，是否覆盖？", "确认",
                             MessageBoxButton.YesNo, MessageBoxImage.Question);
                         if (answer != MessageBoxResult.Yes) return;
                     }
-                    box.Text = text;
-                    expander.IsExpanded = true;
+                    SetSettingValue(kind, text);
                     ShowNotification($"已应用到「{label}」");
                 };
                 menu.Items.Add(item);
@@ -942,34 +1084,82 @@ namespace 编辑器
             AiPanelHost.Content = null;
 
             // 创建浮动窗口并放入面板
-            _floatingWindow = new FloatingAiWindow();
-            _floatingWindow.Owner = this;
-            _floatingWindow.SetContent(_aiPanel);
-            _floatingWindow.ClosingRequested += AttachAiPanel;
-            _floatingWindow.Closed += (_, _) => { _floatingWindow = null; };
+            var win = new FloatingAiWindow { Owner = this };
+            win.SetContent(_aiPanel);
+            win.ClosingRequested += OnFloatingWindowClosing;
+            win.Closed += OnFloatingWindowClosed;
+            _floatingWindow = win;
 
             // 收起主窗口的 AI 面板列
             AiPanelColumn.Width = new GridLength(0);
 
             _isDetached = true;
             _aiPanel.SetDetached(true);
-            _floatingWindow.Show();
+            win.Show();
         }
 
+        /// <summary>
+        /// 主动合并：关闭浮动窗口并把面板收回主窗口（面板上的「📌 合并」按钮）。
+        /// </summary>
         private void AttachAiPanel()
         {
             if (!_isDetached) return;
 
-            // 从浮动窗口移除面板
-            _floatingWindow?.ClearContent();
-            _floatingWindow?.Close();
-            _floatingWindow = null;
+            var win = _floatingWindow;
+            if (win != null)
+            {
+                // Close() 会同步触发 Closing → ClosingRequested。必须先解绑，
+                // 否则会递归回到本方法：第二次 Close() 落在「窗口关闭期间」，
+                // WPF 的 Window.VerifyNotClosing() 会抛 InvalidOperationException。
+                win.ClosingRequested -= OnFloatingWindowClosing;
+                win.Closed -= OnFloatingWindowClosed;
+                _floatingWindow = null;
+                win.Close();
+            }
 
-            // 放回主窗口
+            ReturnPanelToMainWindow();
+        }
+
+        /// <summary>
+        /// 浮动窗口自身正在关闭（用户点标题栏 X / Alt+F4，或主窗口退出时连带关闭）。
+        /// 此刻窗口处于 Closing 流程中，严禁再调用 Show／Close／改 Visibility，
+        /// 否则同样会抛 InvalidOperationException。这里只负责把面板搬回主窗口。
+        /// </summary>
+        private void OnFloatingWindowClosing()
+        {
+            var win = _floatingWindow;
+            if (win != null)
+            {
+                win.ClosingRequested -= OnFloatingWindowClosing;
+                win.Closed -= OnFloatingWindowClosed;
+                _floatingWindow = null;
+            }
+
+            ReturnPanelToMainWindow();
+        }
+
+        /// <summary>窗口关闭后的兜底：清理引用；若面板还没收回则一并收回（幂等）。</summary>
+        private void OnFloatingWindowClosed(object? sender, EventArgs e)
+        {
+            if (ReferenceEquals(_floatingWindow, sender))
+                _floatingWindow = null;
+
+            ReturnPanelToMainWindow();
+        }
+
+        /// <summary>把 AI 面板从浮动窗口摘出、挂回主窗口，并复位分离状态（幂等）。</summary>
+        private void ReturnPanelToMainWindow()
+        {
+            if (!_isDetached) return;
+            _isDetached = false;
+
+            // 面板此刻的逻辑父级仍是浮动窗口的 HostGrid。
+            // 不先摘除就赋给 AiPanelHost，会抛「元素已是另一个元素的子元素」。
+            if (_aiPanel.Parent is Panel oldHost)
+                oldHost.Children.Remove(_aiPanel);
+
             AiPanelHost.Content = _aiPanel;
             AiPanelColumn.Width = new GridLength(300);
-
-            _isDetached = false;
             _aiPanel.SetDetached(false);
         }
 
@@ -1044,50 +1234,40 @@ namespace 编辑器
             var preset = AppearanceManager.GetPreset(config.PresetName)
                 ?? AppearanceManager.BuiltInPresets[0];
 
-            // 背景图片
-            if (!string.IsNullOrEmpty(config.BackgroundImagePath) && File.Exists(config.BackgroundImagePath))
+            // 1) 统一注入设计 token —— 颜色全部写到全局资源字典顶层，
+            //    XAML 侧一律用 DynamicResource 消费，一处生效全局（含浮动 AI 面板窗口）。
+            //    这同时修掉了旧实现的两个 bug：TextColor / SplitterBg 从未被应用。
+            ThemeTokens.Apply(preset);
+
+            // 2) 背景图（可选）：图片铺满内容区，两侧面板改为半透明以透出图片
+            var hasImage = !string.IsNullOrEmpty(config.BackgroundImagePath)
+                           && File.Exists(config.BackgroundImagePath);
+
+            if (hasImage)
             {
                 try
                 {
-                    var img = new System.Windows.Media.Imaging.BitmapImage(new Uri(config.BackgroundImagePath));
+                    var img = new System.Windows.Media.Imaging.BitmapImage(new Uri(config.BackgroundImagePath!));
                     MainContentGrid.Background = new System.Windows.Media.ImageBrush(img)
                     {
                         Stretch = System.Windows.Media.Stretch.UniformToFill,
                         Opacity = 0.35
                     };
-                    // 面板半透明，透出背景图
                     ProjectPanelBorder.Background = preset.GetSemiTransparentPanelBg(0.88);
                     AiPanelBorder.Background = preset.GetSemiTransparentPanelBg(0.88);
+                    return;
                 }
                 catch
                 {
-                    MainContentGrid.Background = preset.WindowBgBrush;
-                    ProjectPanelBorder.Background = preset.PanelBgBrush;
-                    AiPanelBorder.Background = preset.PanelBgBrush;
+                    // 图片损坏/路径失效：静默回落到底色，不让外观设置整块失败
                 }
             }
-            else
-            {
-                MainContentGrid.Background = preset.WindowBgBrush;
-                ProjectPanelBorder.Background = preset.PanelBgBrush;
-                AiPanelBorder.Background = preset.PanelBgBrush;
-            }
 
-            // 菜单栏
-            MainMenu.Background = preset.MenuBgBrush;
-
-            // 状态栏
-            MainStatusBar.Background = preset.StatusBarBgBrush;
-
-            // 编辑区背景（DynamicResource，实时影响 TabControl 和模板内 TextBox）
-            Resources["EditorBgBrush"] = preset.EditorBgBrush;
-
-            // 编辑器标签页容器背景（TabControl 内容区未覆盖时）
-            EditorTabControl.Background = preset.EditorBgBrush;
-
-            // 边框颜色
-            ProjectPanelBorder.BorderBrush = preset.BorderColorBrush;
-            AiPanelBorder.BorderBrush = preset.BorderColorBrush;
+            // 恢复为 token 引用（不能用 ClearValue —— XAML 里设的值本身就是本地值，会被一起清掉）
+            // MainContentGrid 恢复成透明：底纹由画布层提供，内容区不再盖一层实色
+            MainContentGrid.Background = System.Windows.Media.Brushes.Transparent;
+            ProjectPanelBorder.SetResourceReference(Border.BackgroundProperty, "Brush.Panel");
+            AiPanelBorder.SetResourceReference(Border.BackgroundProperty, "Brush.Panel");
         }
 
         // ---- 路径配置 ----
@@ -1186,15 +1366,45 @@ namespace 编辑器
             _profileManager.ActiveProfileChanged += OnActiveProfileChanged;
             RefreshProfileSwitcher();
             ApplyActiveProfile();
+
+            // 配置目录变了，提示词覆写也要从新目录重读
+            InitPromptStore();
         }
 
         private void ShowApiSettings()
         {
-            var dialog = new ApiSettingsWindow(this, _profileManager);
+            var dialog = new ApiSettingsWindow(this, _profileManager, _promptStore);
             if (dialog.ShowDialog() == true)
             {
                 RefreshProfileSwitcher();
+                RefreshPresetIndicator();   // 提示词方案可能被切换/改名/删除了
             }
+        }
+
+        /// <summary>
+        /// 加载用户的提示词覆写并注入 <see cref="AiPrompts"/>。
+        /// AiPrompts 的每个属性都是实时的（每次调用现取覆写值），所以设置里改完
+        /// 立即对下一次 AI 调用生效，不需要重启。
+        /// </summary>
+        private void InitPromptStore()
+        {
+            _promptStore = new SystemPromptStore(_configDir);
+            _promptStore.Load();
+            AiPrompts.Store = _promptStore;
+            RefreshPresetIndicator();
+        }
+
+        /// <summary>
+        /// 把当前生效的提示词方案刷到 AI 面板头上。启动、切换配置目录、
+        /// 以及 AI 设置对话框保存后都要调一次——面板上看不到方案名时，
+        /// 用户切换方案后会觉得"AI 突然不对劲"。
+        /// </summary>
+        private void RefreshPresetIndicator()
+        {
+            if (_promptStore == null) return;
+
+            var id = _promptStore.ActivePresetId;
+            _aiPanel.SetPresetName(_promptStore.PresetName(id) ?? "默认", !_promptStore.IsCustom(id));
         }
 
         private async Task CallAiFunction(Func<IApiService, Task<AiResult>> function)
@@ -1324,74 +1534,164 @@ namespace 编辑器
             return dialog.ShowDialog() == true ? dialog.InputText : null;
         }
 
-        // AI 创作上下文管理
+        // ==================== 设定窗口 ====================
+        // 全文大纲 / 章节大纲 / 人物 / 背景 / 文风这五项已归属 SettingsWindow。
+        // 下面两个方法名保持不变（散落各处的调用点无需改动），内部改为转发给窗口：
+        //   写 → 把窗口里尚未落盘的内容推回项目（窗口内编辑已即时同步，这里是幂等兜底）
+        //   读 → 让窗口重新载入项目内容（新建 / 打开 / 切换项目后调用）
+
         private void SyncAiContextToProject()
         {
-            if (_currentProject == null) return;
-            _currentProject.FullOutline = _aiPanel.OutlineTextBox.Text;
-            _currentProject.ChapterOutline = _aiPanel.ChapterTextBox.Text;
-            _currentProject.CharacterSettings = _aiPanel.CharacterTextBox.Text;
-            _currentProject.BackgroundSettings = _aiPanel.BackgroundTextBox.Text;
-            _currentProject.WritingStyle = _aiPanel.WritingStyleTextBox.Text;
+            _settingsWindow?.SyncToProject(_currentProject);
         }
 
         private void SyncAiContextFromProject()
         {
-            if (_currentProject == null) return;
-            _aiPanel.OutlineTextBox.Text = _currentProject.FullOutline ?? "";
-            _aiPanel.ChapterTextBox.Text = _currentProject.ChapterOutline ?? "";
-            _aiPanel.CharacterTextBox.Text = _currentProject.CharacterSettings ?? "";
-            _aiPanel.BackgroundTextBox.Text = _currentProject.BackgroundSettings ?? "";
-            _aiPanel.WritingStyleTextBox.Text = _currentProject.WritingStyle ?? "";
+            _settingsWindow?.LoadFrom(_currentProject);
         }
 
-        private string BuildAiContext()
+        /// <summary>打开（或前置）「设定」窗口。</summary>
+        private void ShowSettingsWindow()
+        {
+            try
+            {
+                if (_settingsWindow == null)
+                {
+                    var win = new SettingsWindow { Owner = this };
+                    win.OnRequestAi = RequestAiForSettingAsync;
+
+                    // 关闭后只回收引用：此刻窗口已关，不能再碰窗口 API。
+                    // 内容无损失 —— 窗口内编辑是即时写回项目的。
+                    win.Closed += (_, _) => _settingsWindow = null;
+
+                    win.LoadFrom(_currentProject);
+                    _settingsWindow = win;
+                    win.Show();
+                }
+                else
+                {
+                    // 已经开着：刷新数据并置前（可能刚切换过项目）
+                    _settingsWindow.LoadFrom(_currentProject);
+                    if (_settingsWindow.WindowState == WindowState.Minimized)
+                        _settingsWindow.WindowState = WindowState.Normal;
+                    _settingsWindow.Activate();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"打开设定窗口失败: {ex.Message}", "错误",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void SettingsWindow_Click(object sender, RoutedEventArgs e) => ShowSettingsWindow();
+
+        /// <summary>
+        /// 设定窗口里点「AI 生成 / 完善」的入口。
+        /// 复用 AI 面板那套既有生成流程（含 API 校验、进度反馈、记忆记录），
+        /// 设定窗口本身不另起一套 AI 交互 —— 与 AI 交互的入口始终只有 AI 面板一个。
+        /// </summary>
+        private async Task RequestAiForSettingAsync(SettingSection kind)
+        {
+            if (_currentProject == null)
+            {
+                MessageBox.Show("请先创建或打开项目", "提示",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            switch (kind)
+            {
+                case SettingSection.FullOutline: await GenOutlineAsync(); break;
+                case SettingSection.ChapterOutline: await GenChapterOutlineAsync(); break;
+                case SettingSection.CharacterSettings: await GenCharacterAsync(); break;
+                case SettingSection.BackgroundSettings: await GenBackgroundAsync(); break;
+                case SettingSection.WritingStyle: await GenWritingStyleAsync(); break;
+            }
+        }
+
+        /// <summary>
+        /// 写入某项设定：改项目数据 + 同步到已打开的设定窗口。
+        /// 「AI 生成结果」与「应用到 ▷ 某项设定」都走这里，保证两条路径行为一致。
+        /// </summary>
+        private void SetSettingValue(SettingSection kind, string text)
+        {
+            if (_currentProject == null) return;
+
+            switch (kind)
+            {
+                case SettingSection.FullOutline: _currentProject.FullOutline = text; break;
+                case SettingSection.ChapterOutline: _currentProject.ChapterOutline = text; break;
+                case SettingSection.CharacterSettings: _currentProject.CharacterSettings = text; break;
+                case SettingSection.BackgroundSettings: _currentProject.BackgroundSettings = text; break;
+                case SettingSection.WritingStyle: _currentProject.WritingStyle = text; break;
+            }
+
+            _settingsWindow?.SetValue(kind, text);
+            // 窗口开着就切到该项，让作者直接看到刚生成的内容；没开则不打扰
+            _settingsWindow?.NavigateTo(kind);
+        }
+
+        private string GetSettingValue(SettingSection kind)
+        {
+            if (_currentProject == null) return "";
+            return kind switch
+            {
+                SettingSection.FullOutline => _currentProject.FullOutline ?? "",
+                SettingSection.ChapterOutline => _currentProject.ChapterOutline ?? "",
+                SettingSection.CharacterSettings => _currentProject.CharacterSettings ?? "",
+                SettingSection.BackgroundSettings => _currentProject.BackgroundSettings ?? "",
+                SettingSection.WritingStyle => _currentProject.WritingStyle ?? "",
+                _ => ""
+            };
+        }
+
+        /// <summary>
+        /// 构建项目设定块 —— 这部分进 **system** 消息。
+        ///
+        /// 与正文分开的原因（见 AiPrompts 的注释）：设定是"参考资料"，
+        /// 和"需要处理的文本"混在同一条 user 消息里，模型分不清该改哪段。
+        /// </summary>
+        private string BuildProjectContext()
         {
             SyncAiContextToProject();
             if (_currentProject == null) return "";
 
-            var parts = new List<string>();
-            if (!string.IsNullOrWhiteSpace(_currentProject.FullOutline))
-                parts.Add($"[全文大纲]\n{_currentProject.FullOutline}");
-            if (!string.IsNullOrWhiteSpace(_currentProject.ChapterOutline))
-                parts.Add($"[章节大纲]\n{_currentProject.ChapterOutline}");
-            if (!string.IsNullOrWhiteSpace(_currentProject.CharacterSettings))
-                parts.Add($"[主要人物设定]\n{_currentProject.CharacterSettings}");
-            if (!string.IsNullOrWhiteSpace(_currentProject.BackgroundSettings))
-                parts.Add($"[主要背景设定]\n{_currentProject.BackgroundSettings}");
-            if (!string.IsNullOrWhiteSpace(_currentProject.WritingStyle))
-                parts.Add($"[文风设定]\n{_currentProject.WritingStyle}");
+            return AiPrompts.BuildContextBlock(
+                _currentProject.FullOutline,
+                _currentProject.ChapterOutline,
+                _currentProject.CharacterSettings,
+                _currentProject.BackgroundSettings,
+                _currentProject.WritingStyle,
+                _memoryManager?.GetRawMemory());
+        }
 
-            if (parts.Count == 0 && (_memoryManager == null || string.IsNullOrWhiteSpace(_memoryManager.GetRawMemory())))
-                return "";
-
-            var context = "===== 创作上下文（项目设定） =====\n\n"
-                + string.Join("\n\n---\n\n", parts)
-                + "\n\n====================================\n\n";
-
-            // 注入选中章节内容
+        /// <summary>
+        /// 构建"相关章节"参考块 —— 作者在 AI 面板里勾选的其他章节，同样进 **system**。
+        /// </summary>
+        private string BuildRelatedChaptersContext()
+        {
+            if (_currentProject == null) return "";
             var selectedIds = _aiPanel.GetSelectedChapterIds();
-            if (selectedIds.Count > 0)
-            {
-                var chapterParts = new List<string>();
-                foreach (var ch in _currentProject.Chapters.Where(c => selectedIds.Contains(c.ChapterId)))
-                {
-                    if (!string.IsNullOrWhiteSpace(ch.Content))
-                        chapterParts.Add($"[第{ch.ChapterNumber}章: {ch.Title}]\n{ch.Content}");
-                }
-                if (chapterParts.Count > 0)
-                {
-                    context += "===== 相关章节内容 =====\n\n"
-                        + string.Join("\n\n---\n\n", chapterParts)
-                        + "\n\n==========================\n\n";
-                }
-            }
+            if (selectedIds.Count == 0) return "";
 
-            // 注入 AI 记忆
-            if (_memoryManager != null)
-                context += _memoryManager.GetMemoryContext();
+            var rows = _currentProject.Chapters
+                .Where(c => selectedIds.Contains(c.ChapterId))
+                .Select(c => (c.ChapterNumber, c.Title, c.Content ?? ""));
+            return AiPrompts.BuildRelatedChapters(rows);
+        }
 
-            return context;
+        /// <summary>
+        /// 组装完整的 system 提示词：身份 + 项目设定 + 参考章节 + 本次任务 + 输出契约。
+        /// </summary>
+        private string BuildSystemPrompt(string task, string? outputContract = null)
+        {
+            var context = BuildProjectContext();
+            var related = BuildRelatedChaptersContext();
+            if (!string.IsNullOrWhiteSpace(related))
+                context = string.IsNullOrWhiteSpace(context) ? related : context + "\n\n" + related;
+
+            return AiPrompts.Build(task, context, outputContract);
         }
 
         private void RecordAiInteraction(string type, string input, string result)
@@ -1409,7 +1709,8 @@ namespace 编辑器
             {
                 UpdateStatus("正在更新 AI 记忆...");
                 var prompt = _memoryManager.BuildMemoryUpdatePrompt();
-                var aiResult = await _apiService.CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 1500 });
+                var aiResult = await _apiService.CompleteTextAsync(prompt, null,
+                    new CompletionOptions { MaxTokens = 1500 });
                 if (!string.IsNullOrWhiteSpace(aiResult.Text) && !aiResult.Text.StartsWith("API调用失败") && !aiResult.Text.StartsWith("API错误"))
                 {
                     _memoryManager.SaveMemory(aiResult.Text);
@@ -1463,6 +1764,7 @@ namespace 编辑器
             NotificationText.Text = message;
             NotificationBorder.Height = double.NaN; // auto
             NotificationBorder.Visibility = Visibility.Visible;
+            Motion.PlayDropIn(NotificationBorder, -10);   // 自上而下滑入
             _notificationTimer.Stop();
             _notificationTimer.Start();
         }

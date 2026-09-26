@@ -4,7 +4,7 @@ using Microsoft.Win32;
 
 namespace 编辑器
 {
-    public partial class PathSettingsWindow : Window
+    public partial class PathSettingsWindow : HandyControl.Controls.Window
     {
         private readonly PathsConfig _original;
 

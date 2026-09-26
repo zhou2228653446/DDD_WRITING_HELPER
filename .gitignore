@@ -384,3 +384,6 @@ pdf_pages/
 # 项目快照（用户数据）
 .snapshots/
 .chat/
+
+# WorkBuddy 本地工作数据（记忆、验证产物，不上传）
+.workbuddy/

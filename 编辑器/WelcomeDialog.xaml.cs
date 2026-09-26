@@ -2,7 +2,7 @@ using System.Windows;
 
 namespace 编辑器
 {
-    public partial class WelcomeDialog : Window
+    public partial class WelcomeDialog : HandyControl.Controls.Window
     {
         public bool SkipWelcome => SkipWelcomeCheckBox.IsChecked == true;
 

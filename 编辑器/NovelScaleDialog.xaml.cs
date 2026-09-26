@@ -3,7 +3,7 @@ using System.Windows.Controls;
 
 namespace 编辑器
 {
-    public partial class NovelScaleDialog : Window
+    public partial class NovelScaleDialog : HandyControl.Controls.Window
     {
         /// <summary>选中的规模描述，null 表示跳过</summary>
         public string? ScaleDescription { get; private set; }

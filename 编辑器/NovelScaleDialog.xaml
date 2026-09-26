@@ -1,9 +1,12 @@
-<Window x:Class="编辑器.NovelScaleDialog"
+<hc:Window x:Class="编辑器.NovelScaleDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:hc="https://handyorg.github.io/handycontrol"
         Title="选择小说规模" Height="380" Width="400"
-        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
-        Background="White">
+        Background="{DynamicResource Brush.Surface}"
+        FontFamily="{StaticResource Font.Ui}"
+        TextElement.Foreground="{DynamicResource Brush.Text}"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize">
     <Grid Margin="20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -19,25 +22,25 @@
             <ListBoxItem Tag="short" IsSelected="True">
                 <StackPanel Margin="4">
                     <TextBlock Text="📝 短篇小说" FontWeight="Bold" FontSize="14"/>
-                    <TextBlock Text="1~5万字 · 5~15章 · 单线叙事" Foreground="#666" Margin="0,2,0,0"/>
+                    <TextBlock Text="1~5万字 · 5~15章 · 单线叙事" Foreground="{DynamicResource Brush.TextMuted}" Margin="0,2,0,0"/>
                 </StackPanel>
             </ListBoxItem>
             <ListBoxItem Tag="medium">
                 <StackPanel Margin="4">
                     <TextBlock Text="📖 中篇小说" FontWeight="Bold" FontSize="14"/>
-                    <TextBlock Text="5~20万字 · 15~40章 · 双线叙事" Foreground="#666" Margin="0,2,0,0"/>
+                    <TextBlock Text="5~20万字 · 15~40章 · 双线叙事" Foreground="{DynamicResource Brush.TextMuted}" Margin="0,2,0,0"/>
                 </StackPanel>
             </ListBoxItem>
             <ListBoxItem Tag="long">
                 <StackPanel Margin="4">
                     <TextBlock Text="📚 长篇小说" FontWeight="Bold" FontSize="14"/>
-                    <TextBlock Text="20~50万字 · 40~100章 · 多线叙事" Foreground="#666" Margin="0,2,0,0"/>
+                    <TextBlock Text="20~50万字 · 40~100章 · 多线叙事" Foreground="{DynamicResource Brush.TextMuted}" Margin="0,2,0,0"/>
                 </StackPanel>
             </ListBoxItem>
             <ListBoxItem Tag="extralong">
                 <StackPanel Margin="4">
                     <TextBlock Text="🏰 超长篇小说" FontWeight="Bold" FontSize="14"/>
-                    <TextBlock Text="50万字+ · 100章+ · 宏大世界观" Foreground="#666" Margin="0,2,0,0"/>
+                    <TextBlock Text="50万字+ · 100章+ · 宏大世界观" Foreground="{DynamicResource Brush.TextMuted}" Margin="0,2,0,0"/>
                 </StackPanel>
             </ListBoxItem>
         </ListBox>
@@ -49,4 +52,4 @@
                     IsCancel="True" Click="Skip_Click"/>
         </StackPanel>
     </Grid>
-</Window>
+</hc:Window>

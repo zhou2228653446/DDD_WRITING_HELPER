@@ -1,45 +1,71 @@
-<Window x:Class="编辑器.MainWindow"
+<hc:Window x:Class="编辑器.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:编辑器"
+        xmlns:hc="https://handyorg.github.io/handycontrol"
         mc:Ignorable="d"
-        Title="AI写作助手" Height="800" Width="1200">
-    <Window.Resources>
-        <!-- 可动态切换的背景色资源 -->
-        <SolidColorBrush x:Key="EditorBgBrush" Color="#FFFFFF"/>
+        Title="AI写作助手" Height="800" Width="1200" MinWidth="880" MinHeight="560"
+        Background="{DynamicResource Brush.Surface}"
+        FontFamily="{StaticResource Font.Ui}"
+        TextElement.Foreground="{DynamicResource Brush.Text}">
 
+    <hc:Window.Resources>
         <!-- 章节编辑器模板 -->
         <DataTemplate x:Key="ChapterEditorTemplate">
-            <Grid Background="{DynamicResource EditorBgBrush}">
+            <Grid Background="{DynamicResource Brush.Editor}">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
                 <TextBox Grid.Row="0" Text="{Binding Title, UpdateSourceTrigger=PropertyChanged}"
-                         FontSize="16" FontWeight="Bold" Padding="10" BorderThickness="0,0,0,1"
-                         Background="{DynamicResource EditorBgBrush}"/>
+                         FontSize="{StaticResource FontSize.Title}" FontWeight="SemiBold"
+                         Padding="24,16,24,12"
+                         Background="Transparent" BorderThickness="0,0,0,1"
+                         BorderBrush="{DynamicResource Brush.Divider}"
+                         Foreground="{DynamicResource Brush.Text}"
+                         CaretBrush="{DynamicResource Brush.Text}"
+                         SelectionBrush="{DynamicResource Brush.Accent}"/>
                 <TextBox Grid.Row="1" Text="{Binding Content, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" AcceptsTab="True"
                          VerticalScrollBarVisibility="Auto" TextWrapping="Wrap"
-                         FontSize="14" Padding="10" BorderThickness="0"
-                         Background="{DynamicResource EditorBgBrush}"/>
+                         FontSize="15" Padding="24,16"
+                         Background="Transparent" BorderThickness="0"
+                         Foreground="{DynamicResource Brush.Text}"
+                         CaretBrush="{DynamicResource Brush.Text}"
+                         SelectionBrush="{DynamicResource Brush.Accent}"/>
             </Grid>
         </DataTemplate>
-    </Window.Resources>
+    </hc:Window.Resources>
 
     <Grid>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- 菜单栏 -->
-        <Menu x:Name="MainMenu" Grid.Row="0">
-            <MenuItem Header="文件(_F)">
+        <!--
+            ==================== 画布层（纸张 / 磨砂质地） ====================
+            铺满整窗、位于所有内容之下：
+              1) 暖调底色（本身已含纸纹颗粒）
+              2) 左上柔光渐变，模拟纸张受光不均
+            各面板的底色由 ThemeTokens.Textured() 单独合成纸纹，不依赖这一层透出。
+            IsHitTestVisible=False 保证完全不吃鼠标事件。
+        -->
+        <Grid Grid.RowSpan="5" IsHitTestVisible="False">
+            <Rectangle Fill="{DynamicResource Brush.Surface}"/>
+            <Rectangle Fill="{DynamicResource Brush.Sheen}"/>
+        </Grid>
+
+        <!-- ==================== 菜单栏（扁平） ==================== -->
+        <Menu Grid.Row="0" Background="{DynamicResource Brush.Menu}"
+              Foreground="{DynamicResource Brush.Text}"
+              BorderThickness="0" Padding="6,2">
+            <MenuItem Header="文件(_F)" Foreground="{DynamicResource Brush.Text}" Padding="10,6">
                 <MenuItem Header="新建项目(_N)" Click="NewProject_Click"/>
                 <MenuItem Header="打开项目(_O)" Click="OpenProject_Click"/>
                 <MenuItem Header="保存项目(_S)" Click="SaveProject_Click"/>
@@ -55,7 +81,7 @@
                 <Separator/>
                 <MenuItem Header="退出(_X)" Click="Exit_Click"/>
             </MenuItem>
-            <MenuItem Header="编辑(_E)">
+            <MenuItem Header="编辑(_E)" Foreground="{DynamicResource Brush.Text}" Padding="10,6">
                 <MenuItem Header="撤销(_U)" Command="ApplicationCommands.Undo"/>
                 <MenuItem Header="重做(_R)" Command="ApplicationCommands.Redo"/>
                 <Separator/>
@@ -63,7 +89,7 @@
                 <MenuItem Header="复制(_C)" Command="ApplicationCommands.Copy"/>
                 <MenuItem Header="粘贴(_P)" Command="ApplicationCommands.Paste"/>
             </MenuItem>
-            <MenuItem Header="AI助手(_A)">
+            <MenuItem Header="AI助手(_A)" Foreground="{DynamicResource Brush.Text}" Padding="10,6">
                 <MenuItem Header="续写(_W)" Click="ContinueWriting_Click"/>
                 <MenuItem Header="润色(_P)" Click="PolishText_Click"/>
                 <MenuItem Header="人名生成(_N)" Click="GenerateName_Click"/>
@@ -71,35 +97,88 @@
                 <Separator/>
                 <MenuItem Header="API设置(_S)" Click="ApiSettings_Click"/>
             </MenuItem>
-            <MenuItem Header="视图(_V)">
+            <MenuItem Header="视图(_V)" Foreground="{DynamicResource Brush.Text}" Padding="10,6">
                 <MenuItem x:Name="ProjectManagerMenuItem" Header="项目管理器(_P)" IsCheckable="True" IsChecked="True"/>
                 <MenuItem x:Name="AiPanelMenuItem" Header="AI助手面板(_A)" IsCheckable="True" IsChecked="True"/>
                 <Separator/>
+                <MenuItem Header="设定窗口(_W)..." Click="SettingsWindow_Click"/>
                 <MenuItem Header="外观设置(_S)..." Click="AppearanceSettings_Click"/>
                 <MenuItem Header="路径设置(_P)..." Click="PathSettings_Click"/>
             </MenuItem>
-            <MenuItem Header="帮助(_H)">
+            <MenuItem Header="帮助(_H)" Foreground="{DynamicResource Brush.Text}" Padding="10,6">
                 <MenuItem Header="关于(_A)" Click="About_Click"/>
             </MenuItem>
         </Menu>
 
-        <!-- 通知栏 -->
-        <Border x:Name="NotificationBorder" Grid.Row="1" Height="0" Padding="8,4"
-                Background="#4CAF50" Visibility="Collapsed">
-            <TextBlock x:Name="NotificationText" Foreground="White" FontWeight="Bold"
-                       HorizontalAlignment="Center" FontSize="13"/>
+        <!-- ==================== 命令栏（常用命令外露） ==================== -->
+        <Border Grid.Row="1" Background="{DynamicResource Brush.Menu}"
+                BorderBrush="{DynamicResource Brush.Divider}" BorderThickness="0,0,0,1"
+                Padding="10,5">
+            <Grid>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                    <Button Style="{StaticResource Btn.Icon}" Content="&#xE7C3;"
+                            ToolTip="新建项目" Click="NewProject_Click"/>
+                    <Button Style="{StaticResource Btn.Icon}" Content="&#xE8E5;"
+                            ToolTip="打开项目" Click="OpenProject_Click"/>
+                    <Button Style="{StaticResource Btn.Icon}" Content="&#xE74E;"
+                            ToolTip="保存项目" Click="SaveProject_Click"/>
+
+                    <Border Width="1" Height="18" Margin="8,0" Background="{DynamicResource Brush.Border}"/>
+
+                    <Button Style="{StaticResource Btn.Icon}" Content="&#xE7A7;"
+                            ToolTip="撤销" Command="ApplicationCommands.Undo"/>
+                    <Button Style="{StaticResource Btn.Icon}" Content="&#xE7A6;"
+                            ToolTip="重做" Command="ApplicationCommands.Redo"/>
+
+                    <Border Width="1" Height="18" Margin="8,0" Background="{DynamicResource Brush.Border}"/>
+
+                    <Button Style="{StaticResource Btn.Icon}" Content="&#xE710;"
+                            ToolTip="新建章节" Click="NewChapter_Click"/>
+                    <Button Style="{StaticResource Btn.Icon}" Content="&#xE74D;"
+                            ToolTip="删除选中章节" Click="DeleteChapter_Click"/>
+
+                    <Border Width="1" Height="18" Margin="8,0" Background="{DynamicResource Brush.Border}"/>
+
+                    <Button Style="{StaticResource Btn.Ghost}" Content="设定"
+                            ToolTip="全文大纲 / 人物设定等贯穿全书的设定"
+                            Click="SettingsWindow_Click"/>
+                    <Button Style="{StaticResource Btn.Ghost}" Content="外观" Margin="6,0,0,0"
+                            Click="AppearanceSettings_Click"/>
+                    <Button Style="{StaticResource Btn.Ghost}" Content="AI 设置" Margin="6,0,0,0"
+                            Click="ApiSettings_Click"/>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <TextBlock Text="导出" Style="{StaticResource SectionHeader}" Margin="0,0,8,0" FontSize="12"/>
+                    <Button Style="{StaticResource Btn.Ghost}" Content="Word" Click="ExportWord_Click"/>
+                    <Button Style="{StaticResource Btn.Ghost}" Content="PDF" Margin="6,0,0,0"
+                            Click="ExportPdf_Click"/>
+                    <Button Style="{StaticResource Btn.Ghost}" Content="TXT" Margin="6,0,0,0"
+                            Click="ExportTxt_Click"/>
+                </StackPanel>
+            </Grid>
         </Border>
 
-        <!-- 主内容区 -->
-        <Grid x:Name="MainContentGrid" Grid.Row="2">
+        <!-- ==================== 通知栏 ==================== -->
+        <Border x:Name="NotificationBorder" Grid.Row="2" Height="0" Padding="12,7"
+                Background="{DynamicResource Brush.Success}" Visibility="Collapsed">
+            <TextBlock x:Name="NotificationText" Foreground="{DynamicResource Brush.TextOnAccent}" FontWeight="SemiBold"
+                       HorizontalAlignment="Center" FontSize="{StaticResource FontSize.Small}"/>
+        </Border>
+
+        <!-- ==================== 主内容区 ==================== -->
+        <!-- 背景留空：透出画布层的底纹，各栏自己负责自己的底色 -->
+        <Grid x:Name="MainContentGrid" Grid.Row="3" Background="Transparent">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="250" x:Name="ProjectPanelColumn"/>
+                <ColumnDefinition Width="260" x:Name="ProjectPanelColumn"/>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="300" x:Name="AiPanelColumn"/>
+                <ColumnDefinition Width="320" x:Name="AiPanelColumn"/>
             </Grid.ColumnDefinitions>
 
             <!-- 项目管理器 + 版本历史 -->
-            <Border x:Name="ProjectPanelBorder" Grid.Column="0" BorderBrush="#DDD" BorderThickness="0,0,1,0">
+            <Border x:Name="ProjectPanelBorder" Grid.Column="0"
+                    Background="{DynamicResource Brush.Panel}"
+                    BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,1,0">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="3*"/>
@@ -113,36 +192,39 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
-                        <Border Grid.Row="0" Background="#F5F5F5" Padding="6,4">
+
+                        <Border Grid.Row="0" Style="{StaticResource PanelHeader}">
                             <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="项目管理器" FontWeight="Bold"
-                                           VerticalAlignment="Center" Margin="4,0,0,0"/>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                    <Button x:Name="AddChapterBtn" Content="+" FontSize="16" FontWeight="Bold"
-                                            Width="26" Height="24" ToolTip="新建章节"
+                                <TextBlock Text="项目管理器" Style="{StaticResource SectionHeader}"
+                                           HorizontalAlignment="Left"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Button x:Name="AddChapterBtn" Style="{StaticResource Btn.Tiny}"
+                                            Content="&#xE710;" ToolTip="新建章节"
                                             Click="NewChapter_Click"/>
-                                    <Button x:Name="DeleteChapterBtn" Content="×" FontSize="16" FontWeight="Bold"
-                                            Width="26" Height="24" ToolTip="删除选中章节" Margin="2,0,0,0"
+                                    <Button x:Name="DeleteChapterBtn" Style="{StaticResource Btn.Tiny}"
+                                            Content="&#xE74D;" ToolTip="删除选中章节"
                                             Click="DeleteChapter_Click"/>
-                                    <Button x:Name="MoveChapterBtn" Content="↕" FontSize="13"
-                                            Width="26" Height="24" ToolTip="排序章节" Margin="2,0,4,0"
+                                    <Button x:Name="MoveChapterBtn" Style="{StaticResource Btn.Tiny}"
+                                            Content="&#xE8CB;" ToolTip="排序章节"
                                             Click="MoveChapterMenu_Click"/>
                                 </StackPanel>
                             </Grid>
                         </Border>
+
                         <TreeView Grid.Row="1" x:Name="ProjectTreeView"
+                                  Background="Transparent" BorderThickness="0" Padding="0,4"
                                   SelectedItemChanged="ProjectTreeView_SelectedItemChanged"
                                   MouseDoubleClick="ProjectTreeView_MouseDoubleClick">
                             <TreeView.Resources>
+                                <!-- 隐式样式：保证所有层级（项目 → 章节）都用卡片容器 -->
+                                <Style TargetType="TreeViewItem" BasedOn="{StaticResource TreeViewItem.Card}"/>
                                 <HierarchicalDataTemplate DataType="{x:Type local:NovelProject}" ItemsSource="{Binding Chapters}">
-                                    <TextBlock Text="{Binding ProjectName}"/>
+                                    <TextBlock Text="{Binding ProjectName}" FontWeight="SemiBold"
+                                               VerticalAlignment="Center"/>
                                 </HierarchicalDataTemplate>
                                 <DataTemplate DataType="{x:Type local:Chapter}">
-                                    <TextBlock Text="{Binding Title}"/>
+                                    <TextBlock Text="{Binding Title}" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"/>
                                 </DataTemplate>
                             </TreeView.Resources>
                             <TreeView.ContextMenu>
@@ -158,8 +240,7 @@
                         </TreeView>
                     </Grid>
 
-                    <GridSplitter Grid.Row="1" Height="4" HorizontalAlignment="Stretch"
-                                  Background="#DDD" ResizeBehavior="PreviousAndNext"/>
+                    <GridSplitter Grid.Row="1" Style="{StaticResource Splitter.Horizontal}"/>
 
                     <!-- 版本历史 -->
                     <Grid Grid.Row="2">
@@ -168,21 +249,28 @@
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0" Text="版本历史" FontWeight="Bold" Padding="10" Background="#F0F0F0"/>
+
+                        <Border Grid.Row="0" Style="{StaticResource PanelHeader}">
+                            <TextBlock Text="版本历史" Style="{StaticResource SectionHeader}"/>
+                        </Border>
+
                         <ListBox Grid.Row="1" x:Name="SnapshotListBox"
-                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                 Background="Transparent" BorderThickness="0" Padding="0,4"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 ItemContainerStyle="{StaticResource ListBoxItem.Card}"
                                  MouseDoubleClick="SnapshotListBox_MouseDoubleClick"
                                  SelectionChanged="SnapshotListBox_SelectionChanged"
-                                 FontSize="13">
+                                 FontSize="{StaticResource FontSize.Small}">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <TextBlock Text="{Binding DisplayText}" Padding="4,2"/>
+                                    <TextBlock Text="{Binding DisplayText}" TextTrimming="CharacterEllipsis"/>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                         </ListBox>
-                        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="6,4">
-                            <Button x:Name="RestoreSnapshotBtn" Content="恢复选中版本" Padding="8,2"
-                                    FontSize="12" IsEnabled="False"
+
+                        <StackPanel Grid.Row="2" Margin="10,6,10,10">
+                            <Button x:Name="RestoreSnapshotBtn" Style="{StaticResource Btn.Ghost}"
+                                    Content="恢复选中版本" IsEnabled="False" HorizontalAlignment="Stretch"
                                     Click="RestoreSnapshot_Click"/>
                         </StackPanel>
                     </Grid>
@@ -190,39 +278,56 @@
             </Border>
 
             <!-- 编辑器区域 -->
-            <Grid Grid.Column="1">
-                <TabControl x:Name="EditorTabControl" SelectionChanged="EditorTabControl_SelectionChanged"/>
+            <Grid Grid.Column="1" Background="{DynamicResource Brush.Editor}">
+                <hc:TabControl x:Name="EditorTabControl"
+                               Background="Transparent" BorderThickness="0"
+                               SelectionChanged="EditorTabControl_SelectionChanged"/>
             </Grid>
 
             <!-- AI助手面板（可分离） -->
-            <Border x:Name="AiPanelBorder" Grid.Column="2" BorderBrush="#DDD" BorderThickness="1,0,0,0">
+            <Border x:Name="AiPanelBorder" Grid.Column="2"
+                    Background="{DynamicResource Brush.Panel}"
+                    BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1,0,0,0">
                 <ContentControl x:Name="AiPanelHost"/>
             </Border>
         </Grid>
 
-        <!-- 状态栏 -->
-        <StatusBar x:Name="MainStatusBar" Grid.Row="3">
-            <StatusBarItem>
-                <TextBlock x:Name="StatusTextBlock" Text="就绪"/>
-            </StatusBarItem>
-            <StatusBarItem>
-                <TextBlock x:Name="WordCountTextBlock" Text="字数: 0"/>
-            </StatusBarItem>
-            <StatusBarItem>
-                <TextBlock x:Name="ChapterInfoTextBlock" Text="章节: 未选择"/>
-            </StatusBarItem>
-            <Separator/>
-            <StatusBarItem>
-                <TextBlock x:Name="TokenUsageTextBlock" Text=""/>
-            </StatusBarItem>
-            <Separator/>
-            <StatusBarItem>
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="API: " VerticalAlignment="Center" Margin="0,0,4,0"/>
-                    <ComboBox x:Name="ProfileSwitcher" Width="160"
-                              SelectionChanged="ProfileSwitcher_SelectionChanged"/>
+        <!-- ==================== 状态栏 ==================== -->
+        <Border Grid.Row="4" Height="30" Padding="14,0"
+                Background="{DynamicResource Brush.StatusBar}"
+                BorderBrush="{DynamicResource Brush.Divider}" BorderThickness="0,1,0,0">
+            <Grid>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
+                    <TextBlock x:Name="StatusTextBlock" Text="就绪" VerticalAlignment="Center"
+                               FontSize="{StaticResource FontSize.Small}"
+                               Foreground="{DynamicResource Brush.TextMuted}"/>
+                    <TextBlock Text="·" Margin="8,0" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Brush.TextMuted}"/>
+                    <TextBlock x:Name="WordCountTextBlock" Text="字数: 0" VerticalAlignment="Center"
+                               FontSize="{StaticResource FontSize.Small}"/>
+                    <TextBlock Text="·" Margin="8,0" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Brush.TextMuted}"/>
+                    <TextBlock x:Name="ChapterInfoTextBlock" Text="章节: 未选择" VerticalAlignment="Center"
+                               FontSize="{StaticResource FontSize.Small}"/>
+                    <TextBlock Text="·" Margin="8,0" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Brush.TextMuted}"/>
+                    <TextBlock x:Name="TokenUsageTextBlock" Text="" VerticalAlignment="Center"
+                               FontSize="{StaticResource FontSize.Small}"
+                               Foreground="{DynamicResource Brush.TextMuted}"/>
                 </StackPanel>
-            </StatusBarItem>
-        </StatusBar>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <TextBlock Text="API" VerticalAlignment="Center" Margin="0,0,6,0"
+                               FontSize="{StaticResource FontSize.Small}"
+                               Foreground="{DynamicResource Brush.TextMuted}"/>
+                    <hc:ComboBox x:Name="ProfileSwitcher" Width="150" Height="26"
+                                 FontSize="{StaticResource FontSize.Small}" VerticalAlignment="Center"
+                                 Background="{DynamicResource Brush.InputBg}"
+                                 Foreground="{DynamicResource Brush.Text}"
+                                 BorderBrush="{DynamicResource Brush.Border}"
+                                 SelectionChanged="ProfileSwitcher_SelectionChanged"/>
+                </StackPanel>
+            </Grid>
+        </Border>
     </Grid>
-</Window>
+</hc:Window>

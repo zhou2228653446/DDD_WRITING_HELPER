@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
 using System.Text;
@@ -28,55 +29,29 @@ namespace 编辑器.Services
         {
         }
 
-        public async Task<AiResult> CompleteTextAsync(string prompt, CompletionOptions? options = null)
+        public async Task<AiResult> CompleteTextAsync(string prompt, string? systemPrompt = null, CompletionOptions? options = null)
         {
             options ??= new CompletionOptions();
             var model = !string.IsNullOrEmpty(options.Model) ? options.Model : _config.Model;
+
+            // 消息顺序固定为 system → user。system 段是跨请求最稳定的前缀，
+            // 放在最前面才能命中服务端的 prompt caching（长上下文项目省 token 也省延迟）。
+            var messages = new List<object>(2);
+            if (!string.IsNullOrWhiteSpace(systemPrompt))
+                messages.Add(new { role = "system", content = systemPrompt });
+            messages.Add(new { role = "user", content = prompt });
 
             var request = new
             {
                 model,
                 stream = true,
                 stream_options = new { include_usage = true },
-                messages = new[]
-                {
-                    new { role = "user", content = prompt }
-                },
+                messages,
                 max_tokens = options.MaxTokens,
                 temperature = options.Temperature
             };
 
             return await SendStreamingRequestAsync(request, options.CancellationToken, options.OnProgress);
-        }
-
-        public async Task<AiResult> PolishTextAsync(string text, string? style = null, CancellationToken ct = default, Action<int, int>? onProgress = null)
-        {
-            string prompt = $"请润色以下文本，使其更加流畅和生动{(string.IsNullOrEmpty(style) ? "" : $"，风格为：{style}")}：\n\n{text}";
-            return await CompleteTextAsync(prompt, new CompletionOptions { CancellationToken = ct, OnProgress = onProgress });
-        }
-
-        public async Task<AiResult> ContinueWritingAsync(string context, string? direction = null, CancellationToken ct = default, Action<int, int>? onProgress = null)
-        {
-            string prompt = $"基于以下内容继续写作，保持风格一致{(string.IsNullOrEmpty(direction) ? "" : $"，发展方向：{direction}")}：\n\n{context}";
-            return await CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000, CancellationToken = ct, OnProgress = onProgress });
-        }
-
-        public async Task<AiResult> GenerateCharacterAsync(string description, CancellationToken ct = default, Action<int, int>? onProgress = null)
-        {
-            string prompt = $"根据以下描述生成一个详细的角色设定，包括姓名、年龄、外貌、性格、背景故事等：\n\n{description}";
-            return await CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 1500, CancellationToken = ct, OnProgress = onProgress });
-        }
-
-        public async Task<AiResult> GeneratePlotAsync(string theme, string genre, CancellationToken ct = default, Action<int, int>? onProgress = null)
-        {
-            string prompt = $"基于主题'{theme}'和类型'{genre}'，生成一个详细的故事情节大纲，包括主要冲突、转折点、高潮和结局：";
-            return await CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 2000, CancellationToken = ct, OnProgress = onProgress });
-        }
-
-        public async Task<AiResult> GenerateDialogueAsync(string character1, string character2, string situation, CancellationToken ct = default, Action<int, int>? onProgress = null)
-        {
-            string prompt = $"生成{character1}和{character2}在以下情境中的对话：\n\n{situation}";
-            return await CompleteTextAsync(prompt, new CompletionOptions { MaxTokens = 1500, CancellationToken = ct, OnProgress = onProgress });
         }
 
         private async Task<AiResult> SendStreamingRequestAsync(object request, CancellationToken ct, Action<int, int>? onProgress)

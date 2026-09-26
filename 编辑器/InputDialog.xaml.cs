@@ -2,7 +2,7 @@ using System.Windows;
 
 namespace 编辑器
 {
-    public partial class InputDialog : Window
+    public partial class InputDialog : HandyControl.Controls.Window
     {
         public string? InputText { get; private set; }
 

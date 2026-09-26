@@ -48,16 +48,9 @@ namespace 编辑器
         public TextBox StyleTextBox => PolishStyleTextBox;
         public Button ApplyBtn => ApplyToContextBtn;
 
-        public Expander OutlineExpander => FullOutlineExpander;
-        public TextBox OutlineTextBox => FullOutlineTextBox;
-        public Expander ChapterExpander => ChapterOutlineExpander;
-        public TextBox ChapterTextBox => ChapterOutlineTextBox;
-        public Expander CharacterExpander => CharacterSettingsExpander;
-        public TextBox CharacterTextBox => CharacterSettingsTextBox;
-        public Expander BackgroundExpander => BackgroundSettingsExpander;
-        public TextBox BackgroundTextBox => BackgroundSettingsTextBox;
-        public Expander WritingStyleExpander => WritingStyleExp;
-        public TextBox WritingStyleTextBox => WritingStyleTb;
+        // 注：全文大纲 / 章节大纲 / 人物 / 背景 / 文风这五项设定已移到独立的
+        // SettingsWindow，本面板不再持有它们的控件——设定只留一个归属地，
+        // 避免两处编辑同一字段带来的同步问题。
 
         public Expander MemExpander => MemoryExpander;
         public TextBox MemoryTextBox => MemoryTb;
@@ -73,9 +66,11 @@ namespace 编辑器
         public Func<Task<AiResult?>>? OnGenCharacter { get; set; }
         public Func<Task<AiResult?>>? OnGenBackground { get; set; }
         public Func<Task<AiResult?>>? OnGenChapterOutline { get; set; }
+        public Func<Task<AiResult?>>? OnGenWritingStyle { get; set; }
         public Action? OnCopyResult { get; set; }
         public Action<Button>? OnApplyToContext { get; set; }
         public Action? OnStopAi { get; set; }
+        public Action? OnOpenSettings { get; set; }
 
         public AiPanelControl()
         {
@@ -129,6 +124,13 @@ namespace 编辑器
         {
             if (OnGenChapterOutline != null) await OnGenChapterOutline();
         }
+
+        private async void GenWritingStyle_Click(object sender, RoutedEventArgs e)
+        {
+            if (OnGenWritingStyle != null) await OnGenWritingStyle();
+        }
+
+        private void OpenSettings_Click(object sender, RoutedEventArgs e) => OnOpenSettings?.Invoke();
 
         private void CopyAiResult_Click(object sender, RoutedEventArgs e) => OnCopyResult?.Invoke();
 
@@ -205,6 +207,19 @@ namespace 编辑器
         }
 
         // 更新分离按钮状态
+        /// <summary>
+        /// 在面板头上显示当前生效的提示词方案（小说创作 / 学术论文 / 公文公告 / 自定义…）。
+        /// 方案决定 AI 的人设与输出取向，面板上不显示的话，用户切换后会觉得"AI 突然不对劲"。
+        /// </summary>
+        public void SetPresetName(string name, bool isBuiltIn)
+        {
+            if (string.IsNullOrWhiteSpace(name)) name = "默认";
+
+            PresetHintText.Text = "方案：" + name;
+            PresetHintText.ToolTip = $"当前使用「{name}」{(isBuiltIn ? "内置" : "自定义")}提示词方案。\n"
+                                   + "在「AI 设置 → 系统提示词」里切换或修改。";
+        }
+
         public void SetDetached(bool isDetached)
         {
             DetachBtn.Content = isDetached ? "📌 合并" : "📌 弹出";

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Threading;
 using System.Windows;
@@ -26,6 +27,10 @@ namespace 编辑器
         private SystemPromptStore _promptStore = null!;
         private ProjectSnapshotManager? _snapshotManager;
         private ChatLogger? _chatLogger;
+
+        /// <summary>「万能聊天」的多轮对话记忆（按项目）。换项目时整体替换。</summary>
+        private ChatSessionStore? _chatSession;
+
         private AiMemoryManager? _memoryManager;
         private readonly DispatcherTimer _notificationTimer = new();
         private CancellationTokenSource? _aiCts;
@@ -128,6 +133,7 @@ namespace 编辑器
             _aiPanel.OnApplyToContext = ApplyToContext;
             _aiPanel.OnSaveMemory = SaveMemory;
             _aiPanel.OnClearMemory = ClearMemory;
+            _aiPanel.OnClearChat = ClearChatSession;
             _aiPanel.OnStopAi = StopAi;
             _aiPanel.OnOpenSettings = ShowSettingsWindow;
         }
@@ -243,11 +249,7 @@ namespace 编辑器
                     };
 
                     SaveProject();
-                    _snapshotManager = new ProjectSnapshotManager(_currentProject.FilePath);
-                    _chatLogger = new ChatLogger(_currentProject.FilePath);
-                    _memoryManager = new AiMemoryManager(_currentProject.FilePath);
-                    _memoryManager.Load();
-                    _aiPanel.MemoryTextBox.Text = _memoryManager.GetRawMemory();
+                    AttachProjectServices();
                     RefreshProjectView();
                     SyncAiContextFromProject();
                     RefreshSnapshotList();
@@ -283,11 +285,7 @@ namespace 编辑器
 
                     // 清除所有已打开的标签页
                     EditorTabControl.Items.Clear();
-                    _snapshotManager = new ProjectSnapshotManager(_currentProject.FilePath);
-                    _chatLogger = new ChatLogger(_currentProject.FilePath);
-                    _memoryManager = new AiMemoryManager(_currentProject.FilePath);
-                    _memoryManager.Load();
-                    _aiPanel.MemoryTextBox.Text = _memoryManager.GetRawMemory();
+                    AttachProjectServices();
                     RefreshProjectView();
                     SyncAiContextFromProject();
                     RefreshSnapshotList();
@@ -654,7 +652,7 @@ namespace 编辑器
                         CancellationToken = _aiCts!.Token,
                         OnProgress = _tokenProgress
                     }));
-            if (result != null)
+            if (IsUsable(result))
             {
                 chapter.Content += "\n\n" + result.Text;
                 _aiPanel.ResultTextBox.Text = result.Text;
@@ -706,15 +704,34 @@ namespace 编辑器
                 ? "\n请润色这段正文。"
                 : $"\n请按以下要求润色：{combinedStyle}";
 
+            // ★ 输出上限按原文长度给。润色是**整章覆盖**（见下 result → chapter.Content），
+            //   写死 1000 时，一份 3000 字的章节会被拦腰截断，然后拿这半截去覆盖全文 ——
+            //   这是会丢内容的，靠"润色前备份"快照捞回来属于补救而不是设计。
+            //   续写/人名/聊天都是追加，短一点只是少写几句，不构成数据损失，故不在此列。
             var result = await CallAiFunctionWithResult(async (apiService) =>
                 await apiService.CompleteTextAsync(userPrompt, systemPrompt,
                     new CompletionOptions
                     {
+                        MaxTokens = CompletionOptions.BudgetForRewrite(chapter.Content),
                         CancellationToken = _aiCts!.Token,
                         OnProgress = _tokenProgress
                     }));
-            if (result != null)
+            if (IsUsable(result))
             {
+                if (result.Truncated)
+                {
+                    // 服务端明确回了 finish_reason=length：正文不完整，**不覆盖原文**。
+                    // 结果留在回复框里，用户想用可以自己复制；原文保持不动。
+                    _aiPanel.ResultTextBox.Text = result.Text;
+                    _chatLogger?.Log("润色(被截断未替换)", combinedStyle ?? "默认", result.Text);
+                    MessageBox.Show(
+                        "这次润色被输出上限截断了，**没有替换原文**（已保留原标题内容）。\n\n"
+                        + "结果已放在右侧「AI 回复」框里，可以自行复制取用。\n"
+                        + "建议：整章润色改成按段落做，或先把章节拆分后再润色。",
+                        "润色结果不完整", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return result;
+                }
+
                 chapter.Content = result.Text;
                 _aiPanel.ResultTextBox.Text = result.Text;
                 _chatLogger?.Log("润色", combinedStyle ?? "默认", result.Text);
@@ -743,7 +760,7 @@ namespace 编辑器
             var result = await CallAiFunctionWithResult(async (apiService) =>
                 await apiService.CompleteTextAsync(userPrompt, systemPrompt,
                     new CompletionOptions { CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
-            if (result != null)
+            if (IsUsable(result))
             {
                 chapter.Content += $"\n\n【生成的角色名 — {DateTime.Now:HH:mm}】\n{result.Text}\n";
                 _aiPanel.ResultTextBox.Text = result.Text;
@@ -754,6 +771,19 @@ namespace 编辑器
             return result;
         }
 
+        /// <summary>
+        /// 万能聊天。与其余功能最大的区别：**它是连续对话** —— 会把此前聊过的轮次
+        /// 一并带上，AI 因此记得你上一句说了什么。
+        ///
+        /// 关于"上下文"的两点事实（容易误解，写在这免得又当成 bug 去查）：
+        /// 1. 大模型 API 是**无状态**的，服务端不记得上一句话。所谓"连续对话"，
+        ///    就是客户端每次请求都把完整历史重发一遍 —— 每次都要"重读"是协议决定的，
+        ///    不可避免；真正会出错的是**压根没带历史**（本方法此前就是这样，
+        ///    所以每问一句都等于开了一个全新对话）。
+        /// 2. 当前章节正文每轮都带，且只带一份（历史里存的是用户的原始输入，
+        ///    不含正文包装）—— 这样既保证 AI 看到的是最新章节，又不会在
+        ///    上下文里出现两份正文。你改完正文再问，AI 用的是新的。
+        /// </summary>
         private async Task<AiResult?> ChatAsync()
         {
             var input = _aiPanel.InputTextBox.Text.Trim();
@@ -771,13 +801,17 @@ namespace 编辑器
                 ? AiPrompts.Section($"当前章节（第{chapter.ChapterNumber}章 {chapter.Title}）", chapter.Content) + "\n" + input
                 : input;
 
+            // 历史只往回带已经聊成的轮次；失败/取消的轮次不进历史（见下方记录处）。
+            var history = _chatSession?.BuildHistory();
+
             if (chapter != null)
                 TakeSnapshot("万能写作前备份");
 
             var result = await CallAiFunctionWithResult(async (apiService) =>
                 await apiService.CompleteTextAsync(userPrompt, systemPrompt,
-                    new CompletionOptions { CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
-            if (result != null)
+                    new CompletionOptions { CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress },
+                    history));
+            if (IsUsable(result))
             {
                 if (chapter != null)
                 {
@@ -787,6 +821,12 @@ namespace 编辑器
                 _aiPanel.ResultTextBox.Text = result.Text;
                 _chatLogger?.Log("万能聊天", input, result.Text);
                 RecordAiInteraction("万能聊天", input, result.Text);
+
+                // ★ 记进历史的是**用户的原始输入**，不是包了正文的 userPrompt ——
+                //   正文每轮都会重新带一份，历史里再存一份等于白烧一遍 token，
+                //   而且章节改过之后，历史里那份旧正文还会跟新正文打架。
+                _chatSession?.Add(input, result.Text);
+                RefreshChatMemoryInfo();
             }
             return result;
         }
@@ -831,7 +871,7 @@ namespace 编辑器
             }
 
             var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
-            if (result != null)
+            if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.FullOutline, result.Text);
                 _aiPanel.ResultTextBox.Text = result.Text;
@@ -865,7 +905,7 @@ namespace 编辑器
             }
 
             var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
-            if (result != null)
+            if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.CharacterSettings, result.Text);
                 _aiPanel.ResultTextBox.Text = result.Text;
@@ -899,7 +939,7 @@ namespace 编辑器
             }
 
             var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.4, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
-            if (result != null)
+            if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.BackgroundSettings, result.Text);
                 _aiPanel.ResultTextBox.Text = result.Text;
@@ -937,7 +977,7 @@ namespace 编辑器
             }
 
             var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
-            if (result != null)
+            if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.ChapterOutline, result.Text);
                 _aiPanel.ResultTextBox.Text = result.Text;
@@ -979,7 +1019,7 @@ namespace 编辑器
             }
 
             var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 1500, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnProgress = _tokenProgress }));
-            if (result != null)
+            if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.WritingStyle, result.Text);
                 _aiPanel.ResultTextBox.Text = result.Text;
@@ -1469,6 +1509,18 @@ namespace 编辑器
             {
                 UpdateStatus("正在调用AI...");
                 var aiResult = await function(_apiService);
+
+                // Service 不抛异常，失败也包成 AiResult 返回 —— 在这里统一收口：
+                // 让用户看得见原因，同时把它标成"不可写回"，免得调用方拿去覆盖正文。
+                if (!aiResult.IsUsable)
+                {
+                    _aiPanel.ResultTextBox.Text = aiResult.Text;
+                    UpdateStatus(aiResult.IsCanceled ? "已停止" : "AI调用失败");
+                    if (!aiResult.IsCanceled)
+                        MessageBox.Show(aiResult.Text, "AI 调用失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return aiResult;
+                }
+
                 ShowTokenUsage(aiResult);
                 return aiResult;
             }
@@ -1494,6 +1546,21 @@ namespace 编辑器
             }
         }
 
+        /// <summary>
+        /// 结果能不能拿来写回正文 / 设定。
+        ///
+        /// ★ 两个 Service 把**失败与取消**也包成 AiResult 返回（Text 里是"API调用失败: …"
+        /// 这类文案），并不抛异常。所以"结果非 null"从来就不等于成功 —— 所有把
+        /// result.Text 写回章节正文或设定的地方，都必须先过这一道；否则一次 401
+        /// 就能把整章正文、整份大纲、整个人物设定换成一行错误说明，而且还要靠
+        /// 版本历史去捞回来。
+        /// </summary>
+        /// <remarks>
+        /// 带 <see cref="NotNullWhenAttribute"/> 是必要的：不加的话编译器无法从
+        /// `if (IsUsable(result))` 推出 result 非空，9 处写回点会各报一个 CS8602。
+        /// </remarks>
+        private static bool IsUsable([NotNullWhen(true)] AiResult? result) => result != null && result.IsUsable;
+
         private void ShowTokenUsage(AiResult result)
         {
             if (result.TotalTokens > 0)
@@ -1503,6 +1570,51 @@ namespace 编辑器
         private void StopAi()
         {
             _aiCts?.Cancel();
+        }
+
+        /// <summary>
+        /// 挂接「随项目走」的服务：快照、对话日志、AI 记忆、对话记忆。
+        ///
+        /// 新建项目与打开项目两条路径都必须调它 —— 以前是各写一遍，
+        /// 漏掉一处的后果是"打开的项目没有对话记忆"这类只在特定路径复现的怪问题。
+        /// </summary>
+        private void AttachProjectServices()
+        {
+            if (_currentProject == null) return;
+
+            _snapshotManager = new ProjectSnapshotManager(_currentProject.FilePath);
+            _chatLogger = new ChatLogger(_currentProject.FilePath);
+            _memoryManager = new AiMemoryManager(_currentProject.FilePath);
+            _memoryManager.Load();
+            _aiPanel.MemoryTextBox.Text = _memoryManager.GetRawMemory();
+
+            _chatSession = new ChatSessionStore(_currentProject.FilePath);
+            RefreshChatMemoryInfo();
+        }
+
+        /// <summary>把对话记忆的轮数刷到 AI 面板上（让用户看得见"它还记不记得"）。</summary>
+        private void RefreshChatMemoryInfo()
+        {
+            _aiPanel.SetChatMemoryInfo(_chatSession?.RoundCount ?? 0, ChatSessionStore.MaxRounds);
+        }
+
+        private void ClearChatSession()
+        {
+            if (_chatSession == null || _chatSession.IsEmpty)
+            {
+                ShowNotification("当前没有对话记录");
+                return;
+            }
+
+            var r = MessageBox.Show(
+                $"确定清空与 AI 的对话记忆吗？（当前 {_chatSession.RoundCount} 轮）\n"
+                + "清空后 AI 不再记得之前聊过的内容，已写进章节的正文不受影响。",
+                "确认清空", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (r != MessageBoxResult.Yes) return;
+
+            _chatSession.Clear();
+            RefreshChatMemoryInfo();
+            ShowNotification("对话记忆已清空");
         }
 
         private void RefreshProjectView()

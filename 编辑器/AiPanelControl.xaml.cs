@@ -57,6 +57,9 @@ namespace 编辑器
         public Action? OnSaveMemory { get; set; }
         public Action? OnClearMemory { get; set; }
 
+        /// <summary>清空「万能聊天」的对话记忆（MainWindow 负责落盘与提示）。</summary>
+        public Action? OnClearChat { get; set; }
+
         // MainWindow 的回调（AI 功能委托给 MainWindow 处理）
         public Func<Task<AiResult?>>? OnContinueWriting { get; set; }
         public Func<Task<AiResult?>>? OnPolishText { get; set; }
@@ -220,6 +223,21 @@ namespace 编辑器
                                    + "在「AI 设置 → 系统提示词」里切换或修改。";
         }
 
+        /// <summary>
+        /// 刷「万能聊天」的对话记忆轮数。
+        ///
+        /// 为什么要在界面上显示轮数：大模型服务端不保存任何会话状态，"AI 记得前文"
+        /// 完全靠客户端每轮把历史重发一遍。轮数看不见时，用户分不清
+        /// "AI 把刚才那句话忘了" 和 "本来就没记"。
+        /// </summary>
+        public void SetChatMemoryInfo(int rounds, int maxRounds)
+        {
+            ChatMemoryText.Text = rounds <= 0
+                ? "聊天记忆：暂无 —— 用「万能聊天」问一句就记一句"
+                : $"聊天记忆：{rounds} / {maxRounds} 轮（超出丢最早的）";
+            ChatMemoryText.ToolTip = "只对「万能聊天」生效；续写、润色、生成类都是一次性任务，不带历史。";
+        }
+
         public void SetDetached(bool isDetached)
         {
             DetachBtn.Content = isDetached ? "📌 合并" : "📌 弹出";
@@ -242,6 +260,7 @@ namespace 编辑器
 
         private void SaveMemory_Click(object sender, RoutedEventArgs e) => OnSaveMemory?.Invoke();
         private void ClearMemory_Click(object sender, RoutedEventArgs e) => OnClearMemory?.Invoke();
+        private void ClearChat_Click(object sender, RoutedEventArgs e) => OnClearChat?.Invoke();
 
         // ---- 章节选择器 ----
 

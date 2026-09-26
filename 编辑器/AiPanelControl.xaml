@@ -196,6 +196,34 @@
                             Content="停止" Click="StopAi_Click" Visibility="Collapsed"/>
                 </WrapPanel>
 
+                <!--
+                    万能聊天的对话记忆。大模型 API 是无状态的，"连续对话"靠客户端每轮
+                    把历史重发一遍实现；轮数不显示出来，用户就分不清"AI 忘了"和"本来没记"。
+                    只对「万能聊天」有意义，其余功能是一次性任务，不写历史。
+                -->
+                <Grid Margin="0,8,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="ChatMemoryText" Grid.Column="0"
+                               VerticalAlignment="Center" TextWrapping="Wrap"
+                               FontSize="{StaticResource FontSize.Caption}"
+                               Foreground="{DynamicResource Brush.TextMuted}"
+                               Text="聊天记忆：暂无"/>
+                    <!--
+                        ★ 用 Btn.Chip 而不是 Btn.Tiny：Btn.Tiny 派生自 Btn.Icon，
+                        字体是图标字体（Segoe Fluent Icons）且宽度写死 26 ——
+                        装中文会渲染成一排方框，还会被宽度裁掉。
+                        图标字体只能放 &#xE7xx; 这类码点。
+                    -->
+                    <Button x:Name="ClearChatBtn" Grid.Column="1" Style="{StaticResource Btn.Chip}" Content="清空对话"
+                            Margin="6,0,0,0" VerticalAlignment="Center"
+                            FontFamily="{StaticResource Font.Ui}"
+                            ToolTip="清除与 AI 的对话记忆（已经写进章节的正文不受影响）"
+                            Click="ClearChat_Click"/>
+                </Grid>
+
                 <Border Style="{StaticResource DividerLine}" Margin="0,14,0,0"/>
 
                 <!-- ============ AI 记忆 ============ -->

@@ -29,23 +29,30 @@ namespace 编辑器.Services
             ApiProviders.ApplyExtraHeaders(_httpClient.DefaultRequestHeaders, config);
         }
 
-        public async Task<AiResult> CompleteTextAsync(string prompt, string? systemPrompt = null, CompletionOptions? options = null)
+        public async Task<AiResult> CompleteTextAsync(
+            string prompt,
+            string? systemPrompt = null,
+            CompletionOptions? options = null,
+            IReadOnlyList<ChatMessage>? history = null)
         {
             options ??= new CompletionOptions();
             var model = !string.IsNullOrEmpty(options.Model) ? options.Model : _config.Model;
 
             // 注意：Anthropic 的 system 是**顶层字段**，不是 messages 里的一条消息
             //（messages 只接受 user / assistant 两种 role，塞 system 进去会被 400 拒绝）。
+            // 另外 Anthropic 要求 messages 以 user 开头、且同角色不能连续 ——
+            // 历史由 ChatSessionStore 按「一问一答」成对维护，天然满足。
+            var messages = new List<object>(1 + (history?.Count ?? 0));
+            ChatMessage.AppendTo(messages, history);
+            messages.Add(new { role = "user", content = prompt });
+
             var request = new Dictionary<string, object?>
             {
                 ["model"] = model,
                 ["stream"] = true,
                 ["max_tokens"] = options.MaxTokens,
                 ["temperature"] = options.Temperature,
-                ["messages"] = new[]
-                {
-                    new { role = "user", content = prompt }
-                }
+                ["messages"] = messages
             };
 
             if (!string.IsNullOrWhiteSpace(systemPrompt))
@@ -66,7 +73,11 @@ namespace 编辑器.Services
                 if (!response.IsSuccessStatusCode)
                 {
                     var errBody = await response.Content.ReadAsStringAsync(ct);
-                    return new AiResult { Text = $"API错误 ({(int)response.StatusCode}): {errBody}" };
+                    return new AiResult
+                    {
+                        Text = $"API错误 ({(int)response.StatusCode}): {ApiErrors.Describe(response.StatusCode, errBody)}",
+                        IsError = true
+                    };
                 }
 
                 using var stream = await response.Content.ReadAsStreamAsync(ct);
@@ -74,6 +85,7 @@ namespace 编辑器.Services
 
                 var sb = new StringBuilder();
                 int inputTokens = 0, outputTokens = 0;
+                bool truncated = false;
 
                 while (true)
                 {
@@ -126,8 +138,16 @@ namespace 编辑器.Services
                             }
                             break;
 
-                        // message_delta → 包含最终 output_tokens
+                        // message_delta → 包含最终 output_tokens 与 stop_reason
                         case "message_delta":
+                            if (jsonObj.TryGetProperty("delta", out var msgDelta) &&
+                                msgDelta.TryGetProperty("stop_reason", out var sr) &&
+                                sr.ValueKind == JsonValueKind.String)
+                            {
+                                // "max_tokens" = 撞到上限被截断，上层据此决定要不要覆盖原文。
+                                truncated = string.Equals(sr.GetString(), "max_tokens", StringComparison.OrdinalIgnoreCase);
+                            }
+
                             if (jsonObj.TryGetProperty("usage", out var deltaUsage) &&
                                 deltaUsage.TryGetProperty("output_tokens", out var ot))
                             {
@@ -147,16 +167,17 @@ namespace 编辑器.Services
                     Text = sb.ToString(),
                     InputTokens = inputTokens,
                     OutputTokens = outputTokens,
-                    TotalTokens = inputTokens + outputTokens
+                    TotalTokens = inputTokens + outputTokens,
+                    Truncated = truncated
                 };
             }
             catch (OperationCanceledException)
             {
-                return new AiResult { Text = "[已停止生成]" };
+                return new AiResult { Text = "[已停止生成]", IsCanceled = true };
             }
             catch (Exception ex)
             {
-                return new AiResult { Text = $"API调用失败: {ex.Message}" };
+                return new AiResult { Text = $"API调用失败: {ex.Message}", IsError = true };
             }
         }
     }

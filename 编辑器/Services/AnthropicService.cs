@@ -21,16 +21,12 @@ namespace 编辑器.Services
                 throw new ArgumentException("API Key 不能为空", nameof(config));
 
             _httpClient = new HttpClient();
-            // Mimo Token Plan 使用 api-key 头认证，不发送 anthropic-version
-            if (config.Provider == KnownProviders.Mimo)
-            {
-                _httpClient.DefaultRequestHeaders.Add("api-key", config.ApiKey);
-            }
-            else
-            {
-                _httpClient.DefaultRequestHeaders.Add("x-api-key", config.ApiKey);
-                _httpClient.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
-            }
+            // 认证头由 ApiProviders 按服务商决定：
+            // Anthropic 官方是 x-api-key + anthropic-version，
+            // 小米 Mimo Token Plan 是 api-key 且不带 anthropic-version，
+            // 中转服务也可能要求 Authorization: Bearer。
+            ApiProviders.ApplyHeaders(_httpClient.DefaultRequestHeaders, config);
+            ApiProviders.ApplyExtraHeaders(_httpClient.DefaultRequestHeaders, config);
         }
 
         public async Task<AiResult> CompleteTextAsync(string prompt, string? systemPrompt = null, CompletionOptions? options = null)

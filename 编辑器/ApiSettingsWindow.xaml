@@ -18,8 +18,9 @@
         <hc:TabControl x:Name="ModeTabControl" Grid.Row="0" SelectionChanged="ModeTabControl_SelectionChanged">
             <!-- 表单编辑 -->
             <hc:TabItem Header="表单编辑">
-                <Grid Margin="5">
+                <Grid Margin="5" Height="468">
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
@@ -53,25 +54,75 @@
                                 Click="DeleteProfile_Click"/>
                     </Grid>
 
-                    <!-- Provider 选择 -->
-                    <TextBlock Grid.Row="2" Text="AI提供商" FontWeight="Bold" Margin="0,0,0,5"/>
-                    <hc:ComboBox x:Name="ProviderComboBox" Grid.Row="3" Margin="0,0,0,8"
+                    <!-- AI 服务商：选中即自动填好地址 / 协议 / 认证方式 / 常用模型 -->
+                    <TextBlock Grid.Row="2" Text="AI 服务商" FontWeight="Bold" Margin="0,0,0,5"/>
+                    <hc:ComboBox x:Name="ProviderComboBox" Grid.Row="3" Margin="0,0,0,6"
                               SelectionChanged="ProviderComboBox_SelectionChanged"/>
 
+                    <!-- 该服务商的接入参数速览（协议 / 认证 / 地址申请入口） -->
+                    <Border Grid.Row="4" Margin="0,0,0,10" Padding="10,6"
+                            CornerRadius="{StaticResource Radius.Sm}"
+                            Background="{DynamicResource Brush.SubtleBg}"
+                            BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="ProviderHintText" Grid.Column="0"
+                                       TextWrapping="Wrap" VerticalAlignment="Center"
+                                       FontSize="12" Foreground="{DynamicResource Brush.TextMuted}"/>
+                            <Button x:Name="ProviderKeyBtn" Grid.Column="1" Margin="10,0,0,0"
+                                    Content="获取 API Key" Height="26" Padding="10,0" FontSize="12"
+                                    VerticalAlignment="Center"
+                                    Click="OpenProviderConsole_Click"/>
+                        </Grid>
+                    </Border>
+
                     <!-- API URL -->
-                    <TextBlock Grid.Row="4" Text="API地址" FontWeight="Bold" Margin="0,0,0,5"/>
-                    <hc:TextBox x:Name="ApiUrlTextBox" Grid.Row="5" Margin="0,0,0,8" FontSize="13"/>
+                    <TextBlock Grid.Row="5" Text="API 地址" FontWeight="Bold" Margin="0,0,0,5"/>
+                    <hc:TextBox x:Name="ApiUrlTextBox" Grid.Row="6" Margin="0,0,0,8" FontSize="13"
+                                TextChanged="ApiUrlTextBox_TextChanged"/>
 
-                    <!-- Model -->
-                    <TextBlock Grid.Row="6" Text="模型名称" FontWeight="Bold" Margin="0,0,0,5"/>
-                    <hc:TextBox x:Name="ModelTextBox" Grid.Row="7" Margin="0,0,0,8" FontSize="13"/>
+                    <!-- Model：左边自由输入，右边常用型号快捷选择 -->
+                    <Grid Grid.Row="7" Margin="0,0,0,5">
+                        <TextBlock Text="模型名称" FontWeight="Bold"/>
+                        <TextBlock Text="可直接输入，也可从右侧下拉里挑"
+                                   FontSize="11" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                   Foreground="{DynamicResource Brush.TextMuted}"/>
+                    </Grid>
+                    <Grid Grid.Row="8" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <hc:TextBox x:Name="ModelTextBox" Grid.Column="0" Margin="0,0,6,0" FontSize="13"/>
+                        <hc:ComboBox x:Name="ModelPresetComboBox" Grid.Column="1" Width="190"
+                                     hc:InfoElement.Placeholder="常用型号"
+                                     SelectionChanged="ModelPresetComboBox_SelectionChanged"/>
+                    </Grid>
 
-                    <!-- API Key -->
-                    <TextBlock Grid.Row="8" Text="API Key" FontWeight="Bold" Margin="0,0,0,5"/>
-                    <hc:PasswordBox x:Name="ApiKeyPasswordBox" Grid.Row="9" Margin="0,0,0,10" FontSize="13"/>
+                    <!-- 认证方式（留空=自动） + API Key -->
+                    <Grid Grid.Row="9" Margin="0,0,0,5">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="200"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="认证方式" FontWeight="Bold"/>
+                        <TextBlock Grid.Column="1" Text="API Key" FontWeight="Bold"/>
+                    </Grid>
+                    <Grid Grid.Row="10" Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="200"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <hc:ComboBox x:Name="AuthComboBox" Grid.Column="0" Margin="0,0,6,0"
+                                     SelectionChanged="AuthComboBox_SelectionChanged"/>
+                        <hc:PasswordBox x:Name="ApiKeyPasswordBox" Grid.Column="1" FontSize="13"/>
+                    </Grid>
 
                     <!-- 按钮 -->
-                    <StackPanel Grid.Row="11" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <StackPanel Grid.Row="12" Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button Name="TestButton" Content="测试连接" Width="100" Height="32" Margin="0,0,10,0"
                                 Click="TestConnection_Click"/>
                         <Button Content="确定" Width="80" Height="32" Margin="0,0,10,0"

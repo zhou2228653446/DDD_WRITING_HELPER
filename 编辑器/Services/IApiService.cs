@@ -35,34 +35,29 @@ namespace 编辑器.Services
         public Action<int, int>? OnProgress { get; set; }
     }
 
-    public static class KnownProviders
-    {
-        public const string OpenAI = "OpenAI";
-        public const string DeepSeek = "DeepSeek";
-        public const string Claude = "Claude";
-        public const string Mimo = "Mimo";
-        public const string SiliconFlow = "SiliconFlow";
-        public const string Custom = "Custom";
-
-        public static (string Name, string DefaultUrl, string DefaultModel)[] All => new[]
-        {
-            (OpenAI, "https://api.openai.com/v1/chat/completions", "gpt-3.5-turbo"),
-            (DeepSeek, "https://api.deepseek.com/v1/chat/completions", "deepseek-chat"),
-            (Claude, "https://api.anthropic.com/v1/messages", "claude-3-haiku-20240307"),
-            (Mimo, "https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages", "mimo-v2.5-pro"),
-            (SiliconFlow, "https://api.siliconflow.cn/v1/chat/completions", "deepseek-llm-67b-chat"),
-            (Custom, "", ""),
-        };
-
-        public static bool UsesAnthropicFormat(string provider) =>
-            provider is Claude or Mimo;
-    }
-
     public class ApiConfig
     {
         public string ApiKey { get; set; } = "";
+
         public string ApiUrl { get; set; } = "https://api.openai.com/v1/chat/completions";
-        public string Model { get; set; } = "gpt-3.5-turbo";
-        public string Provider { get; set; } = KnownProviders.OpenAI;
+
+        /// <summary>
+        /// 模型名。**不要改大小写** —— 部分服务商的模型名区分大小写
+        /// （硅基流动的 deepseek-ai/DeepSeek-V3、MiniMax 的 MiniMax-Text-01），
+        /// 早期的代码在这里做了 ToLowerInvariant()，会直接把请求打成 404。
+        /// </summary>
+        public string Model { get; set; } = "gpt-4o-mini";
+
+        /// <summary>
+        /// 服务商标识（<see cref="ProviderPreset.Id"/>，如 deepseek / anthropic / openai）。
+        /// 旧配置文件里存的是显示名（OpenAI / DeepSeek / Claude），查找时同样认。
+        /// </summary>
+        public string Provider { get; set; } = ApiProviders.IdOpenAi;
+
+        /// <summary>
+        /// 认证方式覆盖，空表示按服务商预设自动决定。
+        /// 取值：空 / "Bearer" / "XApiKey" / "ApiKeyHeader"。
+        /// </summary>
+        public string AuthOverride { get; set; } = "";
     }
 }

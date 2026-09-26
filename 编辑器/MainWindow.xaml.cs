@@ -181,10 +181,13 @@ namespace 编辑器
             var active = _profileManager.ActiveProfile;
             if (active != null && !string.IsNullOrWhiteSpace(active.ApiKey))
             {
-                _apiService = KnownProviders.UsesAnthropicFormat(active.Provider)
-                    ? new AnthropicService(active)
-                    : new OpenAIService(active);
-                UpdateStatus($"API: {_profileManager.ActiveProfileName} ({active.Provider} / {active.Model})");
+                // 协议与认证方式都交给 ApiProviders 判定，这里不再关心是 OpenAI 还是
+                // Anthropic 格式、Key 放在哪个头里。
+                _apiService = ApiProviders.CreateService(active);
+
+                var preset = ApiProviders.Find(active.Provider);
+                UpdateStatus($"API: {_profileManager.ActiveProfileName}"
+                             + $"（{preset?.Name ?? "自定义"} / {active.Model}）");
             }
             else
             {

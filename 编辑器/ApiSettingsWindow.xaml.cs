@@ -17,6 +17,7 @@ namespace 编辑器
         private readonly ApiProfileManager _profileManager;
         private readonly SystemPromptStore? _promptStore;
         private bool _isSwitchingProfile; // 防止切换时触发重复加载
+        private bool _isSwitchingModel;   // 防止程序改写模型下拉时回填到输入框
 
         // ---- 系统提示词编辑页状态 ----
         private readonly List<PromptItem> _promptItems = new();
@@ -40,9 +41,20 @@ namespace 编辑器
             _profileManager = profileManager;
             _promptStore = promptStore;
 
-            ProviderComboBox.ItemsSource = KnownProviders.All
-                .Select(p => new ProviderOption(p.Name, p.DefaultUrl, p.DefaultModel))
+            // 服务商预设：地址 / 协议 / 认证头 / 常用模型 / 申请入口都已内置，
+            // 用户只需要选一个服务商 + 粘一个 Key。
+            ProviderComboBox.ItemsSource = ApiProviders.All
+                .OrderBy(p => Array.IndexOf(ApiProviders.GroupOrder, p.Group))
                 .ToList();
+
+            AuthComboBox.ItemsSource = new List<AuthChoice>
+            {
+                new("", "自动（推荐）"),
+                new("Bearer", ApiProviders.AuthLabel(ApiAuth.Bearer)),
+                new("XApiKey", ApiProviders.AuthLabel(ApiAuth.XApiKey)),
+                new("ApiKeyHeader", ApiProviders.AuthLabel(ApiAuth.ApiKeyHeader)),
+            };
+            AuthComboBox.SelectedIndex = 0;
 
             RefreshProfileList();
             LoadProfileToUI(_profileManager.ActiveProfile);
@@ -83,25 +95,28 @@ namespace 编辑器
 
             _isSwitchingProfile = true;
 
-            // 选中对应的 Provider
-            var match = ProviderComboBox.Items.OfType<ProviderOption>()
-                .FirstOrDefault(p => p.Name == config.Provider);
-            ProviderComboBox.SelectedItem = match ?? ProviderComboBox.Items.OfType<ProviderOption>()
-                .First(p => p.Name == KnownProviders.Custom);
+            // 选中对应的服务商（认 Id，也认旧配置里的显示名）
+            ProviderComboBox.SelectedItem = ApiProviders.Find(config.Provider) ?? ApiProviders.Custom;
 
             ApiUrlTextBox.Text = config.ApiUrl;
             ModelTextBox.Text = config.Model;
             ApiKeyPasswordBox.Password = config.ApiKey;
+
+            RefreshAuthChoices(config.AuthOverride);
+            RefreshProviderDependent();
 
             _isSwitchingProfile = false;
         }
 
         private ApiConfig CurrentFormConfig => new()
         {
-            Provider = (ProviderComboBox.SelectedItem as ProviderOption)?.Name ?? KnownProviders.OpenAI,
+            Provider = (ProviderComboBox.SelectedItem as ProviderPreset)?.Id ?? ApiProviders.IdOpenAi,
             ApiUrl = ApiUrlTextBox.Text.Trim(),
-            Model = ModelTextBox.Text.Trim().ToLowerInvariant(),
+            // ⚠ 不要 ToLowerInvariant：硅基流动的 deepseek-ai/DeepSeek-V3、
+            //   MiniMax 的 MiniMax-Text-01 都区分大小写，降成小写会直接 404。
+            Model = ModelTextBox.Text.Trim(),
             ApiKey = ApiKeyPasswordBox.Password,
+            AuthOverride = (AuthComboBox.SelectedItem as AuthChoice)?.Value ?? "",
         };
 
         private void ProfileComboBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -176,17 +191,136 @@ namespace 编辑器
             RefreshProfileList();
         }
 
-        // ---- Provider 选择联动 ----
+        // ---- 服务商联动 ----
 
         private void ProviderComboBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
         {
             if (_isSwitchingProfile) return;
-            if (ProviderComboBox.SelectedItem is ProviderOption option && option.Name != KnownProviders.Custom)
+            if (ProviderComboBox.SelectedItem is not ProviderPreset preset) return;
+
+            if (!preset.IsCustom)
             {
-                // 切换提供商时自动填充 URL 和 Model
-                ApiUrlTextBox.Text = option.DefaultUrl;
-                ModelTextBox.Text = option.DefaultModel;
+                // 选中预设时把地址与默认模型一次性带出来，用户不用查文档
+                ApiUrlTextBox.Text = preset.Endpoint;
+                ModelTextBox.Text = preset.DefaultModel;
             }
+
+            // 换服务商 → 认证方式回到「自动」，避免上一家的手工选择残留
+            RefreshAuthChoices(explicitValue: null);
+            RefreshProviderDependent();
+        }
+
+        private void ModelPresetComboBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        {
+            if (_isSwitchingModel) return;
+            if (ModelPresetComboBox.SelectedItem is string model && !string.IsNullOrWhiteSpace(model))
+            {
+                ModelTextBox.Text = model;
+                ModelTextBox.CaretIndex = ModelTextBox.Text.Length;
+            }
+        }
+
+        private void AuthComboBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        {
+            RefreshProviderHint();
+        }
+
+        private void ApiUrlTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            // 地址是协议判定的依据（出现 /messages 即按 Anthropic 处理），改了要跟着刷新提示
+            if (_isSwitchingProfile) return;
+            RefreshProviderHint();
+        }
+
+        private void OpenProviderConsole_Click(object sender, RoutedEventArgs e)
+        {
+            var url = (ProviderComboBox.SelectedItem as ProviderPreset)?.ConsoleUrl;
+            if (string.IsNullOrWhiteSpace(url)) return;
+
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = url,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"无法打开链接：\n{url}\n{ex.Message}", "提示",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+
+        /// <summary>认证方式下拉复位/指定。explicitValue 为 null 表示回到「自动」。</summary>
+        private void RefreshAuthChoices(string? explicitValue)
+        {
+            var want = explicitValue ?? "";
+            var target = AuthComboBox.Items.OfType<AuthChoice>()
+                .FirstOrDefault(c => string.Equals(c.Value, want, StringComparison.OrdinalIgnoreCase));
+            AuthComboBox.SelectedItem = target ?? AuthComboBox.Items.OfType<AuthChoice>().First();
+        }
+
+        /// <summary>服务商变了要连带刷新的东西：常用模型下拉 + 参数速览。</summary>
+        private void RefreshProviderDependent()
+        {
+            RefreshModelSuggestions();
+            RefreshProviderHint();
+        }
+
+        private void RefreshModelSuggestions()
+        {
+            var preset = ProviderComboBox.SelectedItem as ProviderPreset;
+            var models = preset?.Models ?? (IReadOnlyList<string>)Array.Empty<string>();
+
+            _isSwitchingModel = true;
+            ModelPresetComboBox.ItemsSource = models.ToList();
+            ModelPresetComboBox.SelectedIndex = -1;
+            ModelPresetComboBox.IsEnabled = models.Count > 0;
+            ModelPresetComboBox.ToolTip = models.Count > 0
+                ? "点一个填进左边的模型名称；也可以直接手写任意模型名（以服务商文档为准）。"
+                : "该服务商没有内置常用型号，请直接填写模型名称。";
+            _isSwitchingModel = false;
+        }
+
+        /// <summary>
+        /// 刷新「协议 / 认证 / 注意事项 / 申请入口」这一栏。
+        /// 用的是**当前表单实际会怎么发请求**，而不是预设的声明 ——
+        /// 用户可能改过地址、也可能手工指定过认证方式，提示必须跟得上。
+        /// </summary>
+        private void RefreshProviderHint()
+        {
+            if (ProviderComboBox.SelectedItem is not ProviderPreset preset)
+            {
+                ProviderHintText.Text = "";
+                ProviderKeyBtn.IsEnabled = false;
+                return;
+            }
+
+            var probe = new ApiConfig
+            {
+                Provider = preset.Id,
+                ApiUrl = ApiUrlTextBox.Text.Trim(),
+                AuthOverride = (AuthComboBox.SelectedItem as AuthChoice)?.Value ?? "",
+            };
+
+            var lines = new List<string>
+            {
+                $"{preset.Group} · 协议：{ApiProviders.WireLabel(ApiProviders.ResolveWire(probe))}",
+                $"认证：{ApiProviders.AuthLabel(ApiProviders.ResolveAuth(probe))}"
+                + (string.IsNullOrWhiteSpace(probe.AuthOverride) ? "（自动）" : "（手动指定）"),
+            };
+            if (!string.IsNullOrWhiteSpace(preset.Note)) lines.Add(preset.Note);
+
+            // 地址与所选服务商声明的协议矛盾时显式提醒，否则会静默打不通
+            var warning = ApiProviders.WireWarning(probe);
+            if (warning != null) lines.Add(warning);
+
+            ProviderHintText.Text = string.Join("\n", lines);
+            ProviderHintText.Foreground = warning == null
+                ? (System.Windows.Media.Brush)FindResource("Brush.TextMuted")
+                : (System.Windows.Media.Brush)FindResource("Brush.Danger");
+            ProviderKeyBtn.IsEnabled = !string.IsNullOrWhiteSpace(preset.ConsoleUrl);
         }
 
         // ---- 测试连接 ----
@@ -209,37 +343,31 @@ namespace 编辑器
                 using var client = new HttpClient();
                 client.Timeout = TimeSpan.FromSeconds(15);
 
-                string json;
-                if (KnownProviders.UsesAnthropicFormat(config.Provider))
-                {
-                    // Mimo Token Plan 使用 api-key 头认证，不发送 anthropic-version
-                    if (config.Provider == KnownProviders.Mimo)
-                        client.DefaultRequestHeaders.Add("api-key", config.ApiKey);
-                    else
-                    {
-                        client.DefaultRequestHeaders.Add("x-api-key", config.ApiKey);
-                        client.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
-                    }
+                // 认证头与协议必需的头走与真实调用**同一份**逻辑，
+                // 否则会出现「测试连接成功、真正调用却 401」的假阳性。
+                var authLabel = ApiProviders.ApplyHeaders(client.DefaultRequestHeaders, config);
+                ApiProviders.ApplyExtraHeaders(client.DefaultRequestHeaders, config);
 
-                    var request = new
+                string json;
+                if (ApiProviders.ResolveWire(config) == ApiWire.AnthropicMessages)
+                {
+                    var anthropicRequest = new
                     {
                         model = config.Model,
                         max_tokens = 10,
                         messages = new[] { new { role = "user", content = "Hello" } }
                     };
-                    json = JsonSerializer.Serialize(request);
+                    json = JsonSerializer.Serialize(anthropicRequest);
                 }
                 else
                 {
-                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
-
-                    var request = new
+                    var openAiRequest = new
                     {
                         model = config.Model,
                         messages = new[] { new { role = "user", content = "Hello" } },
                         max_tokens = 10
                     };
-                    json = JsonSerializer.Serialize(request);
+                    json = JsonSerializer.Serialize(openAiRequest);
                 }
 
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -247,7 +375,14 @@ namespace 编辑器
 
                 if (response.IsSuccessStatusCode)
                 {
-                    MessageBox.Show("连接成功！API 配置可用。", "成功", MessageBoxButton.OK, MessageBoxImage.Information);
+                    var preset = ProviderComboBox.SelectedItem as ProviderPreset;
+                    MessageBox.Show(
+                        "连接成功！API 配置可用。\n\n"
+                        + $"服务商：{preset?.Name ?? "自定义"}\n"
+                        + $"协议：  {ApiProviders.WireLabel(ApiProviders.ResolveWire(config))}\n"
+                        + $"认证：  {authLabel}\n"
+                        + $"模型：  {config.Model}",
+                        "成功", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
                 else
                 {
@@ -838,20 +973,19 @@ namespace 编辑器
             return dialog.ShowDialog() == true ? dialog.InputText : null;
         }
 
-        private class ProviderOption
+        /// <summary>认证方式下拉的一项。<see cref="Value"/> 为空表示「自动，按服务商预设决定」。</summary>
+        private class AuthChoice
         {
-            public string Name { get; }
-            public string DefaultUrl { get; }
-            public string DefaultModel { get; }
+            public string Value { get; }
+            private string Label { get; }
 
-            public ProviderOption(string name, string defaultUrl, string defaultModel)
+            public AuthChoice(string value, string label)
             {
-                Name = name;
-                DefaultUrl = defaultUrl;
-                DefaultModel = defaultModel;
+                Value = value;
+                Label = label;
             }
 
-            public override string ToString() => Name;
+            public override string ToString() => Label;
         }
     }
 

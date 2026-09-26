@@ -21,7 +21,10 @@ namespace 编辑器.Services
                 throw new ArgumentException("API Key 不能为空", nameof(config));
 
             _httpClient = new HttpClient();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
+            // 认证头交给 ApiProviders 统一装配：Bearer / x-api-key / api-key 三种风格，
+            // 加上服务商额外要求的头（OpenRouter 的 HTTP-Referer 等）。
+            ApiProviders.ApplyHeaders(_httpClient.DefaultRequestHeaders, config);
+            ApiProviders.ApplyExtraHeaders(_httpClient.DefaultRequestHeaders, config);
         }
 
         // 兼容旧版：仅传 API Key 时使用默认配置

@@ -265,7 +265,9 @@ namespace 编辑器
         }
 
         private static string FormatTokenCount(int tokens) =>
-            tokens >= 1000 ? $"{tokens / 1000.0:0.#}K" : tokens.ToString();
+            tokens >= 1_000_000 ? $"{tokens / 1_000_000.0:0.#}M"
+            : tokens >= 1000 ? $"{tokens / 1000.0:0.#}K"
+            : tokens.ToString();
 
         public void SetDetached(bool isDetached)
         {

@@ -83,14 +83,16 @@ namespace 编辑器.Services
     ///
     /// 4. **熔断**：连续失败 N 次就停手，不要在坏掉的链路上反复烧钱。
     ///
-    /// 与 ZCode 的一处**有意不同**：ZCode 只服务 200K 窗口的模型，buffer 取固定 13K；
-    /// 本项目面对 8K ~ 1M 的各种模型，固定 13K 在 8K 窗口上会把阈值压到 0（等于每轮都压）。
-    /// 因此这里把 buffer 再按有效窗口的比例收一次（见 <see cref="ResolveBufferTokens"/>）。
+    /// 与 ZCode 的差异：本项目的窗口口径现在**也统一按 200K 起**（见
+    /// <see cref="ModelContextCatalog.AssumedContextWindow"/>），所以 13K 的固定提前量
+    /// 与 ZCode 完全同尺度。但仍保留"按有效窗口 1/4 再收一次"（见
+    /// <see cref="ResolveBufferTokens"/>）—— 那是给**用户手动覆写成小窗口**时留的护栏：
+    /// 若哪天在设置里填了 8K，固定 13K 会把阈值压到 0（等于每轮都压）。
     /// </summary>
     public static class CompactPolicy
     {
-        /// <summary>ZCode 默认窗口，本项目兜底改用 <see cref="ModelContextCatalog.FallbackContextWindow"/>。</summary>
-        public const int DefaultContextWindow = ModelContextCatalog.FallbackContextWindow;
+        /// <summary>默认窗口。与 ZCode 的 <c>AutoCompactPolicyConfig.contextWindow</c> 同值（200K）。</summary>
+        public const int DefaultContextWindow = ModelContextCatalog.AssumedContextWindow;
 
         /// <summary>ZCode 的 DEFAULT_AUTOCOMPACT_OUTPUT_RESERVE_TOKENS。</summary>
         public const int DefaultOutputReserveTokens = 32_000;
@@ -165,7 +167,8 @@ namespace 编辑器.Services
 
         /// <summary>
         /// 提前量。ZCode: <c>min(config.bufferTokens ?? 13000, ...)</c>；
-        /// 额外按有效窗口的 1/4 收一次，避免小窗口模型被 13K 的固定提前量压到负数阈值。
+        /// 额外按有效窗口的 1/4 收一次，避免**被用户手动覆写成小窗口**时，
+        /// 13K 的固定提前量把阈值压到 0（≥200K 的正常路径下这一步永远不生效）。
         /// </summary>
         public static int ResolveBufferTokens(CompactPolicyConfig? config, int effectiveContextWindow)
         {

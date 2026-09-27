@@ -25,6 +25,8 @@ namespace 编辑器
         private ApiProfileManager _profileManager = null!;
         private AppearanceManager _appearanceManager = null!;
         private SystemPromptStore _promptStore = null!;
+        private List<NovelSkill> _skills = new();
+        private NovelSkill? _activeSkill;
         private ProjectSnapshotManager? _snapshotManager;
         private ChatLogger? _chatLogger;
 
@@ -143,7 +145,49 @@ namespace 编辑器
             _aiPanel.OnClearChat = ClearChatSession;
             _aiPanel.OnStopAi = StopAi;
             _aiPanel.OnOpenSettings = ShowSettingsWindow;
+            InitSkills();
         }
+
+        /// <summary>
+        /// 加载技能包并填充 AI 面板下拉。「无技能」恒在第一项；选中变化即更新当前技能。
+        /// </summary>
+        private void InitSkills()
+        {
+            _skills = NovelSkillStore.Load(_configDir);
+
+            var combo = _aiPanel.SkillCombo;
+            var options = new List<SkillOption> { new(null) };
+            options.AddRange(_skills.Select(s => new SkillOption(s)));
+            combo.ItemsSource = options;
+            combo.DisplayMemberPath = nameof(SkillOption.Display);
+            combo.SelectedIndex = 0;
+
+            _aiPanel.SkillChanged += OnSkillChanged;
+            OnSkillChanged();
+        }
+
+        private sealed class SkillOption
+        {
+            public NovelSkill? Skill { get; }
+            public string Display => Skill?.Name ?? "无技能";
+            public SkillOption(NovelSkill? skill) => Skill = skill;
+        }
+
+        private void OnSkillChanged()
+        {
+            _activeSkill = (_aiPanel.SkillCombo.SelectedItem as SkillOption)?.Skill;
+            _aiPanel.SetSkillHint(_activeSkill == null
+                ? "选择技能后，对应功能的生成会用该手法指令（与当前方案叠加）"
+                : (_activeSkill.Description + (_activeSkill.InputHint.Length > 0 ? " " + _activeSkill.InputHint : "")));
+        }
+
+        /// <summary>技能命中的任务提示词，否则回退默认任务说明。</summary>
+        private string ResolveTaskText(string taskKey, string fallback) =>
+            NovelSkillStore.ResolveTaskPrompt(_activeSkill, taskKey, fallback);
+
+        /// <summary>技能命中的输出契约，否则回退默认契约。</summary>
+        private string? ResolveContractText(string taskKey, string? fallback) =>
+            NovelSkillStore.ResolveContract(_activeSkill, taskKey, fallback);
 
         private void WelcomeDialog_DeferIfNeeded(object? sender, EventArgs e)
         {
@@ -644,7 +688,8 @@ namespace 编辑器
             }
 
             TakeSnapshot("续写前备份");
-            var systemPrompt = BuildSystemPrompt(AiPrompts.Task.Continue);
+            var systemPrompt = BuildSystemPrompt(
+                ResolveTaskText(AiPrompts.Keys.Continue, AiPrompts.Task.Continue));
             var requirement = _aiPanel.InputTextBox.Text.Trim();
 
             var userPrompt = AiPrompts.Section($"待续写的正文（第{chapter.ChapterNumber}章 {chapter.Title}）", chapter.Content);
@@ -692,7 +737,8 @@ namespace 编辑器
             }
 
             TakeSnapshot("润色前备份");
-            var systemPrompt = BuildSystemPrompt(AiPrompts.Task.Polish);
+            var systemPrompt = BuildSystemPrompt(
+                ResolveTaskText(AiPrompts.Keys.Polish, AiPrompts.Task.Polish));
             var requirement = _aiPanel.InputTextBox.Text.Trim();
 
             string? presetStyle = null;
@@ -766,7 +812,9 @@ namespace 编辑器
             }
 
             TakeSnapshot("人名生成前备份");
-            var systemPrompt = BuildSystemPrompt(AiPrompts.Task.Name, AiPrompts.StructuredOutput);
+            var systemPrompt = BuildSystemPrompt(
+                ResolveTaskText(AiPrompts.Keys.Name, AiPrompts.Task.Name),
+                ResolveContractText(AiPrompts.Keys.Name, AiPrompts.StructuredOutput));
             var input = _aiPanel.InputTextBox.Text.Trim();
             var userPrompt = string.IsNullOrEmpty(input)
                 ? "请为这部小说生成一批角色名字。"
@@ -809,7 +857,9 @@ namespace 编辑器
             }
 
             var chapter = GetSelectedChapter();
-            var baseSystemPrompt = BuildSystemPrompt(AiPrompts.Task.Chat, AiPrompts.StructuredOutput);
+            var baseSystemPrompt = BuildSystemPrompt(
+                ResolveTaskText(AiPrompts.Keys.Chat, AiPrompts.Task.Chat),
+                ResolveContractText(AiPrompts.Keys.Chat, AiPrompts.StructuredOutput));
 
             // 当前章节正文作为"待处理文本"放进 user 侧；设定类内容已在 system 里
             var userPrompt = chapter != null && !string.IsNullOrWhiteSpace(chapter.Content)
@@ -879,8 +929,10 @@ namespace 编辑器
 
             var isExpand = !string.IsNullOrEmpty(existingOutline);
             var systemPrompt = BuildSystemPrompt(
-                isExpand ? AiPrompts.Task.Expand : AiPrompts.Task.Outline,
-                AiPrompts.StructuredOutput);
+                ResolveTaskText(isExpand ? AiPrompts.Keys.Expand : AiPrompts.Keys.Outline,
+                    isExpand ? AiPrompts.Task.Expand : AiPrompts.Task.Outline),
+                ResolveContractText(isExpand ? AiPrompts.Keys.Expand : AiPrompts.Keys.Outline,
+                    AiPrompts.StructuredOutput));
 
             string userPrompt;
             if (isExpand)
@@ -918,8 +970,10 @@ namespace 编辑器
             string existing = GetSettingValue(SettingSection.CharacterSettings).Trim();
             var isExpand = !string.IsNullOrEmpty(existing);
             var systemPrompt = BuildSystemPrompt(
-                isExpand ? AiPrompts.Task.Expand : AiPrompts.Task.Character,
-                AiPrompts.StructuredOutput);
+                ResolveTaskText(isExpand ? AiPrompts.Keys.Expand : AiPrompts.Keys.Character,
+                    isExpand ? AiPrompts.Task.Expand : AiPrompts.Task.Character),
+                ResolveContractText(isExpand ? AiPrompts.Keys.Expand : AiPrompts.Keys.Character,
+                    AiPrompts.StructuredOutput));
 
             string userPrompt;
             if (isExpand)
@@ -952,8 +1006,10 @@ namespace 编辑器
             string existing = GetSettingValue(SettingSection.BackgroundSettings).Trim();
             var isExpand = !string.IsNullOrEmpty(existing);
             var systemPrompt = BuildSystemPrompt(
-                isExpand ? AiPrompts.Task.Expand : AiPrompts.Task.Background,
-                AiPrompts.StructuredOutput);
+                ResolveTaskText(isExpand ? AiPrompts.Keys.Expand : AiPrompts.Keys.Background,
+                    isExpand ? AiPrompts.Task.Expand : AiPrompts.Task.Background),
+                ResolveContractText(isExpand ? AiPrompts.Keys.Expand : AiPrompts.Keys.Background,
+                    AiPrompts.StructuredOutput));
 
             string userPrompt;
             if (isExpand)
@@ -987,8 +1043,10 @@ namespace 编辑器
             string existing = GetSettingValue(SettingSection.ChapterOutline).Trim();
             var isExpand = !string.IsNullOrEmpty(existing);
             var systemPrompt = BuildSystemPrompt(
-                isExpand ? AiPrompts.Task.Expand : AiPrompts.Task.ChapterOutline,
-                AiPrompts.StructuredOutput);
+                ResolveTaskText(isExpand ? AiPrompts.Keys.Expand : AiPrompts.Keys.ChapterOutline,
+                    isExpand ? AiPrompts.Task.Expand : AiPrompts.Task.ChapterOutline),
+                ResolveContractText(isExpand ? AiPrompts.Keys.Expand : AiPrompts.Keys.ChapterOutline,
+                    AiPrompts.StructuredOutput));
 
             string userPrompt;
             if (isExpand)
@@ -1028,8 +1086,10 @@ namespace 编辑器
             string existing = GetSettingValue(SettingSection.WritingStyle).Trim();
             var isExpand = !string.IsNullOrEmpty(existing);
             var systemPrompt = BuildSystemPrompt(
-                isExpand ? AiPrompts.Task.Expand : AiPrompts.Task.WriteStyle,
-                AiPrompts.StructuredOutput);
+                ResolveTaskText(isExpand ? AiPrompts.Keys.Expand : AiPrompts.Keys.WriteStyle,
+                    isExpand ? AiPrompts.Task.Expand : AiPrompts.Task.WriteStyle),
+                ResolveContractText(isExpand ? AiPrompts.Keys.Expand : AiPrompts.Keys.WriteStyle,
+                    AiPrompts.StructuredOutput));
 
             string userPrompt;
             if (isExpand)
@@ -1451,6 +1511,21 @@ namespace 编辑器
                 RefreshProfileSwitcher();
                 RefreshPresetIndicator();   // 提示词方案可能被切换/改名/删除了
             }
+            RefreshSkills();    // 技能保存即落盘，关闭后重载（含用户可能只点了右上角 X）
+        }
+
+        /// <summary>设置页关掉后重载技能列表到 AI 面板下拉，尽量保持原选中。</summary>
+        private void RefreshSkills()
+        {
+            _skills = NovelSkillStore.Load(_configDir);
+            var combo = _aiPanel.SkillCombo;
+            var selectedId = _activeSkill?.Id;
+
+            var options = new List<SkillOption> { new(null) };
+            options.AddRange(_skills.Select(s => new SkillOption(s)));
+            combo.ItemsSource = options;
+            combo.DisplayMemberPath = nameof(SkillOption.Display);
+            combo.SelectedItem = options.FirstOrDefault(o => o.Skill?.Id == selectedId) ?? options[0];
         }
 
         /// <summary>
@@ -1820,7 +1895,9 @@ namespace 编辑器
 
             var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(
                 userPrompt,
-                BuildSystemPrompt(AiPrompts.Task.SettingBook, AiPrompts.StructuredOutput),
+                BuildSystemPrompt(
+                    ResolveTaskText(AiPrompts.Keys.SettingBook, AiPrompts.Task.SettingBook),
+                    ResolveContractText(AiPrompts.Keys.SettingBook, AiPrompts.StructuredOutput)),
                 new CompletionOptions
                 {
                     MaxTokens = 3000,

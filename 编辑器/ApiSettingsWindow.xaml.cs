@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using Microsoft.Win32;
 using 编辑器.Services;
 
 namespace 编辑器
@@ -38,6 +39,13 @@ namespace 编辑器
         private bool _isSwitchingPreset;    // 防止方案下拉联动递归
         private string _editingPresetId = AiPrompts.DefaultPresetId;   // 正在编辑哪个方案
         private PromptStoreSnapshot? _initialPromptSnapshot;           // 取消时整批回滚用
+
+        // ---- 技能编辑页状态 ----
+        private readonly string _skillDir;          // 初始化后由构造函数赋值
+        private List<NovelSkill> _skills = new();
+        private NovelSkill? _currentSkill;
+        private bool _loadingSkillForm;             // 载入表单时禁止 CheckBox/Combo 联动
+        private readonly Dictionary<string, bool> _taskChecks = new(StringComparer.Ordinal); // 键 → 勾选
 
         private static readonly JsonSerializerOptions _jsonOptions = new()
         {
@@ -69,10 +77,12 @@ namespace 编辑器
             AuthComboBox.SelectedIndex = 0;
 
             _modelCache = new ModelCacheStore(ResolveConfigDir(promptStore));
+            _skillDir = ResolveConfigDir(promptStore);
 
             RefreshProfileList();
             LoadProfileToUI(_profileManager.ActiveProfile);
             InitializePromptEditor();
+            InitializeSkillEditor();
         }
 
         /// <summary>配置目录。优先跟提示词存储同一个目录，拿不到才回落到默认位置。</summary>
@@ -750,6 +760,235 @@ namespace 编辑器
             if (_promptItems.Count > 0) PromptListBox.SelectedIndex = 0;
 
             UpdatePromptStatus();
+        }
+
+        // ==================================================================
+        // 技能编辑页
+        // ==================================================================
+
+        private static readonly (string Key, string Display)[] SkillTaskOptions =
+        {
+            (AiPrompts.Keys.Continue, "续写"),
+            (AiPrompts.Keys.Polish, "润色"),
+            (AiPrompts.Keys.Name, "人名生成"),
+            (AiPrompts.Keys.Chat, "万能聊天"),
+            (AiPrompts.Keys.Outline, "全文大纲"),
+            (AiPrompts.Keys.Character, "人物设定"),
+            (AiPrompts.Keys.Background, "背景设定"),
+            (AiPrompts.Keys.ChapterOutline, "章节大纲"),
+            (AiPrompts.Keys.WriteStyle, "文风设定"),
+            (AiPrompts.Keys.SettingBook, "设定集章节"),
+        };
+
+        private sealed class ContractChoice
+        {
+            public string Key { get; }
+            public string Display { get; }
+            public ContractChoice(string key, string display) { Key = key; Display = display; }
+        }
+
+        private void InitializeSkillEditor()
+        {
+            SkillContractCombo.ItemsSource = new List<ContractChoice>
+            {
+                new("", "沿用默认（按功能）"),
+                new(AiPrompts.Keys.CreativeOutput, "创作类（可入稿正文）"),
+                new(AiPrompts.Keys.StructuredOutput, "结构化（分条组织）"),
+            };
+            SkillContractCombo.SelectedIndex = 0;
+
+            TaskCheckBoxList.ItemsSource = SkillTaskOptions.Select(o =>
+                new { o.Key, o.Display }).ToList();
+
+            _skills = NovelSkillStore.Load(_skillDir);
+            RefreshSkillList();
+        }
+
+        private void RefreshSkillList()
+        {
+            _currentSkill = null;
+            _loadingSkillForm = true;
+            try
+            {
+                SkillListBox.ItemsSource = _skills;
+                if (_skills.Count > 0) SkillListBox.SelectedIndex = 0;
+                else SetSkillFormEnabled(false);
+            }
+            finally { _loadingSkillForm = false; }
+        }
+
+        private void SetSkillFormEnabled(bool enabled)
+        {
+            SkillNameBox.IsEnabled = enabled;
+            SkillDescBox.IsEnabled = enabled;
+            SkillPromptBox.IsEnabled = enabled;
+            SkillHintBox.IsEnabled = enabled;
+            SkillContractCombo.IsEnabled = enabled;
+            SaveSkillBtn.IsEnabled = enabled;
+            DeleteSkillBtn.IsEnabled = enabled;
+            ExportSkillBtn.IsEnabled = enabled;
+            SkillBuiltInTag.Visibility = enabled ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        private void SkillListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_loadingSkillForm) return;
+            if (SkillListBox.SelectedItem is not NovelSkill skill) { _currentSkill = null; return; }
+            _currentSkill = skill;
+            _loadingSkillForm = true;
+            try
+            {
+                SkillNameBox.Text = skill.Name;
+                SkillDescBox.Text = skill.Description;
+                SkillPromptBox.Text = skill.TaskPrompt;
+                SkillHintBox.Text = skill.InputHint;
+                SkillBuiltInTag.Visibility = skill.IsBuiltIn ? Visibility.Visible : Visibility.Collapsed;
+                SkillContractCombo.SelectedItem = SkillContractCombo.Items
+                    .Cast<ContractChoice>().FirstOrDefault(c => c.Key == (skill.OutputContract ?? ""))
+                    ?? SkillContractCombo.Items[0];
+
+                _taskChecks.Clear();
+                foreach (var k in skill.AppliesTo) _taskChecks[k] = true;
+                SetTaskCheckBoxes();
+
+                SetSkillFormEnabled(!skill.IsBuiltIn);
+                SkillNameBox.IsReadOnly = skill.IsBuiltIn;
+                SkillDescBox.IsReadOnly = skill.IsBuiltIn;
+                SkillPromptBox.IsReadOnly = skill.IsBuiltIn;
+                SkillHintBox.IsReadOnly = skill.IsBuiltIn;
+            }
+            finally { _loadingSkillForm = false; }
+        }
+
+        /// <summary>按 _taskChecks 同步任务勾选框（容器未生成时跳过）。</summary>
+        private void SetTaskCheckBoxes()
+        {
+            TaskCheckBoxList.UpdateLayout();
+            foreach (var o in TaskCheckBoxList.Items)
+            {
+                var cp = TaskCheckBoxList.ItemContainerGenerator.ContainerFromItem(o) as ContentPresenter;
+                var cb = cp?.ContentTemplate?.FindName("TaskCheck", cp) as CheckBox;
+                if (cb == null) continue;
+                var key = (string)o.GetType().GetProperty("Key")!.GetValue(o)!;
+                cb.Tag = key;
+                cb.IsChecked = _taskChecks.ContainsKey(key);
+                cb.IsEnabled = _currentSkill is { IsBuiltIn: false };
+            }
+        }
+
+        private void TaskCheck_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_loadingSkillForm || sender is not CheckBox cb || cb.Tag == null) return;
+            _taskChecks[(string)cb.Tag] = cb.IsChecked == true;
+        }
+
+        private void SkillContractCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            // 选中态在保存时直接读 Combo，无需联动处理
+        }
+
+        private void NewSkill_Click(object sender, RoutedEventArgs e)
+        {
+            _currentSkill = new NovelSkill { Id = Guid.NewGuid().ToString("N") };
+            SkillListBox.SelectedItem = null;
+            _loadingSkillForm = true;
+            try
+            {
+                SkillNameBox.Text = "";
+                SkillDescBox.Text = "";
+                SkillPromptBox.Text = "";
+                SkillHintBox.Text = "";
+                SkillBuiltInTag.Visibility = Visibility.Collapsed;
+                SkillContractCombo.SelectedIndex = 0;
+                _taskChecks.Clear();
+                SetSkillFormEnabled(true);
+                SkillNameBox.IsReadOnly = false;
+                SkillNameBox.Focus();
+            }
+            finally { _loadingSkillForm = false; }
+        }
+
+        private void SaveSkill_Click(object sender, RoutedEventArgs e)
+        {
+            var name = SkillNameBox.Text.Trim();
+            var prompt = SkillPromptBox.Text.Trim();
+            if (name.Length == 0 || prompt.Length == 0)
+            {
+                MessageBox.Show("技能名称与任务提示词都是必填的。", "无法保存",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            if (_currentSkill is { IsBuiltIn: true }) return; // 内置不可改
+
+            var skill = _currentSkill ?? new NovelSkill { Id = Guid.NewGuid().ToString("N") };
+            skill.Name = name;
+            skill.Description = SkillDescBox.Text.Trim();
+            skill.TaskPrompt = prompt;
+            skill.InputHint = SkillHintBox.Text.Trim();
+            skill.OutputContract = (SkillContractCombo.SelectedItem as ContractChoice)?.Key is { Length: > 0 } k
+                ? k : null;
+            skill.AppliesTo = _taskChecks.Where(kv => kv.Value).Select(kv => kv.Key).ToList();
+
+            if (NovelSkillStore.AddOrUpdate(_skills, skill))
+            {
+                NovelSkillStore.Save(_skillDir, _skills);
+                RefreshSkillList();
+            }
+        }
+
+        private void DeleteSkill_Click(object sender, RoutedEventArgs e)
+        {
+            if (_currentSkill is not { IsBuiltIn: false } skill) return;
+            if (MessageBox.Show($"删除技能「{skill.Name}」？", "删除确认",
+                    MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                return;
+
+            if (NovelSkillStore.Delete(_skills, skill.Id))
+            {
+                NovelSkillStore.Save(_skillDir, _skills);
+                RefreshSkillList();
+            }
+        }
+
+        private void ExportSkill_Click(object sender, RoutedEventArgs e)
+        {
+            if (_currentSkill == null) return;
+            var dialog = new SaveFileDialog
+            {
+                Filter = "JSON 文件 (*.json)|*.json",
+                FileName = $"{Sanitize(_currentSkill.Name)}.skill.json"
+            };
+            if (dialog.ShowDialog() != true) return;
+
+            File.WriteAllText(dialog.FileName, NovelSkillStore.ExportJson(_currentSkill), new UTF8Encoding(true));
+        }
+
+        private void ImportSkill_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new OpenFileDialog { Filter = "JSON 文件 (*.json)|*.json" };
+            if (dialog.ShowDialog() != true) return;
+
+            var imported = NovelSkillStore.ParseImport(File.ReadAllText(dialog.FileName));
+            if (imported.Count == 0)
+            {
+                MessageBox.Show("没有可导入的技能：文件为空、格式不对，或与内置技能重名。", "导入失败",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            foreach (var s in imported) NovelSkillStore.AddOrUpdate(_skills, s);
+            NovelSkillStore.Save(_skillDir, _skills);
+            RefreshSkillList();
+            MessageBox.Show($"已导入 {imported.Count} 个技能。", "导入完成",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private static string Sanitize(string name)
+        {
+            var invalid = Path.GetInvalidFileNameChars();
+            var cleaned = new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray()).Trim();
+            return cleaned.Length == 0 ? "skill" : cleaned;
         }
 
         /// <summary>取某方案下某条目的**内置**默认文本（不含覆写）。</summary>

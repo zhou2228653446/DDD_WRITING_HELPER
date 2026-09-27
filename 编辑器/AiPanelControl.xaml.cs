@@ -283,6 +283,22 @@ namespace 编辑器
 
         private void StopAi_Click(object sender, RoutedEventArgs e) => OnStopAi?.Invoke();
 
+        // ---- 技能选择器 ----
+
+        /// <summary>技能下拉，暴露给主窗口填充选项与读取选中项。</summary>
+        public ComboBox SkillCombo => SkillComboBox;
+
+        /// <summary>技能切换时触发（主窗口据此更新当前技能与提示）。</summary>
+        public event Action? SkillChanged;
+
+        /// <summary>显示当前技能的输入提示（无技能时清空）。</summary>
+        public void SetSkillHint(string? text) => SkillHintText.Text = text ?? "";
+
+        private void SkillComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            SkillChanged?.Invoke();
+        }
+
         private void PolishStyleCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (PolishStyleCombo.SelectedItem is string style && style != "（无预设）")

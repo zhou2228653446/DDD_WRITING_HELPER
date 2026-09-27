@@ -344,6 +344,198 @@
                     </Grid>
                 </Grid>
             </hc:TabItem>
+
+            <hc:TabItem x:Name="SkillTabItem" Header="技能">
+                <Grid Margin="5" Height="468">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- 顶部：说明 + 新建 / 导入 -->
+                    <Grid Grid.Row="0" Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center" FontSize="11"
+                                   Foreground="{DynamicResource Brush.TextMuted}" TextWrapping="Wrap"
+                                   Text="技能是「创作手法」指令包：选中后，命中的功能会用该手法的任务说明生成（与当前方案叠加）。内置技能随版本升级、不可改；自定义技能存 skills.json，可导入导出。"/>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Content="新建技能" Height="28" Padding="10,0"
+                                    Style="{StaticResource Btn.Primary}" Click="NewSkill_Click"/>
+                            <Button Content="导入 JSON" Height="28" Padding="10,0"
+                                    Margin="6,0,0,0" Click="ImportSkill_Click"
+                                    ToolTip="从 JSON 文件导入一个或多个技能（内置 id 会被忽略）"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="230"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- 左：技能列表 -->
+                        <Grid Grid.Column="0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Text="技能" FontWeight="Bold" Margin="2,0,0,6"/>
+                            <ListBox x:Name="SkillListBox" Grid.Row="1"
+                                     Background="Transparent" BorderThickness="0"
+                                     ItemContainerStyle="{StaticResource ListBoxItem.Card}"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     SelectionChanged="SkillListBox_SelectionChanged">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="0,2">
+                                            <Grid>
+                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                                <Border HorizontalAlignment="Right"
+                                                        Background="{DynamicResource Brush.SubtleBg}"
+                                                        CornerRadius="6" Padding="5,1">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsBuiltIn}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Border.Style>
+                                                    <TextBlock Text="内置" FontSize="10"
+                                                               Foreground="{DynamicResource Brush.TextMuted}"/>
+                                                </Border>
+                                            </Grid>
+                                            <TextBlock Text="{Binding Description}" Margin="0,2,0,0"
+                                                       FontSize="11" TextWrapping="Wrap"
+                                                       Foreground="{DynamicResource Brush.TextMuted}"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
+
+                        <!-- 右：编辑表单 -->
+                        <Border Grid.Column="1" Margin="14,0,0,0"
+                                Background="{DynamicResource Brush.Panel}"
+                                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                                CornerRadius="{StaticResource Radius.Md}" Padding="14">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <Grid Grid.Row="0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="SkillNameBox" Height="30" VerticalContentAlignment="Center"
+                                             FontWeight="SemiBold" Padding="8,0"
+                                             hc:InfoElement.Placeholder="技能名称（必填）"
+                                             Background="{DynamicResource Brush.InputBg}"
+                                             Foreground="{DynamicResource Brush.Text}"
+                                             CaretBrush="{DynamicResource Brush.Text}"
+                                             BorderBrush="{DynamicResource Brush.Border}"/>
+                                    <TextBlock x:Name="SkillBuiltInTag" Grid.Column="1"
+                                               VerticalAlignment="Center" Margin="10,0,0,0"
+                                               Text="内置技能 · 只读" Foreground="{DynamicResource Brush.TextMuted}"
+                                               FontSize="11"/>
+                                </Grid>
+
+                                <TextBox x:Name="SkillDescBox" Grid.Row="1" Height="54"
+                                         AcceptsReturn="True" TextWrapping="Wrap"
+                                         VerticalContentAlignment="Top" Margin="0,8,0,0" Padding="8,4"
+                                         hc:InfoElement.Placeholder="一句话说明这个技能什么时候用、管什么（会显示在技能下拉下与导出清单里）"
+                                         Background="{DynamicResource Brush.InputBg}"
+                                         Foreground="{DynamicResource Brush.Text}"
+                                         CaretBrush="{DynamicResource Brush.Text}"
+                                         BorderBrush="{DynamicResource Brush.Border}"/>
+
+                                <!-- 适用任务 -->
+                                <StackPanel Grid.Row="2" Margin="0,8,0,0">
+                                    <TextBlock Text="适用任务（命中的功能才会用这个手法）" FontSize="11"
+                                               Foreground="{DynamicResource Brush.TextMuted}"/>
+                                    <ItemsControl x:Name="TaskCheckBoxList" Margin="0,4,0,0">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel/>
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <CheckBox x:Name="TaskCheck" Content="{Binding Display}"
+                                                          Margin="0,2,14,2" FontSize="11"
+                                                          Foreground="{DynamicResource Brush.Text}"
+                                                          Checked="TaskCheck_Changed" Unchecked="TaskCheck_Changed"/>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+
+                                <!-- 输出契约 -->
+                                <Grid Grid.Row="3" Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="140"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="输出契约" FontSize="11"
+                                               VerticalAlignment="Center"
+                                               Foreground="{DynamicResource Brush.TextMuted}" Margin="0,0,8,0"/>
+                                    <hc:ComboBox x:Name="SkillContractCombo" Grid.Column="1" Height="26"
+                                                 FontSize="11" VerticalAlignment="Center"
+                                                 SelectionChanged="SkillContractCombo_SelectionChanged"/>
+                                </Grid>
+
+                                <TextBox x:Name="SkillPromptBox" Grid.Row="4" Margin="0,8,0,0"
+                                         AcceptsReturn="True" TextWrapping="Wrap"
+                                         VerticalScrollBarVisibility="Auto"
+                                         VerticalContentAlignment="Top" Padding="8,4"
+                                         hc:InfoElement.Placeholder="任务提示词（必填）：命中适用任务时替换原任务说明。可用 # 小节、- 条目、**粗体**"
+                                         Background="{DynamicResource Brush.InputBg}"
+                                         Foreground="{DynamicResource Brush.Text}"
+                                         CaretBrush="{DynamicResource Brush.Text}"
+                                         BorderBrush="{DynamicResource Brush.Border}"/>
+
+                                <Grid Grid.Row="5" Margin="0,10,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="SkillHintBox" Height="30" VerticalContentAlignment="Center"
+                                             Padding="8,0" Margin="0,0,12,0"
+                                             hc:InfoElement.Placeholder="输入提示（可选）：选中该技能时显示给作者的引导"
+                                             Background="{DynamicResource Brush.InputBg}"
+                                             Foreground="{DynamicResource Brush.Text}"
+                                             CaretBrush="{DynamicResource Brush.Text}"
+                                             BorderBrush="{DynamicResource Brush.Border}"/>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Button x:Name="SaveSkillBtn" Content="保存技能" Height="28" Padding="10,0"
+                                                Style="{StaticResource Btn.Primary}" Click="SaveSkill_Click"/>
+                                        <Button x:Name="DeleteSkillBtn" Content="删除" Height="28" Padding="10,0"
+                                                Margin="6,0,0,0" Click="DeleteSkill_Click"
+                                                ToolTip="只能删除自定义技能"/>
+                                        <Button x:Name="ExportSkillBtn" Content="导出 JSON" Height="28" Padding="10,0"
+                                                Margin="6,0,0,0" Click="ExportSkill_Click"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </hc:TabItem>
         </hc:TabControl>
     </Grid>
 </hc:Window>

@@ -74,6 +74,7 @@
 | **万能聊天** | 直接描述需求，不套模板。**带多轮对话记忆**，AI 记得你上一句说过什么 |
 | **生成上下文** | 全文大纲 / 章节大纲 / 人物设定 / 背景设定 / 文风设定，一次生成写入项目 |
 | **扩展已有内容** | 在已有大纲 / 设定基础上修改完善，而不是推翻重来 |
+| **技能** | 创作手法指令包（黄金三章 / 悬念钩子 / 对白强化…）。AI 面板选一个，命中功能的生成就用该手法（与方案叠加），可在设置页管理 / 导入导出 |
 
 - 支持 **OpenAI 兼容**与 **Anthropic Messages** 两种协议，流式输出
 - **断线自动重试 / 流空闲超时 / 停止时保住已生成内容 / 截断自动接着写 / 空响应拦截** ——
@@ -407,6 +408,7 @@ dotnet run   --project 编辑器/编辑器.csproj
 | `appearance.json` | 主题预设与背景图 |
 | `system_prompts.json` | 你改过的提示词（**只存与内置不同的条目**，所以内置文本后续改进时会自动跟随） |
 | `polish_presets.json` | 润色风格预设 |
+| `skills.json` | 自定义技能（只存自定义；内置技能写死在代码里，随版本升级） |
 
 **项目数据**（跟着项目走，放在项目文件所在目录下）：
 
@@ -452,6 +454,7 @@ dotnet run   --project 编辑器/编辑器.csproj
    ├─ ThemeTokens / AppearanceManager / Motion         主题与动效
    ├─ WordExportService / PdfExportService / TxtExportService
    ├─ SettingsBookTemplates / SettingsBookExportService  设定集：模板成书 + 三格式导出
+   ├─ NovelSkills                                       技能包：内置/自定义/导入导出/任务命中
    ├─ AiMemoryManager / ChatSessionStore / ChatLogger / ProjectSnapshotManager
    └─ ApiProfileManager
 ```

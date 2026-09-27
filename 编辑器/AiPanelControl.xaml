@@ -114,6 +114,18 @@
 
                 <Border Style="{StaticResource DividerLine}" Margin="0,14,0,0"/>
 
+                <!-- ============ 技能 ============ -->
+                <TextBlock Text="技能" Style="{StaticResource SectionHeader}" Margin="0,12,0,0"/>
+                <StackPanel Margin="0,4,0,0">
+                    <hc:ComboBox x:Name="SkillComboBox" Width="170" Height="26"
+                              FontSize="{StaticResource FontSize.Small}"
+                              HorizontalAlignment="Left"
+                              SelectionChanged="SkillComboBox_SelectionChanged"/>
+                    <TextBlock x:Name="SkillHintText" TextWrapping="Wrap"
+                               FontSize="{StaticResource FontSize.Caption}"
+                               Foreground="{DynamicResource Brush.TextMuted}" Margin="0,4,0,0"/>
+                </StackPanel>
+
                 <!-- ============ 要求 / 输入 ============ -->
                 <!--
                     这一节装两个框，它们都是"交给 AI 的话"，但作用域不同：

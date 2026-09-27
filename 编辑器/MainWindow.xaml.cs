@@ -149,21 +149,16 @@ namespace 编辑器
         }
 
         /// <summary>
-        /// 加载技能包并填充 AI 面板下拉。「无技能」恒在第一项；选中变化即更新当前技能。
+        /// 接线 AI 面板的方案与技能下拉，并做首次填充。
+        /// 方案切换 → 提示词整套换 + 技能下拉按方案过滤并恢复该方案记住的技能。
         /// </summary>
         private void InitSkills()
         {
-            _skills = NovelSkillStore.Load(_configDir);
-
-            var combo = _aiPanel.SkillCombo;
-            var options = new List<SkillOption> { new(null) };
-            options.AddRange(_skills.Select(s => new SkillOption(s)));
-            combo.ItemsSource = options;
-            combo.DisplayMemberPath = nameof(SkillOption.Display);
-            combo.SelectedIndex = 0;
-
             _aiPanel.SkillChanged += OnSkillChanged;
-            OnSkillChanged();
+            _aiPanel.PresetChanged += OnPresetChanged;
+
+            RefreshPresetIndicator();
+            RefreshSkills();
         }
 
         private sealed class SkillOption
@@ -173,12 +168,43 @@ namespace 编辑器
             public SkillOption(NovelSkill? skill) => Skill = skill;
         }
 
+        /// <summary>程序性刷新技能下拉时压住写回——否则刷新会被当成用户改选，把该方案的记忆覆盖掉。</summary>
+        private bool _suppressSkillWriteback;
+
         private void OnSkillChanged()
         {
             _activeSkill = (_aiPanel.SkillCombo.SelectedItem as SkillOption)?.Skill;
             _aiPanel.SetSkillHint(_activeSkill == null
                 ? "选择技能后，对应功能的生成会用该手法指令（与当前方案叠加）"
                 : (_activeSkill.Description + (_activeSkill.InputHint.Length > 0 ? " " + _activeSkill.InputHint : "")));
+
+            // 把选择记到「当前方案」名下：切走再切回来，技能还是这个
+            if (!_suppressSkillWriteback && _promptStore != null)
+            {
+                var id = _activeSkill?.Id;
+                if (_promptStore.GetSkillFor(_promptStore.ActivePresetId) != id)
+                {
+                    _promptStore.SetSkillFor(_promptStore.ActivePresetId, id);
+                    try { _promptStore.Save(); } catch { /* 落盘失败不打断选技能 */ }
+                }
+            }
+        }
+
+        /// <summary>用户在 AI 面板头部切换提示词方案：方案与技能一起切。</summary>
+        private void OnPresetChanged(string presetId)
+        {
+            if (_promptStore == null || presetId == _promptStore.ActivePresetId) return;
+
+            _promptStore.ActivePresetId = presetId;
+            try { _promptStore.Save(); }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"保存提示词方案失败：{ex.Message}", "AI 助手",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+
+            RefreshPresetIndicator();
+            RefreshSkills();
         }
 
         /// <summary>技能命中的任务提示词，否则回退默认任务说明。</summary>
@@ -1514,18 +1540,39 @@ namespace 编辑器
             RefreshSkills();    // 技能保存即落盘，关闭后重载（含用户可能只点了右上角 X）
         }
 
-        /// <summary>设置页关掉后重载技能列表到 AI 面板下拉，尽量保持原选中。</summary>
+        /// <summary>
+        /// 重载技能列表到 AI 面板下拉（设置页关闭后 / 方案切换后调用）。
+        /// 只列出**适用当前方案**的技能（<see cref="NovelSkill.Presets"/> 空 = 全方案可用），
+        /// 并恢复该方案记住的技能；记住的技能已不适用（用户改了归属）时清掉这条失效记忆。
+        /// </summary>
         private void RefreshSkills()
         {
             _skills = NovelSkillStore.Load(_configDir);
-            var combo = _aiPanel.SkillCombo;
-            var selectedId = _activeSkill?.Id;
+            var presetId = AiPrompts.ActivePresetId;
+            var remembered = _promptStore?.GetSkillFor(presetId);
 
+            var combo = _aiPanel.SkillCombo;
             var options = new List<SkillOption> { new(null) };
-            options.AddRange(_skills.Select(s => new SkillOption(s)));
-            combo.ItemsSource = options;
-            combo.DisplayMemberPath = nameof(SkillOption.Display);
-            combo.SelectedItem = options.FirstOrDefault(o => o.Skill?.Id == selectedId) ?? options[0];
+            options.AddRange(NovelSkillStore.AvailableFor(_skills, presetId).Select(s => new SkillOption(s)));
+
+            var target = options.FirstOrDefault(o => o.Skill?.Id == remembered) ?? options[0];
+
+            _suppressSkillWriteback = true;
+            try
+            {
+                combo.ItemsSource = options;
+                combo.DisplayMemberPath = nameof(SkillOption.Display);
+                combo.SelectedItem = target;
+            }
+            finally { _suppressSkillWriteback = false; }
+
+            // 记忆指向的技能被过滤掉了 → 顺手清掉，别让脏数据一直留在 system_prompts.json 里
+            if (_promptStore != null && remembered != null && target.Skill == null
+                && _promptStore.GetSkillFor(presetId) != null)
+            {
+                _promptStore.SetSkillFor(presetId, null);
+                try { _promptStore.Save(); } catch { }
+            }
         }
 
         /// <summary>
@@ -1539,6 +1586,7 @@ namespace 编辑器
             _promptStore.Load();
             AiPrompts.Store = _promptStore;
             RefreshPresetIndicator();
+            RefreshSkills();   // 技能下拉按方案过滤 + 恢复该方案记住的技能（首次初始化时 store 可能还没就绪）
         }
 
         /// <summary>
@@ -1551,7 +1599,7 @@ namespace 编辑器
             if (_promptStore == null) return;
 
             var id = _promptStore.ActivePresetId;
-            _aiPanel.SetPresetName(_promptStore.PresetName(id) ?? "默认", !_promptStore.IsCustom(id));
+            _aiPanel.SetPresetOptions(AiPrompts.PresetOptions(_promptStore), id);
         }
 
         private async Task CallAiFunction(Func<IApiService, Task<AiResult>> function)

@@ -800,6 +800,9 @@ namespace 编辑器
             TaskCheckBoxList.ItemsSource = SkillTaskOptions.Select(o =>
                 new { o.Key, o.Display }).ToList();
 
+            // 适用方案勾选框：内置 4 方案 + 用户自定义方案，全部列出
+            PresetCheckBoxList.ItemsSource = AiPrompts.PresetOptions(_promptStore).ToList();
+
             _skills = NovelSkillStore.Load(_skillDir);
             RefreshSkillList();
         }
@@ -851,6 +854,10 @@ namespace 编辑器
                 foreach (var k in skill.AppliesTo) _taskChecks[k] = true;
                 SetTaskCheckBoxes();
 
+                _presetChecks.Clear();
+                foreach (var p in skill.Presets) _presetChecks[p] = true;
+                SetPresetCheckBoxes();
+
                 SetSkillFormEnabled(!skill.IsBuiltIn);
                 SkillNameBox.IsReadOnly = skill.IsBuiltIn;
                 SkillDescBox.IsReadOnly = skill.IsBuiltIn;
@@ -882,6 +889,30 @@ namespace 编辑器
             _taskChecks[(string)cb.Tag] = cb.IsChecked == true;
         }
 
+        private readonly Dictionary<string, bool> _presetChecks = new(StringComparer.Ordinal); // 方案 Id → 勾选
+
+        /// <summary>按 _presetChecks 同步方案勾选框（容器未生成时跳过）。</summary>
+        private void SetPresetCheckBoxes()
+        {
+            PresetCheckBoxList.UpdateLayout();
+            foreach (var o in PresetCheckBoxList.Items)
+            {
+                var cp = PresetCheckBoxList.ItemContainerGenerator.ContainerFromItem(o) as ContentPresenter;
+                var cb = cp?.ContentTemplate?.FindName("PresetCheck", cp) as CheckBox;
+                if (cb == null) continue;
+                var id = (string)o.GetType().GetProperty("Id")!.GetValue(o)!;
+                cb.Tag = id;
+                cb.IsChecked = _presetChecks.ContainsKey(id);
+                cb.IsEnabled = _currentSkill is { IsBuiltIn: false };
+            }
+        }
+
+        private void PresetCheck_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_loadingSkillForm || sender is not CheckBox cb || cb.Tag == null) return;
+            _presetChecks[(string)cb.Tag] = cb.IsChecked == true;
+        }
+
         private void SkillContractCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             // 选中态在保存时直接读 Combo，无需联动处理
@@ -901,6 +932,9 @@ namespace 编辑器
                 SkillBuiltInTag.Visibility = Visibility.Collapsed;
                 SkillContractCombo.SelectedIndex = 0;
                 _taskChecks.Clear();
+                _presetChecks.Clear();
+                SetTaskCheckBoxes();
+                SetPresetCheckBoxes();
                 SetSkillFormEnabled(true);
                 SkillNameBox.IsReadOnly = false;
                 SkillNameBox.Focus();
@@ -929,6 +963,7 @@ namespace 编辑器
             skill.OutputContract = (SkillContractCombo.SelectedItem as ContractChoice)?.Key is { Length: > 0 } k
                 ? k : null;
             skill.AppliesTo = _taskChecks.Where(kv => kv.Value).Select(kv => kv.Key).ToList();
+            skill.Presets = _presetChecks.Where(kv => kv.Value).Select(kv => kv.Key).ToList();
 
             if (NovelSkillStore.AddOrUpdate(_skills, skill))
             {

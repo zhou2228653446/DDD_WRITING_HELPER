@@ -28,15 +28,15 @@
                            VerticalAlignment="Center"/>
 
                 <!--
-                    当前生效的提示词方案。AI 的输出取向完全由它决定（小说 / 论文 / 公文…），
-                    而在面板里看不到方案名时，用户会以为"AI 变笨了"。
+                    提示词方案下拉（小说 / 论文 / 公文 / 通用 + 自定义）。AI 的输出取向完全由它
+                    决定，切换同时联动技能下拉：每个方案记住自己的技能，切回来时跟着恢复。
+                    之前这里只放一个只读的方案名——用户想换方案得进设置页翻 Tab，太深了。
                 -->
-                <TextBlock x:Name="PresetHintText" Grid.Column="1"
-                           Margin="10,0,8,0" VerticalAlignment="Center"
-                           FontSize="{StaticResource FontSize.Caption}"
-                           Foreground="{DynamicResource Brush.TextMuted}"
-                           TextTrimming="CharacterEllipsis"
-                           Text="方案：小说创作"/>
+                <hc:ComboBox x:Name="PresetComboBox" Grid.Column="1"
+                             Margin="10,0,8,0" Height="24" VerticalAlignment="Center"
+                             FontSize="{StaticResource FontSize.Caption}"
+                             ToolTip="提示词方案：决定 AI 的整体取向（小说 / 论文 / 公文…）。&#x0a;切换后技能也会切到该方案记住的技能。"
+                             SelectionChanged="PresetComboBox_SelectionChanged"/>
 
                 <Button x:Name="DetachBtn" Grid.Column="2" Style="{StaticResource Btn.Ghost}"
                         Content="弹出" Height="24" Padding="10,0" FontSize="{StaticResource FontSize.Caption}"

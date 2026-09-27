@@ -482,6 +482,25 @@
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
+
+                                    <TextBlock Text="适用方案（不勾 = 全部方案可用；方案切换后面板只列出适用的技能）"
+                                               FontSize="11" Margin="0,8,0,0"
+                                               Foreground="{DynamicResource Brush.TextMuted}"/>
+                                    <ItemsControl x:Name="PresetCheckBoxList" Margin="0,4,0,0">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel/>
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <CheckBox x:Name="PresetCheck" Content="{Binding Name}"
+                                                          Margin="0,2,14,2" FontSize="11"
+                                                          Foreground="{DynamicResource Brush.Text}"
+                                                          Checked="PresetCheck_Changed" Unchecked="PresetCheck_Changed"/>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
                                 </StackPanel>
 
                                 <!-- 输出契约 -->

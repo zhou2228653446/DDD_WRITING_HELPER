@@ -210,17 +210,33 @@ namespace 编辑器
         }
 
         // 更新分离按钮状态
-        /// <summary>
-        /// 在面板头上显示当前生效的提示词方案（小说创作 / 学术论文 / 公文公告 / 自定义…）。
-        /// 方案决定 AI 的人设与输出取向，面板上不显示的话，用户切换后会觉得"AI 突然不对劲"。
-        /// </summary>
-        public void SetPresetName(string name, bool isBuiltIn)
-        {
-            if (string.IsNullOrWhiteSpace(name)) name = "默认";
 
-            PresetHintText.Text = "方案：" + name;
-            PresetHintText.ToolTip = $"当前使用「{name}」{(isBuiltIn ? "内置" : "自定义")}提示词方案。\n"
-                                   + "在「AI 设置 → 系统提示词」里切换或修改。";
+        /// <summary>用户在面板头部切换了提示词方案。参数是新方案的 Id。</summary>
+        public event Action<string>? PresetChanged;
+
+        private bool _loadingPreset;   // 程序性刷新方案下拉时压住事件，避免把"刷新"当成"用户切换"
+
+        /// <summary>
+        /// 刷新面板头部的方案下拉（内置 4 个 + 自定义），并选中当前生效方案。
+        /// 之前这里是只读文字——用户想换方案得进设置页翻 Tab；现在直接在面板上切。
+        /// </summary>
+        public void SetPresetOptions(IReadOnlyList<AiPrompts.PresetOption> options, string selectedId)
+        {
+            _loadingPreset = true;
+            try
+            {
+                PresetComboBox.ItemsSource = options;
+                PresetComboBox.DisplayMemberPath = nameof(AiPrompts.PresetOption.Name);
+                PresetComboBox.SelectedItem = options.FirstOrDefault(o => o.Id == selectedId) ?? options.FirstOrDefault();
+            }
+            finally { _loadingPreset = false; }
+        }
+
+        private void PresetComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_loadingPreset) return;
+            if (PresetComboBox.SelectedItem is AiPrompts.PresetOption opt)
+                PresetChanged?.Invoke(opt.Id);
         }
 
         /// <summary>
@@ -287,6 +303,9 @@ namespace 编辑器
 
         /// <summary>技能下拉，暴露给主窗口填充选项与读取选中项。</summary>
         public ComboBox SkillCombo => SkillComboBox;
+
+        /// <summary>面板头部的提示词方案下拉（供 MainWindow 刷新与 harness 驱动）。</summary>
+        public ComboBox PresetCombo => PresetComboBox;
 
         /// <summary>技能切换时触发（主窗口据此更新当前技能与提示）。</summary>
         public event Action? SkillChanged;

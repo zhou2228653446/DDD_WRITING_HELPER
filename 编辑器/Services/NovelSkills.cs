@@ -34,6 +34,12 @@ namespace 编辑器.Services
         /// <summary>适用任务键（AiPrompts.Keys 的值，如 "Task.Continue"）。命中才替换。</summary>
         public List<string> AppliesTo { get; set; } = new();
 
+        /// <summary>
+        /// 适用**方案**（PromptPresets 的 Id，如 "novel"）。空列表 = 全部方案可用。
+        /// 方案切换后，面板的技能下拉只列出适用当前方案的技能——论文方案下不该冒出「黄金三章」。
+        /// </summary>
+        public List<string> Presets { get; set; } = new();
+
         /// <summary>命中时替换原任务说明的文本。</summary>
         public string TaskPrompt { get; set; } = "";
 
@@ -50,6 +56,7 @@ namespace 编辑器.Services
             Description = Description,
             IsBuiltIn = IsBuiltIn,
             AppliesTo = new List<string>(AppliesTo),
+            Presets = new List<string>(Presets),
             TaskPrompt = TaskPrompt,
             OutputContract = OutputContract,
             InputHint = InputHint
@@ -71,6 +78,7 @@ namespace 编辑器.Services
             new()
             {
                 IsBuiltIn = true,
+                Presets = new List<string> { PromptPresets.IdNovel },   // 创作手法只属于小说方案
                 Id = "hook-opening", Name = "黄金三章",
                 Description = "开头定生死：把第一章的钩子立起来，让读者想翻下一页。",
                 AppliesTo = new List<string> { AiPrompts.Keys.Continue, AiPrompts.Keys.Outline, AiPrompts.Keys.ChapterOutline },
@@ -92,6 +100,7 @@ namespace 编辑器.Services
             new()
             {
                 IsBuiltIn = true,
+                Presets = new List<string> { PromptPresets.IdNovel },   // 创作手法只属于小说方案
                 Id = "suspense", Name = "悬念钩子",
                 Description = "让读者放不下：信息差、倒计时与读者比主角更早知道。",
                 AppliesTo = new List<string> { AiPrompts.Keys.Continue, AiPrompts.Keys.Polish, AiPrompts.Keys.Chat },
@@ -111,6 +120,7 @@ namespace 编辑器.Services
             new()
             {
                 IsBuiltIn = true,
+                Presets = new List<string> { PromptPresets.IdNovel },   // 创作手法只属于小说方案
                 Id = "dialogue", Name = "对白强化",
                 Description = "对话不是交换信息，是交锋：潜台词、打断与反应。",
                 AppliesTo = new List<string> { AiPrompts.Keys.Polish, AiPrompts.Keys.Continue },
@@ -131,6 +141,7 @@ namespace 编辑器.Services
             new()
             {
                 IsBuiltIn = true,
+                Presets = new List<string> { PromptPresets.IdNovel },   // 创作手法只属于小说方案
                 Id = "scene", Name = "场景渲染",
                 Description = "环境是角色情绪的放大器：用感官细节让场景活着。",
                 AppliesTo = new List<string> { AiPrompts.Keys.Polish, AiPrompts.Keys.Continue },
@@ -152,6 +163,7 @@ namespace 编辑器.Services
             new()
             {
                 IsBuiltIn = true,
+                Presets = new List<string> { PromptPresets.IdNovel },   // 创作手法只属于小说方案
                 Id = "ending", Name = "结尾升华",
                 Description = "把一章或全书收在读者的心上：回响、代价与新的开始。",
                 AppliesTo = new List<string> { AiPrompts.Keys.Polish, AiPrompts.Keys.Continue },
@@ -246,6 +258,7 @@ namespace 编辑器.Services
                 existing.Name = skill.Name;
                 existing.Description = skill.Description;
                 existing.AppliesTo = new List<string>(skill.AppliesTo);
+                existing.Presets = new List<string>(skill.Presets);
                 existing.TaskPrompt = skill.TaskPrompt;
                 existing.OutputContract = skill.OutputContract;
                 existing.InputHint = skill.InputHint;
@@ -314,6 +327,15 @@ namespace 编辑器.Services
         // ==================================================================
         // 解析（任务提示词 / 输出契约的命中替换）
         // ==================================================================
+
+        /// <summary>
+        /// 按方案过滤可用技能：<see cref="NovelSkill.Presets"/> 为空 = 全方案可用；
+        /// 否则仅当列表包含当前方案 Id 才可用。
+        /// </summary>
+        public static List<NovelSkill> AvailableFor(IEnumerable<NovelSkill> skills, string? presetId) =>
+            skills.Where(s => s.Presets.Count == 0
+                              || (presetId != null && s.Presets.Contains(presetId)))
+                  .ToList();
 
         /// <summary>技能是否命中某任务键。</summary>
         public static bool AppliesTo(NovelSkill? skill, string taskKey)

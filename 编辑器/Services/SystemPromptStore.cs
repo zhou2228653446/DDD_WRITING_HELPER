@@ -45,6 +45,7 @@ namespace 编辑器.Services
         public string ActivePresetId { get; init; } = PromptPresets.IdNovel;
         public Dictionary<string, Dictionary<string, string>> Overrides { get; init; } = new(StringComparer.Ordinal);
         public List<CustomPresetData> CustomPresets { get; init; } = new();
+        public Dictionary<string, string> SkillByPreset { get; init; } = new(StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -94,6 +95,9 @@ namespace 编辑器.Services
 
             public List<CustomPresetData> CustomPresets { get; set; } = new();
 
+            /// <summary>方案 Id → 该方案记住的技能 Id（面板切方案时技能跟着切）。</summary>
+            public Dictionary<string, string>? SkillByPreset { get; set; }
+
             /// <summary>
             /// Version 1 的旧字段：那时只有一套小说提示词，覆写是扁平的。
             /// 只用于读取迁移，写回时不再产生。
@@ -104,6 +108,7 @@ namespace 编辑器.Services
         private readonly string _filePath;
         private readonly Dictionary<string, Dictionary<string, string>> _overrides = new(StringComparer.Ordinal);
         private readonly List<CustomPresetData> _customPresets = new();
+        private readonly Dictionary<string, string> _skillByPreset = new(StringComparer.Ordinal);
 
         /// <summary>覆写文件路径（{配置目录}/system_prompts.json）。</summary>
         public string FilePath => _filePath;
@@ -134,6 +139,7 @@ namespace 编辑器.Services
         {
             _overrides.Clear();
             _customPresets.Clear();
+            _skillByPreset.Clear();
             ActivePresetId = PromptPresets.IdNovel;
 
             if (!File.Exists(_filePath)) return;
@@ -188,6 +194,12 @@ namespace 编辑器.Services
                     _customPresets.Add(normalized);
                 }
 
+                foreach (var (presetId, skillId) in payload.SkillByPreset ?? new())
+                {
+                    if (!string.IsNullOrWhiteSpace(presetId) && !string.IsNullOrWhiteSpace(skillId))
+                        _skillByPreset[presetId] = skillId;
+                }
+
                 // 生效方案必须真实存在，否则回到出厂默认
                 if (!Exists(ActivePresetId)) ActivePresetId = PromptPresets.IdNovel;
             }
@@ -197,6 +209,7 @@ namespace 编辑器.Services
                 System.Diagnostics.Debug.WriteLine($"[SystemPromptStore] 读取失败，改用内置默认：{ex.Message}");
                 _overrides.Clear();
                 _customPresets.Clear();
+                _skillByPreset.Clear();
                 ActivePresetId = PromptPresets.IdNovel;
             }
         }
@@ -218,6 +231,9 @@ namespace 编辑器.Services
                 ActivePresetId = ActivePresetId,
                 Presets = presets,
                 CustomPresets = _customPresets.Select(c => c.Clone()).ToList(),
+                SkillByPreset = _skillByPreset.Count > 0
+                    ? new Dictionary<string, string>(_skillByPreset, StringComparer.Ordinal)
+                    : null,
                 Overrides = null   // 不再写旧字段
             };
 
@@ -345,6 +361,21 @@ namespace 编辑器.Services
         public void ResetAll(string presetId) => _overrides.Remove(presetId);
 
         // ------------------------------------------------------------------
+        // 每方案记住的技能（面板切方案时技能跟着切）
+        // ------------------------------------------------------------------
+
+        /// <summary>该方案记住的技能 Id；没记过返回 null（=「无」）。</summary>
+        public string? GetSkillFor(string presetId) =>
+            _skillByPreset.TryGetValue(presetId, out var id) ? id : null;
+
+        /// <summary>记住/清除某方案的技能。skillId 为空即清除。</summary>
+        public void SetSkillFor(string presetId, string? skillId)
+        {
+            if (string.IsNullOrWhiteSpace(skillId)) _skillByPreset.Remove(presetId);
+            else _skillByPreset[presetId] = skillId;
+        }
+
+        // ------------------------------------------------------------------
         // 方案管理
         // ------------------------------------------------------------------
 
@@ -389,6 +420,7 @@ namespace 编辑器.Services
             var basedOn = ResolveBasePreset(presetId);
             _customPresets.Remove(custom);
             _overrides.Remove(presetId);
+            _skillByPreset.Remove(presetId);
 
             if (string.Equals(ActivePresetId, presetId, StringComparison.Ordinal))
                 ActivePresetId = basedOn;
@@ -425,7 +457,8 @@ namespace 编辑器.Services
             {
                 ActivePresetId = ActivePresetId,
                 Overrides = overrides,
-                CustomPresets = _customPresets.Select(c => c.Clone()).ToList()
+                CustomPresets = _customPresets.Select(c => c.Clone()).ToList(),
+                SkillByPreset = new Dictionary<string, string>(_skillByPreset, StringComparer.Ordinal)
             };
         }
 
@@ -437,6 +470,10 @@ namespace 编辑器.Services
 
             _customPresets.Clear();
             foreach (var c in snapshot.CustomPresets) _customPresets.Add(c.Clone());
+
+            _skillByPreset.Clear();
+            foreach (var (presetId, skillId) in snapshot.SkillByPreset)
+                _skillByPreset[presetId] = skillId;
 
             ActivePresetId = snapshot.ActivePresetId;
         }

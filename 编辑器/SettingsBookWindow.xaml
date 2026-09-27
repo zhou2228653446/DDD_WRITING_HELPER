@@ -1,0 +1,211 @@
+<hc:Window x:Class="编辑器.SettingsBookWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:hc="https://handyorg.github.io/handycontrol"
+        mc:Ignorable="d"
+        Title="设定集" Height="680" Width="1000" MinHeight="500" MinWidth="760"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource Brush.Surface}"
+        FontFamily="{StaticResource Font.Ui}"
+        TextElement.Foreground="{DynamicResource Brush.Text}">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- ==================== 头部：书名 / 副标题 ==================== -->
+        <Border Grid.Row="0" Padding="18,14,18,12"
+                Background="{DynamicResource Brush.Panel}"
+                BorderBrush="{DynamicResource Brush.Divider}" BorderThickness="0,0,0,1">
+            <StackPanel>
+                <TextBlock Text="设定集" FontSize="{StaticResource FontSize.Title}"
+                           FontWeight="SemiBold"/>
+                <TextBlock Text="把大纲、人物、背景、文风统合成一本资料书。左侧选章、右侧编辑；空章可用 AI 补全，最后导出成 Word / PDF / TXT。"
+                           FontSize="{StaticResource FontSize.Small}"
+                           Foreground="{DynamicResource Brush.TextMuted}" Margin="0,4,0,10" TextWrapping="Wrap"/>
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="24"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="书名" FontSize="{StaticResource FontSize.Caption}"
+                                   Foreground="{DynamicResource Brush.TextMuted}"/>
+                        <TextBox x:Name="BookTitleBox" Margin="0,4,0,0" Padding="8,5"
+                                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                                 Background="{DynamicResource Brush.InputBg}"
+                                 Foreground="{DynamicResource Brush.Text}"
+                                 CaretBrush="{DynamicResource Brush.Text}"
+                                 SelectionBrush="{DynamicResource Brush.Accent}"
+                                 TextChanged="BookTitleBox_TextChanged"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Text="副标题（可选）" FontSize="{StaticResource FontSize.Caption}"
+                                   Foreground="{DynamicResource Brush.TextMuted}"/>
+                        <TextBox x:Name="SubtitleBox" Margin="0,4,0,0" Padding="8,5"
+                                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                                 Background="{DynamicResource Brush.InputBg}"
+                                 Foreground="{DynamicResource Brush.Text}"
+                                 CaretBrush="{DynamicResource Brush.Text}"
+                                 SelectionBrush="{DynamicResource Brush.Accent}"
+                                 TextChanged="SubtitleBox_TextChanged"/>
+                    </StackPanel>
+                </Grid>
+            </StackPanel>
+        </Border>
+
+        <!-- ==================== 主体：左章目录 + 右编辑区 ==================== -->
+        <Grid Grid.Row="1" Margin="16,14,16,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="240"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- 左：章目录 -->
+            <DockPanel Grid.Column="0">
+                <TextBlock DockPanel.Dock="Top" Text="章节" Margin="2,0,0,6"
+                           FontSize="{StaticResource FontSize.Small}"
+                           Foreground="{DynamicResource Brush.TextMuted}"/>
+                <ListBox x:Name="ChapterList" DockPanel.Dock="Top" Height="360"
+                         Background="Transparent" BorderThickness="0" Padding="0"
+                         ItemContainerStyle="{StaticResource ListBoxItem.Card}"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         SelectionChanged="ChapterList_SelectionChanged">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Margin="0,2">
+                                <Grid>
+                                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold"
+                                               TextTrimming="CharacterEllipsis"/>
+                                    <Border HorizontalAlignment="Right"
+                                            Background="{DynamicResource Brush.SubtleBg}"
+                                            CornerRadius="6" Padding="6,1">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsAiGenerated}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <TextBlock Text="AI" FontSize="10"
+                                                   Foreground="{DynamicResource Brush.Accent}"/>
+                                    </Border>
+                                </Grid>
+                                <TextBlock Text="{Binding SourceLabel}" Margin="0,2,0,0"
+                                           FontSize="{StaticResource FontSize.Caption}"
+                                           Foreground="{DynamicResource Brush.TextMuted}"
+                                           TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <TextBlock DockPanel.Dock="Bottom" x:Name="ChapterCountText" Margin="2,6,0,0"
+                           FontSize="{StaticResource FontSize.Caption}"
+                           Foreground="{DynamicResource Brush.TextMuted}"/>
+            </DockPanel>
+
+            <!-- 右：编辑区 -->
+            <Border Grid.Column="1" Margin="14,0,0,0"
+                    Background="{DynamicResource Brush.Panel}"
+                    BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                    CornerRadius="{StaticResource Radius.Md}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0" Margin="14,12,14,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBox x:Name="ChapterTitleBox" Text="作品简介"
+                                     FontSize="{StaticResource FontSize.Subtitle}" FontWeight="SemiBold"
+                                     Padding="4,2" Margin="-4,-2,0,0"
+                                     BorderThickness="0" Background="Transparent"
+                                     Foreground="{DynamicResource Brush.Text}"
+                                     CaretBrush="{DynamicResource Brush.Text}"
+                                     TextChanged="ChapterTitleBox_TextChanged"/>
+                            <CheckBox x:Name="IncludeBox" Content="包含在导出的设定集中" Margin="0,6,0,0"
+                                      Foreground="{DynamicResource Brush.TextMuted}"
+                                      FontSize="{StaticResource FontSize.Small}"
+                                      Checked="IncludeBox_Changed" Unchecked="IncludeBox_Changed"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
+                            <Button Style="{StaticResource Btn.Ghost}" Content="↑"
+                                    ToolTip="上移" Margin="0,0,6,0" Click="MoveUp_Click"/>
+                            <Button Style="{StaticResource Btn.Ghost}" Content="↓"
+                                    ToolTip="下移" Margin="0,0,6,0" Click="MoveDown_Click"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <!--
+                        多行编辑框必须显式 VerticalContentAlignment="Top"：
+                        HandyControl 的隐式 TextBox 样式把内容对齐设成了 Center。
+                    -->
+                    <TextBox x:Name="ContentBox" Grid.Row="1" Margin="14,10,14,0"
+                             AcceptsReturn="True" AcceptsTab="True" TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             VerticalContentAlignment="Top"
+                             Padding="10" FontSize="14"
+                             BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                             Background="{DynamicResource Brush.InputBg}"
+                             Foreground="{DynamicResource Brush.Text}"
+                             CaretBrush="{DynamicResource Brush.Text}"
+                             SelectionBrush="{DynamicResource Brush.Accent}"
+                             TextChanged="ContentBox_TextChanged"/>
+
+                    <Grid Grid.Row="2" Margin="14,10,14,14">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                            <Button x:Name="GenWithAiBtn" Style="{StaticResource Btn.Primary}"
+                                    Content="AI 生成 / 完善" Click="GenWithAi_Click"/>
+                            <Button Style="{StaticResource Btn.Ghost}" Content="清空" Margin="8,0,0,0"
+                                    Click="Clear_Click"/>
+                        </StackPanel>
+                        <TextBlock x:Name="CharCountText" HorizontalAlignment="Right"
+                                   VerticalAlignment="Center"
+                                   FontSize="{StaticResource FontSize.Small}"
+                                   Foreground="{DynamicResource Brush.TextMuted}"/>
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- ==================== 底部：状态 + 导出 ==================== -->
+        <Border Grid.Row="2" Padding="18,10" Margin="0,14,0,0"
+                Background="{DynamicResource Brush.StatusBar}"
+                BorderBrush="{DynamicResource Brush.Divider}" BorderThickness="0,1,0,0">
+            <Grid>
+                <TextBlock x:Name="StatusText" VerticalAlignment="Center"
+                           FontSize="{StaticResource FontSize.Small}"
+                           Foreground="{DynamicResource Brush.TextMuted}"
+                           Text="编辑内容会立即同步到项目，保存项目即可写入文件。"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <TextBlock Text="导出为" VerticalAlignment="Center" Margin="0,0,8,0"
+                               FontSize="{StaticResource FontSize.Small}"
+                               Foreground="{DynamicResource Brush.TextMuted}"/>
+                    <Button Style="{StaticResource Btn.Ghost}" Content="Word" Margin="0,0,6,0"
+                            Click="ExportWord_Click"/>
+                    <Button Style="{StaticResource Btn.Ghost}" Content="PDF" Margin="0,0,6,0"
+                            Click="ExportPdf_Click"/>
+                    <Button Style="{StaticResource Btn.Ghost}" Content="TXT" Margin="0,0,10,0"
+                            Click="ExportTxt_Click"/>
+                    <Button Style="{StaticResource Btn.Ghost}" Content="关闭" Click="Close_Click"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</hc:Window>

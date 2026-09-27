@@ -27,6 +27,11 @@ namespace 编辑器
         public string BackgroundSettings { get; set; } = "";    // 主要背景设定
         public string WritingStyle { get; set; } = "";          // 文风设定
 
+        // 「设定集」：把上面的设定统合成一本可制作、可导出的资料书（见 SettingsBook）。
+        // 旧项目文件没有这个字段，反序列化时保持 null，首次打开设定集窗口时由
+        // SettingsBookTemplates.EnsureBook 补建。
+        public SettingsBook? SettingsBook { get; set; }
+
         public void Save()
         {
             if (string.IsNullOrEmpty(FilePath))

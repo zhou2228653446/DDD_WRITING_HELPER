@@ -49,6 +49,7 @@ namespace 编辑器
 
         /// <summary>「设定」窗口（全文大纲 / 人物设定等贯穿全书的设定）。关掉后置 null。</summary>
         private SettingsWindow? _settingsWindow;
+        private SettingsBookWindow? _settingsBookWindow;
         private static readonly string _settingsFile = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TdxClaw", "settings.json");
 
@@ -1752,6 +1753,150 @@ namespace 编辑器
         }
 
         private void SettingsWindow_Click(object sender, RoutedEventArgs e) => ShowSettingsWindow();
+
+        // ==================== 设定集 ====================
+
+        /// <summary>打开（或前置）「设定集」窗口。</summary>
+        private void ShowSettingsBookWindow()
+        {
+            try
+            {
+                if (_settingsBookWindow == null)
+                {
+                    var win = new SettingsBookWindow { Owner = this };
+                    win.OnRequestAi = GenerateSettingsBookChapterAsync;
+                    win.ExportRequested += ExportSettingsBook;
+
+                    // 关闭后只回收引用；内容无损失 —— 窗口内编辑是即时写回项目的
+                    win.Closed += (_, _) => _settingsBookWindow = null;
+
+                    win.LoadFrom(_currentProject);
+                    _settingsBookWindow = win;
+                    win.Show();
+                }
+                else
+                {
+                    _settingsBookWindow.LoadFrom(_currentProject);
+                    if (_settingsBookWindow.WindowState == WindowState.Minimized)
+                        _settingsBookWindow.WindowState = WindowState.Normal;
+                    _settingsBookWindow.Activate();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"打开设定集窗口失败: {ex.Message}", "错误",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void SettingsBookWindow_Click(object sender, RoutedEventArgs e) => ShowSettingsBookWindow();
+
+        /// <summary>
+        /// 设定集窗口里点「AI 生成 / 完善」：为某一章生成（或补全）内容。
+        /// 素材 = 项目设定块（5 项设定 + AI 记忆）+ 作品简介 + 该章已有内容；
+        /// 章节主题任务说明来自模板（自定义章用通用说明）。
+        /// </summary>
+        private async Task GenerateSettingsBookChapterAsync(SettingsBookChapter chapter)
+        {
+            if (_currentProject == null)
+            {
+                MessageBox.Show("请先创建或打开项目", "提示",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var tpl = SettingsBookTemplates.Find(chapter.SourceKey);
+            string taskText = tpl?.AiTask ?? "把与本章主题相关的已有设定整理成条目式内容，忠于已有事实，"
+                + "需要补全而素材未明说的内容标注【推断】。";
+
+            string userPrompt = AiPrompts.Section($"目标章节", $"{chapter.Title}\n{taskText}");
+            userPrompt += "\n" + AiPrompts.Section("作品简介", _currentProject.Description);
+            userPrompt += "\n" + BuildProjectContext();
+
+            if (!string.IsNullOrWhiteSpace(chapter.Content))
+                userPrompt += "\n" + AiPrompts.Section("本章已有内容（在此基础上完善，不要推翻）", chapter.Content);
+
+            userPrompt += "\n请直接输出这一章的成稿内容。";
+
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(
+                userPrompt,
+                BuildSystemPrompt(AiPrompts.Task.SettingBook, AiPrompts.StructuredOutput),
+                new CompletionOptions
+                {
+                    MaxTokens = 3000,
+                    Temperature = 0.5,
+                    CancellationToken = _aiCts!.Token,
+                    OnNotice = _aiNotice,
+                    OnProgress = _tokenProgress
+                }));
+
+            if (IsUsable(result))
+            {
+                chapter.Content = result.Text;
+                chapter.IsAiGenerated = true;
+                chapter.ModifiedDate = DateTime.Now;
+                _settingsBookWindow?.RefreshCurrent();
+                _chatLogger?.Log("设定集·" + chapter.Title, "", result.Text);
+                RecordAiInteraction("设定集·" + chapter.Title, "", result.Text);
+                ShowNotification($"已生成「{chapter.Title}」");
+            }
+        }
+
+        /// <summary>设定集窗口点「导出为 …」：选路径 → 写文件 → 询问是否打开。</summary>
+        private void ExportSettingsBook(string kind)
+        {
+            if (_currentProject == null)
+            {
+                ShowNotification("请先创建或打开项目", isError: true);
+                return;
+            }
+
+            SyncAiContextToProject();
+            SettingsBookTemplates.EnsureBook(_currentProject);
+            var project = _currentProject;
+
+            string ext = kind switch { "PDF" => ".pdf", "TXT" => ".txt", _ => ".docx" };
+            string filter = kind switch
+            {
+                "PDF" => "PDF 文档 (*.pdf)|*.pdf",
+                "TXT" => "文本文件 (*.txt)|*.txt",
+                _ => "Word 文档 (*.docx)|*.docx"
+            };
+
+            var dialog = new SaveFileDialog
+            {
+                Filter = filter,
+                FileName = $"{SanitizeFileName(project.ProjectName)}_设定集{ext}",
+                InitialDirectory = _projectsPath
+            };
+            if (dialog.ShowDialog() != true) return;
+
+            try
+            {
+                switch (kind)
+                {
+                    case "PDF": SettingsBookExportService.ExportPdf(dialog.FileName, project); break;
+                    case "TXT": SettingsBookExportService.ExportTxt(dialog.FileName, project); break;
+                    default: SettingsBookExportService.ExportWord(dialog.FileName, project); break;
+                }
+
+                ShowNotification($"已导出设定集为 {kind}：{Path.GetFileName(dialog.FileName)}");
+                var open = MessageBox.Show("导出成功！是否立即打开文件？", "导出完成",
+                    MessageBoxButton.YesNo, MessageBoxImage.Information);
+                if (open == MessageBoxResult.Yes)
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = dialog.FileName,
+                        UseShellExecute = true
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"导出失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
 
         /// <summary>
         /// 设定窗口里点「AI 生成 / 完善」的入口。

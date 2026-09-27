@@ -141,6 +141,7 @@ namespace 编辑器.Services
             public const string WriteStyle = "Task.WriteStyle";
             public const string Expand = "Task.Expand";
             public const string Chat = "Task.Chat";
+            public const string SettingBook = "Task.SettingBook";
         }
 
         // ==================================================================
@@ -169,6 +170,7 @@ namespace 编辑器.Services
             public static string WriteStyle => Resolve(Keys.WriteStyle);
             public static string Expand => Resolve(Keys.Expand);
             public static string Chat => Resolve(Keys.Chat);
+            public static string SettingBook => Resolve(Keys.SettingBook);
         }
 
         // ==================================================================
@@ -231,6 +233,9 @@ namespace 编辑器.Services
 
             new(Keys.Chat, "任务说明", "通用写作请求",
                 "「万能聊天」使用，作者直接描述需求时的任务说明。"),
+
+            new(Keys.SettingBook, "任务说明", "设定集章节",
+                "「设定集」窗口点「AI 生成 / 完善」时使用，按章主题把项目设定整理成可入书的条目式内容。"),
         };
 
         /// <summary>按分组归类，供设置页做分组显示。</summary>
@@ -418,6 +423,19 @@ namespace 编辑器.Services
                     - 如果他问的是创作问题（某段怎么处理更好、这个人物该怎么立），
                       给出判断和具体做法，必要时附一小段示例，但不要写成长篇评论。
                     - 他给的上下文设定是你的依据，不要当成需要评论的文本。
+                    """;
+
+                public const string SettingBook = """
+                    【本次任务】设定集章节编写
+                    作者在为整部作品编一本「设定集」（把大纲、人物、背景、文风等统合起来的资料书），
+                    现在要写其中一章。上文的项目设定、其它章节内容都是这一章的素材与约束。
+
+                    - 写成设定集风格：分条、清晰、可查。优先用「# 小节」与「- 条目」组织，
+                      重要概念可用 **粗体** 标出；不要写小说正文式的叙述段落。
+                    - 严格忠于已有设定：所有与素材冲突的表述都不许出现。需要补全而素材没明说的
+                      内容，逐条标注"【推断】"，让作者一眼看出哪些是他定的、哪些是推的。
+                    - 不提问、不寒暄、不做总结性开场白，直接给出这一章的成稿。
+                    - 篇幅与本章主题相称：主题大的章（世界观 / 人物档案）可以长，小主题不要注水。
                     """;
             }
         }

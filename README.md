@@ -60,6 +60,7 @@
 - **项目 / 章节树**：新建、重命名、删除、上移下移；单文件 `.tdxproj` 存整个项目
 - **正文编辑**：撤销 / 重做 / 剪切 / 复制 / 粘贴，实时字数统计
 - **设定窗口**：全文大纲、章节大纲、人物、背景、文风集中在独立窗口维护
+- **设定集**：把上述设定自动统合成一本资料书（11 章骨架），AI 补全空章，可导出 Word / PDF / TXT
 - **版本历史**：每次快照可回滚（`ProjectSnapshotManager`）
 - **AI 记忆**：把写作经验沉淀成 `memory.md`，下次调用自动带上
 
@@ -184,6 +185,22 @@ system 提示词按**会不会跨请求复用**分段发送：
 
 ⚠ 这一条最容易漏：**光把稳定内容排在前面不会触发缓存**，必须有显式的 `cache_control`。
 改动前本项目就是"顺序对了、但一个字都没缓存"。
+
+### 设定集：把设定做成一本可导出的书
+
+大纲、人物、背景、文风散在「设定」窗口里是**给 AI 看的参考资料**；但当你想要一份能
+拿给读者、或留给自己做世界档案的**资料书**时，打开「设定集」：
+
+- **自动成书**：首次打开就按模板建好 11 章（作品简介 / 世界观 / 地理势力 / 历史时间线 /
+  力量体系 / 人物档案 / 关系网 / 词汇表 / 全文大纲 / 章节大纲 / 文风），其中能直接从项目
+  设定抽取的章（简介、世界观、人物、大纲、文风等）**自动填好内容**，零成本起步。
+- **只补空、不覆盖**：自动成书对已有内容一律不动——你手写或 AI 生成的成果永远不会被覆盖，
+  反复打开都是幂等的。
+- **AI 补全空章**：地理、历史、关系网这类没有直接来源的章，点「AI 生成 / 完善」让 AI 依据
+  项目设定推演补全，推出来的内容会标注「【推断】」，与既有设定冲突的不会写。
+- **制作**：可增改章标题、上下调顺序、勾选哪些章进书，全书书名与副标题可改。
+- **导出成书**：Word / PDF / TXT 三格式，封面 + 目录 + 正文，正文支持轻量 Markdown
+  （`#` 小节 / `-` 列表 / `**粗体**`）；AI 生成的章会在前言里如实标注「AI 初稿，待审校」。
 
 ### 导出
 
@@ -415,6 +432,7 @@ dotnet run   --project 编辑器/编辑器.csproj
 ├─ AiPanelControl.xaml(.cs)     AI 面板（可停靠 / 可弹出）
 ├─ FloatingAiWindow.xaml(.cs)   浮动 AI 窗口
 ├─ SettingsWindow.xaml(.cs)     设定窗口：大纲 / 人物 / 背景 / 文风
+├─ SettingsBookWindow.xaml(.cs) 设定集窗口：自动成书 / AI 补全 / 导出成书
 ├─ ApiSettingsWindow.xaml(.cs)  AI 设置：表单 / JSON / 系统提示词
 ├─ AppearanceSettingsWindow    外观设置
 ├─ PathSettingsWindow          路径设置
@@ -433,6 +451,7 @@ dotnet run   --project 编辑器/编辑器.csproj
    ├─ ContextSummarizer / ChatContextCompactor         摘要生成 + 预算编排
    ├─ ThemeTokens / AppearanceManager / Motion         主题与动效
    ├─ WordExportService / PdfExportService / TxtExportService
+   ├─ SettingsBookTemplates / SettingsBookExportService  设定集：模板成书 + 三格式导出
    ├─ AiMemoryManager / ChatSessionStore / ChatLogger / ProjectSnapshotManager
    └─ ApiProfileManager
 ```

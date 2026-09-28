@@ -52,6 +52,7 @@ namespace 编辑器
         /// <summary>「设定」窗口（全文大纲 / 人物设定等贯穿全书的设定）。关掉后置 null。</summary>
         private SettingsWindow? _settingsWindow;
         private SettingsBookWindow? _settingsBookWindow;
+        private LiteratureWindow? _literatureWindow;
         private static readonly string _settingsFile = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TdxClaw", "settings.json");
 
@@ -1914,6 +1915,43 @@ namespace 编辑器
 
         private void SettingsBookWindow_Click(object sender, RoutedEventArgs e) => ShowSettingsBookWindow();
 
+        // ------------------------------------------------------------------
+        // 参考文献库
+        // ------------------------------------------------------------------
+
+        /// <summary>打开（或前置）「参考文献库」窗口。编辑即时写回项目，无关闭确认需求。</summary>
+        private void ShowLiteratureWindow()
+        {
+            if (_currentProject == null)
+            {
+                MessageBox.Show("请先创建或打开项目", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            try
+            {
+                if (_literatureWindow == null)
+                {
+                    var win = new LiteratureWindow(_currentProject) { Owner = this };
+                    win.Closed += (_, _) => _literatureWindow = null;
+                    _literatureWindow = win;
+                    win.Show();
+                }
+                else
+                {
+                    if (_literatureWindow.WindowState == WindowState.Minimized)
+                        _literatureWindow.WindowState = WindowState.Normal;
+                    _literatureWindow.Activate();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"打开参考文献库失败: {ex.Message}", "错误",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void LiteratureWindow_Click(object sender, RoutedEventArgs e) => ShowLiteratureWindow();
+
         /// <summary>
         /// 设定集窗口里点「AI 生成 / 完善」：为某一章生成（或补全）内容。
         /// 素材 = 项目设定块（5 项设定 + AI 记忆）+ 作品简介 + 该章已有内容；
@@ -2127,6 +2165,13 @@ namespace 编辑器
         private SystemPrompt BuildSystemPrompt(string task, string? outputContract = null)
         {
             var stable = BuildProjectContext();
+
+            // 参考文献库非空时追加引用块：正文引 [n]、只能引列表内文献（防编造）。
+            // 挂在这个单一收口点上，全部生成功能（含万能聊天）自动生效。
+            var literature = _currentProject?.LiteratureLibrary;
+            if (literature != null && literature.Count > 0)
+                stable = (stable.Length > 0 ? stable + "\n\n" : "") + LiteratureFormatter.BuildContextBlock(literature);
+
             var related = BuildRelatedChaptersContext();
             return AiPrompts.BuildSections(task, stable, related, outputContract);
         }

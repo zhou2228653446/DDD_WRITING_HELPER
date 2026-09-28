@@ -61,6 +61,7 @@
 - **正文编辑**：撤销 / 重做 / 剪切 / 复制 / 粘贴，实时字数统计
 - **设定窗口**：全文大纲、章节大纲、人物、背景、文风集中在独立窗口维护
 - **设定集**：把上述设定自动统合成一本资料书（11 章骨架），AI 补全空章，可导出 Word / PDF / TXT
+- **参考文献库**：论文写作用的文献管理（支持导入 BibTeX），AI 引用 [n] 只出自库内、不编造
 - **版本历史**：每次快照可回滚（`ProjectSnapshotManager`）
 - **AI 记忆**：把写作经验沉淀成 `memory.md`，下次调用自动带上
 
@@ -202,6 +203,18 @@ system 提示词按**会不会跨请求复用**分段发送：
 - **制作**：可增改章标题、上下调顺序、勾选哪些章进书，全书书名与副标题可改。
 - **导出成书**：Word / PDF / TXT 三格式，封面 + 目录 + 正文，正文支持轻量 Markdown
   （`#` 小节 / `-` 列表 / `**粗体**`）；AI 生成的章会在前言里如实标注「AI 初稿，待审校」。
+
+### 参考文献库：论文写作的引用闭环（不联网，零编造）
+
+写论文时打开「视图 → 参考文献库」：
+
+- **文献你来定**：手动添加，或从 Zotero / 知网等导出的 `.bib` 文件**导入 BibTeX**
+  （自动解析 @article / @inproceedings 等，引用键去重防重复导入）。
+- **AI 只引用、不编造**：文献库非空时，所有生成（含万能聊天）自动带上参考文献上下文——
+  正文引用标 `[n]` 且**只能引用库内文献**；库里没有的照旧写【需引文献】占位，禁止编造
+  文献、DOI、页码。
+- **参考文献表一键复制**：按 GB/T 7714 简化格式生成 `[1]..[n]` 文献表复制到剪贴板，
+  粘进论文即可，编号与正文引用一一对应。
 
 ### 导出
 
@@ -439,6 +452,7 @@ dotnet run   --project 编辑器/编辑器.csproj
 ├─ FloatingAiWindow.xaml(.cs)   浮动 AI 窗口
 ├─ SettingsWindow.xaml(.cs)     设定窗口：大纲 / 人物 / 背景 / 文风
 ├─ SettingsBookWindow.xaml(.cs) 设定集窗口：自动成书 / AI 补全 / 导出成书
+├─ LiteratureWindow.xaml(.cs)   参考文献库窗口：BibTeX 导入 / 编辑 / 文献表复制
 ├─ ApiSettingsWindow.xaml(.cs)  AI 设置：表单 / JSON / 系统提示词
 ├─ AppearanceSettingsWindow    外观设置
 ├─ PathSettingsWindow          路径设置
@@ -458,6 +472,7 @@ dotnet run   --project 编辑器/编辑器.csproj
    ├─ ThemeTokens / AppearanceManager / Motion         主题与动效
    ├─ WordExportService / PdfExportService / TxtExportService
    ├─ SettingsBookTemplates / SettingsBookExportService  设定集：模板成书 + 三格式导出
+   ├─ BibtexParser                                      BibTeX 解析（花括号嵌套容错）
    ├─ NovelSkills                                       技能包：内置/自定义/导入导出/任务命中
    ├─ AiMemoryManager / ChatSessionStore / ChatLogger / ProjectSnapshotManager
    └─ ApiProfileManager

@@ -103,6 +103,7 @@
                 <Separator/>
                 <MenuItem Header="设定窗口(_W)..." Click="SettingsWindow_Click"/>
                 <MenuItem Header="设定集(_B)..." Click="SettingsBookWindow_Click"/>
+                <MenuItem Header="参考文献库(_L)..." Click="LiteratureWindow_Click"/>
                 <MenuItem Header="外观设置(_S)..." Click="AppearanceSettings_Click"/>
                 <MenuItem Header="路径设置(_P)..." Click="PathSettings_Click"/>
             </MenuItem>
@@ -146,6 +147,9 @@
                     <Button Style="{StaticResource Btn.Ghost}" Content="设定集" Margin="6,0,0,0"
                             ToolTip="把大纲 / 人物 / 背景 / 文风统合成一本可导出的资料书"
                             Click="SettingsBookWindow_Click"/>
+                    <Button Style="{StaticResource Btn.Ghost}" Content="文献库" Margin="6,0,0,0"
+                            ToolTip="参考文献库：AI 引用 [n] 的唯一来源，支持导入 BibTeX"
+                            Click="LiteratureWindow_Click"/>
                     <Button Style="{StaticResource Btn.Ghost}" Content="外观" Margin="6,0,0,0"
                             Click="AppearanceSettings_Click"/>
                     <Button Style="{StaticResource Btn.Ghost}" Content="AI 设置" Margin="6,0,0,0"

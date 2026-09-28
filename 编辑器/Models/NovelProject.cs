@@ -32,6 +32,10 @@ namespace 编辑器
         // SettingsBookTemplates.EnsureBook 补建。
         public SettingsBook? SettingsBook { get; set; }
 
+        // 参考文献库（论文写作用）：用户手动维护或从 BibTeX 导入；
+        // AI 生成时整个库当上下文、引用标 [n]，AI 自己不决定引用什么（防编造）。
+        public List<LiteratureEntry> LiteratureLibrary { get; set; } = new();
+
         public void Save()
         {
             if (string.IsNullOrEmpty(FilePath))

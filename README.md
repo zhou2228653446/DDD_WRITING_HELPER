@@ -418,6 +418,18 @@ dotnet run   --project 编辑器/编辑器.csproj
 
 > 依赖包版本较新，首次还原需要能访问 NuGet。
 
+### 一键发布单文件 exe
+
+不想装 .NET 运行时的机器上也能跑——双击仓库根目录的 **`deploy.bat`**，完成后得到
+`dist\编辑器.exe`（约 80MB，自含 .NET 运行时与 SkiaSharp / QuestPDF 原生库，
+拷到任何 Windows 10/11 x64 机器直接双击运行）。首次启动需解包原生库，会慢几秒，属正常现象。
+
+命令行等价写法：
+
+```bash
+dotnet publish 编辑器/编辑器.csproj -c Release -p:EnableSingleFilePublish=true -o dist
+```
+
 ### 首次配置
 
 1. 启动后会弹出欢迎窗口，按提示新建或打开一个项目

@@ -6,6 +6,17 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+
+    <!-- 单文件发布参数（dotnet publish 用；日常开发 build 不受影响）。
+         SelfContained=true 带运行时，目标机器不装 .NET 也能跑；
+         IncludeNativeLibrariesForSelfExtract 把 SkiaSharp/QuestPDF 的原生 dll 也打进 exe。 -->
+    <PublishSingleFile Condition="'$(EnableSingleFilePublish)' == 'true'">true</PublishSingleFile>
+    <SelfContained Condition="'$(EnableSingleFilePublish)' == 'true'">true</SelfContained>
+    <RuntimeIdentifier Condition="'$(EnableSingleFilePublish)' == 'true'">win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract Condition="'$(EnableSingleFilePublish)' == 'true'">true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract Condition="'$(EnableSingleFilePublish)' == 'true'">true</IncludeAllContentForSelfExtract>
+    <DebugType Condition="'$(EnableSingleFilePublish)' == 'true'">none</DebugType>
+    <EnableCompressionInSingleFile Condition="'$(EnableSingleFilePublish)' == 'true'">true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
   <ItemGroup>

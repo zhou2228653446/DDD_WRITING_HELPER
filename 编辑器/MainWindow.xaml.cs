@@ -666,58 +666,38 @@ namespace 编辑器
 
         private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
         {
-            if (_currentProject == null) return;
-
-            var result = MessageBox.Show(
-                $"是否保存项目「{_currentProject.ProjectName}」的更改？",
-                "退出确认",
-                MessageBoxButton.YesNoCancel,
-                MessageBoxImage.Question);
-
-            if (result == MessageBoxResult.Cancel)
-            {
-                e.Cancel = true;
-                return;
-            }
-
-            if (result == MessageBoxResult.Yes)
-            {
-                try
-                {
-                    SaveProject();
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show($"保存失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-                    e.Cancel = true;
-                }
-            }
-
-            ShowSupportPromptIfNeeded();
-        }
-
-        /// <summary>
-        /// 退出流程末尾弹「支持作者」窗口（请求 GitHub Star）。
-        /// 用户勾选「不再显示」后写进 appearance.json，以后退出不再打扰。
-        /// 放在 Closing 里而不是 Shutdown：主窗口关闭是唯一确定的"用户主动退出"时机。
-        /// </summary>
-        private void ShowSupportPromptIfNeeded()
-        {
+            // 退出确认窗口：确认/保存/仓库主页展示三合一。返回 false = 用户反悔，取消关闭。
             try
             {
-                var config = _appearanceManager.Load();
-                if (config.SuppressSupportPrompt) return;
-
-                var win = new SupportWindow { Owner = this };
+                var projectName = _currentProject == null ? null : _currentProject.ProjectName;
+                var win = new ExitConfirmWindow(projectName) { Owner = this };
                 win.ShowDialog();
 
-                if (win.SuppressRequested)
+                if (win.DialogResult == false)
                 {
-                    config.SuppressSupportPrompt = true;
-                    _appearanceManager.Save(config);
+                    e.Cancel = true;
+                    return;
+                }
+
+                if (win.SaveRequested)
+                {
+                    try
+                    {
+                        SaveProject();
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"保存失败: {ex.Message}", "错误",
+                            MessageBoxButton.OK, MessageBoxImage.Error);
+                        e.Cancel = true;
+                        return;
+                    }
                 }
             }
-            catch { /* 弹窗失败绝不拦着用户退出 */ }
+            catch
+            {
+                // 确认窗口打不开（极端情况）时放行关闭，不把用户锁在软件里
+            }
         }
 
         // 菜单快捷入口（委托给 AiPanelControl 回调）
@@ -1406,7 +1386,7 @@ namespace 编辑器
         }
 
         private void About_Click(object sender, RoutedEventArgs e) =>
-            MessageBox.Show($"TdxClaw AI写作助手 v1.0\n开源仓库：\n{SupportWindow.RepoUrl}",
+            MessageBox.Show($"TdxClaw AI写作助手 v1.0\n开源仓库：\n{ExitConfirmWindow.RepoUrl}",
                 "关于", MessageBoxButton.OK, MessageBoxImage.Information);
 
         // 其他事件

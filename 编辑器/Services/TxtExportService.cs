@@ -21,8 +21,8 @@ namespace 编辑器.Services
 
             // ---- 封面信息 ----
             sb.AppendLine(project.ProjectName);
-            sb.AppendLine($"作者：{project.Author}");
-            sb.AppendLine($"创建日期：{project.CreatedDate:yyyy年M月d日}");
+            sb.AppendLine(project.Author);
+            sb.AppendLine($"{project.CreatedDate:yyyy年M月d日}");
             if (!string.IsNullOrWhiteSpace(project.Description))
             {
                 sb.AppendLine();
@@ -33,34 +33,31 @@ namespace 编辑器.Services
             sb.AppendLine(new string('=', 40));
             sb.AppendLine();
 
-            // ---- 摘要页（论文模式）----
-            if (paperMode &&
-                (!string.IsNullOrWhiteSpace(project.PaperAbstract) || !string.IsNullOrWhiteSpace(project.PaperKeywords)))
+            // ---- 摘要 + 关键词（论文模式：首页连排，不单独分页）----
+            if (paperMode)
             {
-                sb.AppendLine("摘要");
-                sb.AppendLine();
                 if (!string.IsNullOrWhiteSpace(project.PaperAbstract))
                 {
+                    sb.AppendLine("Abstract");
+                    sb.AppendLine();
                     sb.AppendLine("　　" + project.PaperAbstract.Trim());
                     sb.AppendLine();
                 }
                 if (!string.IsNullOrWhiteSpace(project.PaperKeywords))
-                    sb.AppendLine("关键词：" + project.PaperKeywords.Trim());
+                    sb.AppendLine("Keywords: " + project.PaperKeywords.Trim());
                 sb.AppendLine();
                 sb.AppendLine(new string('=', 40));
                 sb.AppendLine();
             }
 
-            // ---- 目录 ----
-            if (project.Chapters.Count > 0)
+            // ---- 目录（仅小说模式；论文版式无目录）----
+            if (!paperMode && project.Chapters.Count > 0)
             {
                 sb.AppendLine("目录");
                 sb.AppendLine();
                 foreach (var chapter in project.Chapters)
                 {
-                    sb.AppendLine(paperMode
-                        ? $"  {chapter.ChapterNumber}　{chapter.Title}"
-                        : $"  第{chapter.ChapterNumber}章　{chapter.Title}");
+                    sb.AppendLine($"  第{chapter.ChapterNumber}章　{chapter.Title}");
                 }
                 sb.AppendLine();
                 sb.AppendLine(new string('=', 40));

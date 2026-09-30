@@ -42,74 +42,81 @@ namespace 编辑器.Services
                 }
             );
 
-            // ---- 封面 ----
-            // 项目名
-            body.AppendChild(CreateParagraph(project.ProjectName, "SimSun", 36, true,
-                JustificationValues.Center, spaceBefore: paperMode ? 3600 : 6000, spaceAfter: 400));
-
-            // 作者
-            body.AppendChild(CreateParagraph($"作者：{project.Author}", "SimSun", 24, false,
-                JustificationValues.Center, spaceBefore: 200, spaceAfter: 200));
-
-            // 日期
-            body.AppendChild(CreateParagraph($"创建日期：{project.CreatedDate:yyyy年M月d日}", "SimSun", 24, false,
-                JustificationValues.Center, spaceBefore: 200, spaceAfter: 200));
-
-            // 描述
-            if (!string.IsNullOrWhiteSpace(project.Description))
+            // ---- 封面 / 首页标题块 ----
+            if (paperMode)
             {
-                body.AppendChild(CreateParagraph(" ", "SimSun", 12)); // 空行
-                body.AppendChild(CreateParagraph(project.Description, "SimSun", 12, false,
-                    JustificationValues.Both, spaceBefore: 200, spaceAfter: 200));
-            }
+                // 论文版式（参照 arXiv/NeurIPS 名论文）：首页连排——
+                // 标题 → 作者 → 日期 → Abstract 标题 + 缩进摘要 → 关键词 → 正文直接开始。
+                // 没有独立封面页、没有目录页。
+                body.AppendChild(CreateParagraph(project.ProjectName, "SimSun", 32, true,
+                    JustificationValues.Center, spaceBefore: 1200, spaceAfter: 360));
 
-            // 分页符
-            body.AppendChild(CreatePageBreak());
+                body.AppendChild(CreateParagraph(project.Author, "SimSun", 24, false,
+                    JustificationValues.Center, spaceBefore: 120, spaceAfter: 80));
 
-            // ---- 摘要页（论文模式；摘要或关键词任一非空才出页）----
-            if (paperMode &&
-                (!string.IsNullOrWhiteSpace(project.PaperAbstract) || !string.IsNullOrWhiteSpace(project.PaperKeywords)))
-            {
-                body.AppendChild(CreateParagraph("摘  要", "SimSun", 28, true,
-                    JustificationValues.Center, spaceBefore: 200, spaceAfter: 400));
+                body.AppendChild(CreateParagraph($"{project.CreatedDate:yyyy年M月d日}", "SimSun", 20, false,
+                    JustificationValues.Center, spaceBefore: 0, spaceAfter: 480));
 
                 if (!string.IsNullOrWhiteSpace(project.PaperAbstract))
-                    body.AppendChild(CreateBodyParagraph(project.PaperAbstract.Trim()));
+                {
+                    body.AppendChild(CreateParagraph("Abstract", "SimSun", 24, true,
+                        JustificationValues.Center, spaceBefore: 240, spaceAfter: 240));
+                    // 摘要正文：左右各缩进一字符宽（仿样例的摘要块）
+                    var absPara = CreateBodyParagraph(project.PaperAbstract.Trim());
+                    var absProps = absPara.GetFirstChild<ParagraphProperties>();
+                    absProps?.AppendChild(new Indentation { Left = "240", Right = "240" });
+                    body.AppendChild(absPara);
+                }
 
                 if (!string.IsNullOrWhiteSpace(project.PaperKeywords))
                 {
-                    body.AppendChild(CreateParagraph(" ", "SimSun", 12));
                     body.AppendChild(CreateParagraph(
-                        "关键词：" + project.PaperKeywords.Trim(), "SimSun", 12, true,
+                        "Keywords: " + project.PaperKeywords.Trim(), "SimSun", 20, true,
                         JustificationValues.Both, spaceBefore: 300, spaceAfter: 0));
+                }
+            }
+            else
+            {
+                // 小说版式：独立封面（大标题 + 作者 + 日期 + 描述）
+                body.AppendChild(CreateParagraph(project.ProjectName, "SimSun", 36, true,
+                    JustificationValues.Center, spaceBefore: 6000, spaceAfter: 400));
+
+                body.AppendChild(CreateParagraph($"作者：{project.Author}", "SimSun", 24, false,
+                    JustificationValues.Center, spaceBefore: 200, spaceAfter: 200));
+
+                body.AppendChild(CreateParagraph($"创建日期：{project.CreatedDate:yyyy年M月d日}", "SimSun", 24, false,
+                    JustificationValues.Center, spaceBefore: 200, spaceAfter: 200));
+
+                if (!string.IsNullOrWhiteSpace(project.Description))
+                {
+                    body.AppendChild(CreateParagraph(" ", "SimSun", 12)); // 空行
+                    body.AppendChild(CreateParagraph(project.Description, "SimSun", 12, false,
+                        JustificationValues.Both, spaceBefore: 200, spaceAfter: 200));
+                }
+
+                body.AppendChild(CreatePageBreak());
+
+                // 目录页（小说模式保留）
+                body.AppendChild(CreateParagraph("目录", "SimSun", 28, true,
+                    JustificationValues.Center, spaceBefore: 200, spaceAfter: 400));
+
+                foreach (var chapter in project.Chapters)
+                {
+                    body.AppendChild(CreateParagraph(
+                        $"第{chapter.ChapterNumber}章  {chapter.Title}",
+                        "SimSun", 12, false, JustificationValues.Left,
+                        spaceBefore: 60, spaceAfter: 60));
                 }
 
                 body.AppendChild(CreatePageBreak());
             }
-
-            // ---- 目录页（简要列出章节）----
-            body.AppendChild(CreateParagraph("目录", "SimSun", 28, true,
-                JustificationValues.Center, spaceBefore: 200, spaceAfter: 400));
-
-            foreach (var chapter in project.Chapters)
-            {
-                body.AppendChild(CreateParagraph(
-                    paperMode
-                        ? $"{chapter.ChapterNumber}  {chapter.Title}"
-                        : $"第{chapter.ChapterNumber}章  {chapter.Title}",
-                    "SimSun", 12, false, JustificationValues.Left,
-                    spaceBefore: 60, spaceAfter: 60));
-            }
-
-            // 分页符
-            body.AppendChild(CreatePageBreak());
 
             // ---- 正文：各章节 ----
             for (int ci = 0; ci < project.Chapters.Count; ci++)
             {
                 var chapter = project.Chapters[ci];
 
-                // 章节标题：论文模式用数字编号（1 / 2 / 3），小说模式用「第N章」
+                // 章节标题：论文模式用数字编号左对齐（1 Introduction 样式），小说模式居中「第N章」
                 body.AppendChild(CreateParagraph(
                     paperMode
                         ? $"{ci + 1}  {chapter.Title}"
@@ -136,8 +143,8 @@ namespace 编辑器.Services
                     }
                 }
 
-                // 章节之间分页（最后一章除外）
-                if (ci < project.Chapters.Count - 1)
+                // 章节之间分页：小说模式每章一页；论文模式第一章紧跟摘要（首页连排），后续分页
+                if (paperMode ? ci > 0 : ci < project.Chapters.Count - 1)
                     body.AppendChild(CreatePageBreak());
             }
 

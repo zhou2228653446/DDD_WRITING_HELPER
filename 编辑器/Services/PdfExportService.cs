@@ -101,69 +101,80 @@ namespace 编辑器.Services
 
                     page.Content().Column(col =>
                     {
-                        // ---------- 封面 ----------
-                        col.Item().PaddingTop(paperMode ? 120 : 160).AlignCenter()
-                            .Text(Safe(project.ProjectName)).FontSize(28).Bold();
-
-                        col.Item().PaddingTop(28).AlignCenter()
-                            .Text(Safe($"作者：{project.Author}")).FontSize(14);
-
-                        col.Item().PaddingTop(10).AlignCenter()
-                            .Text(Safe($"创建日期：{project.CreatedDate:yyyy年M月d日}")).FontSize(14);
-
-                        if (!string.IsNullOrWhiteSpace(project.Description))
+                        if (paperMode)
                         {
-                            col.Item().PaddingTop(48).Text(project.Description!).FontSize(12);
-                        }
-
-                        // ---------- 摘要页（论文模式）----------
-                        if (paperMode &&
-                            (!string.IsNullOrWhiteSpace(project.PaperAbstract) || !string.IsNullOrWhiteSpace(project.PaperKeywords)))
-                        {
-                            col.Item().PageBreak();
+                            // ---------- 论文首页：连排（参照 arXiv/NeurIPS 版式）----------
+                            // 标题 → 作者 → 日期 → Abstract → Keywords → 正文直接开始。
                             col.Item().PaddingTop(40).AlignCenter()
-                                .Text("摘  要").FontSize(20).Bold();
+                                .Text(Safe(project.ProjectName)).FontSize(22).Bold();
+
+                            col.Item().PaddingTop(16).AlignCenter()
+                                .Text(Safe(project.Author)).FontSize(13);
+
+                            col.Item().PaddingTop(6).AlignCenter()
+                                .Text(Safe($"{project.CreatedDate:yyyy年M月d日}")).FontSize(11);
 
                             if (!string.IsNullOrWhiteSpace(project.PaperAbstract))
                             {
-                                col.Item().PaddingTop(24)
-                                    .Text(project.PaperAbstract.Trim())
-                                    .ParagraphFirstLineIndentation(FirstLineIndent, Unit.Point);
+                                col.Item().PaddingTop(22).AlignCenter()
+                                    .Text("Abstract").FontSize(13).Bold();
+                                col.Item().PaddingTop(10).PaddingHorizontal(28)
+                                    .Text(project.PaperAbstract.Trim());
                             }
 
                             if (!string.IsNullOrWhiteSpace(project.PaperKeywords))
                             {
-                                col.Item().PaddingTop(20).Text(t =>
+                                col.Item().PaddingTop(14).PaddingHorizontal(28).Text(t =>
                                 {
-                                    t.Span("关键词：").Bold();
+                                    t.Span("Keywords: ").Bold();
                                     t.Span(project.PaperKeywords.Trim());
                                 });
                             }
+
+                            // 描述作为首页脚注区补充（有才放）
+                            if (!string.IsNullOrWhiteSpace(project.Description))
+                                col.Item().PaddingTop(18).Text(project.Description!).FontSize(10);
                         }
-
-                        // ---------- 目录 ----------
-                        if (project.Chapters.Count > 0)
+                        else
                         {
-                            col.Item().PageBreak();
+                            // ---------- 小说：封面 + 目录 ----------
+                            col.Item().PaddingTop(160).AlignCenter()
+                                .Text(Safe(project.ProjectName)).FontSize(28).Bold();
 
-                            col.Item().PaddingTop(40).AlignCenter()
-                                .Text("目录").FontSize(20).Bold();
+                            col.Item().PaddingTop(28).AlignCenter()
+                                .Text(Safe($"作者：{project.Author}")).FontSize(14);
 
-                            col.Item().PaddingTop(28);
+                            col.Item().PaddingTop(10).AlignCenter()
+                                .Text(Safe($"创建日期：{project.CreatedDate:yyyy年M月d日}")).FontSize(14);
 
-                            foreach (var chapter in project.Chapters)
+                            if (!string.IsNullOrWhiteSpace(project.Description))
                             {
-                                col.Item().PaddingVertical(5).Text(Safe(paperMode
-                                    ? $"{chapter.ChapterNumber}　{chapter.Title}"
-                                    : $"第{chapter.ChapterNumber}章　{chapter.Title}")).FontSize(12);
+                                col.Item().PaddingTop(48).Text(project.Description!).FontSize(12);
+                            }
+
+                            if (project.Chapters.Count > 0)
+                            {
+                                col.Item().PageBreak();
+                                col.Item().PaddingTop(40).AlignCenter()
+                                    .Text("目录").FontSize(20).Bold();
+                                col.Item().PaddingTop(28);
+
+                                foreach (var chapter in project.Chapters)
+                                {
+                                    col.Item().PaddingVertical(5).Text(
+                                        Safe($"第{chapter.ChapterNumber}章　{chapter.Title}")).FontSize(12);
+                                }
                             }
                         }
 
-                        // ---------- 正文：每章一页 ----------
+                        // ---------- 正文 ----------
+                        // 论文模式：第一章紧跟摘要（首页连排，参照 arXiv/NeurIPS），后续章节自然分页不用；
+                        // 小说模式：每章一页。
                         for (int i = 0; i < project.Chapters.Count; i++)
                         {
                             var chapter = project.Chapters[i];
-                            col.Item().PageBreak();
+                            if (!paperMode || i > 0)
+                                col.Item().PageBreak();
 
                             col.Item().PaddingTop(36)
                                 .Text(Safe(paperMode

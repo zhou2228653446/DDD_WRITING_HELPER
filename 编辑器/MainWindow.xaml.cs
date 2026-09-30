@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
@@ -1914,6 +1915,88 @@ namespace 编辑器
         }
 
         private void SettingsBookWindow_Click(object sender, RoutedEventArgs e) => ShowSettingsBookWindow();
+
+        // ------------------------------------------------------------------
+        // 一致性审稿（只读分析：对照设定集检查章节正文，输出问题清单，不写回）
+        // ------------------------------------------------------------------
+
+        /// <summary>审稿素材用的设定集章键：这些章描述「事实」，是比对基准。</summary>
+        private static readonly string[] ReviewSourceKeys =
+            { "characters", "relations", "glossary", "history", "world", "power", "foreshadow" };
+
+        /// <summary>审稿按钮（章节编辑区）。</summary>
+        private async void ReviewChapter_Click(object sender, RoutedEventArgs e)
+        {
+            if (_currentProject?.SettingsBook == null
+                || GetSelectedChapterFromTree() is not Chapter chapter)
+            {
+                ShowNotification("请先选择要审稿的章节", isError: true);
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(chapter.Content))
+            {
+                ShowNotification("本章还没有正文，无可审阅", isError: true);
+                return;
+            }
+
+            SettingsBookTemplates.EnsureBook(_currentProject);
+            var book = _currentProject.SettingsBook!;
+
+            // 审稿基准：设定集里描述「事实」的章 + 五项贯穿设定
+            var facts = new StringBuilder();
+            foreach (var key in ReviewSourceKeys)
+            {
+                var c = book.Chapters.FirstOrDefault(x => x.SourceKey == key && x.IncludeInExport);
+                if (c == null || string.IsNullOrWhiteSpace(c.Content)) continue;
+                facts.AppendLine("### " + c.Title);
+                facts.AppendLine(c.Content.Trim());
+                facts.AppendLine();
+            }
+            if (!string.IsNullOrWhiteSpace(_currentProject.BackgroundSettings))
+                facts.AppendLine("### 背景设定").AppendLine(_currentProject.BackgroundSettings.Trim());
+            if (!string.IsNullOrWhiteSpace(_currentProject.CharacterSettings))
+                facts.AppendLine("### 人物设定").AppendLine(_currentProject.CharacterSettings.Trim());
+
+            var hasFacts = facts.Length > 0;
+            var userPrompt = AiPrompts.Section("待审章节", $"第{chapter.ChapterNumber}章 {chapter.Title}\n{chapter.Content}");
+            userPrompt += "\n" + (hasFacts
+                ? AiPrompts.Section("设定集与项目设定（比对基准）", facts.ToString())
+                : AiPrompts.Section("设定集与项目设定（比对基准）",
+                    "（作者还没有维护设定集。只做前后文与常识层面的检查，涉及设定一致性的结论一律标「存疑」。）"));
+
+            // 前情：前面最近一章的梗概，帮助发现跨章矛盾
+            var prev = _currentProject.Chapters
+                .Where(c => c.ChapterNumber < chapter.ChapterNumber && !string.IsNullOrWhiteSpace(c.Content))
+                .OrderByDescending(c => c.ChapterNumber).FirstOrDefault();
+            if (prev != null)
+            {
+                var prevBrief = prev.Content.Length > 800 ? prev.Content[..800] + "…" : prev.Content;
+                userPrompt += "\n" + AiPrompts.Section("前一章内容梗概（供跨章比对）", prevBrief);
+            }
+
+            UpdateStatus("正在审稿…");
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(
+                userPrompt,
+                BuildSystemPrompt(
+                    ResolveTaskText(AiPrompts.Keys.Review, AiPrompts.Task.Review),
+                    ResolveContractText(AiPrompts.Keys.Review, AiPrompts.StructuredOutput)),
+                new CompletionOptions
+                {
+                    MaxTokens = 3000,
+                    Temperature = 0.3,          // 审稿要稳定，不给发挥空间
+                    CancellationToken = _aiCts!.Token,
+                    OnNotice = _aiNotice,
+                    OnProgress = _tokenProgress
+                }));
+
+            if (IsUsable(result))
+            {
+                _chatLogger?.Log("AI审稿·" + chapter.Title, "", result.Text);
+                var win = new ReviewResultWindow(chapter.Title, result.Text) { Owner = this };
+                win.Show();
+                UpdateStatus("审稿完成");
+            }
+        }
 
         // ------------------------------------------------------------------
         // 参考文献库

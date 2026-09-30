@@ -142,6 +142,7 @@ namespace 编辑器.Services
             public const string Expand = "Task.Expand";
             public const string Chat = "Task.Chat";
             public const string SettingBook = "Task.SettingBook";
+            public const string Review = "Task.Review";
         }
 
         // ==================================================================
@@ -171,6 +172,7 @@ namespace 编辑器.Services
             public static string Expand => Resolve(Keys.Expand);
             public static string Chat => Resolve(Keys.Chat);
             public static string SettingBook => Resolve(Keys.SettingBook);
+            public static string Review => Resolve(Keys.Review);
         }
 
         // ==================================================================
@@ -236,6 +238,9 @@ namespace 编辑器.Services
 
             new(Keys.SettingBook, "任务说明", "设定集章节",
                 "「设定集」窗口点「AI 生成 / 完善」时使用，按章主题把项目设定整理成可入书的条目式内容。"),
+
+            new(Keys.Review, "任务说明", "一致性审稿",
+                "「AI 审稿」使用：对照设定集检查某章正文与设定的矛盾，输出问题清单。只读分析，不改写正文。"),
         };
 
         /// <summary>按分组归类，供设置页做分组显示。</summary>
@@ -436,6 +441,27 @@ namespace 编辑器.Services
                       内容，逐条标注"【推断】"，让作者一眼看出哪些是他定的、哪些是推的。
                     - 不提问、不寒暄、不做总结性开场白，直接给出这一章的成稿。
                     - 篇幅与本章主题相称：主题大的章（世界观 / 人物档案）可以长，小主题不要注水。
+                    """;
+
+                public const string Review = """
+                    【本次任务】一致性审稿（只读分析，不改写正文）
+                    作者交给你一章正文，要求你对照「设定集与项目设定」做一致性检查。
+                    你的产出是一份**问题清单**，不是改写稿。
+
+                    - 逐类检查，发现多少写多少，没有问题的类别直接省略：
+                      ① 人物：姓名/称呼、外貌、性格、能力强弱、知识范围（限知视角下不该知道的事）、
+                         存亡状态（是否出现死者言行）。
+                      ② 世界与设定：力量/科技规则是否被违反，专有名词拼写与设定集词汇表是否一致，
+                         地理与组织关系是否矛盾。
+                      ③ 时间线：事件先后顺序、时间跨度、年龄与季节是否与既有章节冲突。
+                      ④ 前后文：与所给「前情梗概」或相邻章节的事实冲突，伏笔状态异常
+                         （已声明回收的伏笔再次出现且无解释）。
+                    - 每条问题按固定格式输出：
+                      「[类别] 位置（引用原文短语）→ 矛盾点 → 与哪条设定冲突 → 建议修法（一句话）」
+                    - 语气直接，不要客套；拿不准的写「存疑」并说明依据不足在哪。
+                    - 若整章没有发现任何矛盾，明确说「未发现一致性矛盾」，
+                      然后最多给 3 条可选的改进观察（节奏 / 信息密度 / 对话比例），并标注「非一致性建议」。
+                    - 不复述正文，不重写任何段落。
                     """;
             }
         }

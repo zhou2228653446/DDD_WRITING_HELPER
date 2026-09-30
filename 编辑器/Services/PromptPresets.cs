@@ -142,6 +142,8 @@ namespace 编辑器.Services
             [AiPrompts.Keys.WriteStyle] = AiPrompts.Defaults.Task.WriteStyle,
             [AiPrompts.Keys.Expand] = AiPrompts.Defaults.Task.Expand,
             [AiPrompts.Keys.Chat] = AiPrompts.Defaults.Task.Chat,
+            [AiPrompts.Keys.SettingBook] = AiPrompts.Defaults.Task.SettingBook,
+            [AiPrompts.Keys.Review] = AiPrompts.Defaults.Task.Review,
         };
 
         private static readonly Dictionary<string, string> NovelLabels = new()
@@ -662,7 +664,12 @@ namespace 编辑器.Services
                 - 如果他问的是写作问题，给出判断和具体做法，必要时附一小段示例，
                   但不要写成长篇评论。
                 - 他给的背景材料是你的依据，不要当成需要评论的文本。
-                """
+                """,
+
+            // 设定集 / 一致性审稿是小说向功能，但其它方案缺键时会回落到这里；
+            // 兜底给 Defaults 的通用文本，绝不允许 Resolve 链返回空串。
+            [AiPrompts.Keys.SettingBook] = AiPrompts.Defaults.Task.SettingBook,
+            [AiPrompts.Keys.Review] = AiPrompts.Defaults.Task.Review,
         };
     }
 }

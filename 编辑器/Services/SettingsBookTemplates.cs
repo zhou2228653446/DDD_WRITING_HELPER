@@ -109,6 +109,12 @@ namespace 编辑器.Services
                 Seed = "文风设定 WritingStyle",
                 AiTask = "把文风设定整理成设定集章节：叙述视角、语言风格、节奏偏好、写作禁忌。"
             },
+            new()
+            {
+                SourceKey = "foreshadow", Title = "伏笔与线索登记",
+                Seed = "",
+                AiTask = "扫描已有章节正文，登记其中埋设的伏笔与线索：每条按「埋设章节｜伏笔内容｜计划回收点（未知则写『未定』）｜当前状态（未回收/已回收）」列出。只登记正文里真实出现的，不要推测。"
+            },
         };
 
         /// <summary>按模板键查模板；未知键返回 null（自定义章没有模板）。</summary>
@@ -125,6 +131,7 @@ namespace 编辑器.Services
             "full_outline" => "来自：全文大纲",
             "chapter_outline" => "来自：章节大纲",
             "style" => "来自：文风设定",
+            "foreshadow" => "空章 · 让 AI 扫描正文登记伏笔",
             "geography" or "history" or "relations" or "glossary" => "空章 · 可让 AI 补全",
             _ => "自定义章节"
         };

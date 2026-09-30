@@ -153,13 +153,23 @@
                     <Button Style="{StaticResource Btn.Ghost}" Content="设定集" Margin="6,0,0,0"
                             ToolTip="把大纲 / 人物 / 背景 / 文风统合成一本可导出的资料书"
                             Click="SettingsBookWindow_Click"/>
-                    <Button Style="{StaticResource Btn.Ghost}" Content="文献库" Margin="6,0,0,0"
-                            ToolTip="参考文献库：AI 引用 [n] 的唯一来源，支持导入 BibTeX"
-                            Click="LiteratureWindow_Click"/>
+                    <Button x:Name="LiteratureBtn" Style="{StaticResource Btn.Ghost}" Content="文献库" Margin="6,0,0,0"
+                            ToolTip="参考文献库：论文写作的引用管理（仅论文模式下开放）"
+                            Click="LiteratureWindow_Click"
+                            Visibility="Collapsed"/>
                     <Button Style="{StaticResource Btn.Ghost}" Content="外观" Margin="6,0,0,0"
                             Click="AppearanceSettings_Click"/>
                     <Button Style="{StaticResource Btn.Ghost}" Content="AI 设置" Margin="6,0,0,0"
                             Click="ApiSettings_Click"/>
+
+                    <Border Width="1" Height="18" Margin="10,0" Background="{DynamicResource Brush.Border}"/>
+
+                    <!-- 写作模式下拉：与 AI 面板的方案下拉联动。论文模式额外放开「文献库」入口 -->
+                    <TextBlock Text="模式" Style="{StaticResource SectionHeader}" VerticalAlignment="Center"
+                               FontSize="12" Margin="0,0,6,0"/>
+                    <ComboBox x:Name="ModeComboBox" MinWidth="120" VerticalAlignment="Center"
+                              SelectionChanged="ModeComboBox_SelectionChanged"
+                              ToolTip="写作模式：决定提示词方案与可用功能（文献库仅在论文模式开放）"/>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">

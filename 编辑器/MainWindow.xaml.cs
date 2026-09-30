@@ -1648,9 +1648,11 @@ namespace 编辑器
         }
 
         /// <summary>
-        /// 把当前生效的提示词方案刷到 AI 面板头上。启动、切换配置目录、
+        /// 把当前生效的提示词方案刷到 AI 面板与顶部「模式」下拉头上。启动、切换配置目录、
         /// 以及 AI 设置对话框保存后都要调一次——面板上看不到方案名时，
         /// 用户切换方案后会觉得"AI 突然不对劲"。
+        /// 同时按方案切换「文献库」按钮可见性：文献库是论文专属功能，
+        /// 非论文模式下按钮直接隐藏（不只是禁用检索）。
         /// </summary>
         private void RefreshPresetIndicator()
         {
@@ -1658,6 +1660,50 @@ namespace 编辑器
 
             var id = _promptStore.ActivePresetId;
             _aiPanel.SetPresetOptions(AiPrompts.PresetOptions(_promptStore), id);
+            RefreshModeCombo(id);
+            RefreshLiteratureVisibility();
+        }
+
+        /// <summary>程序性刷新「模式」下拉时压住 SelectionChanged，防止把刷新当成用户改选。</summary>
+        private bool _loadingModeCombo;
+
+        /// <summary>顶部「模式」下拉：内容与选中项跟 AI 面板的方案下拉保持一致。</summary>
+        private void RefreshModeCombo(string selectedId)
+        {
+            var options = AiPrompts.PresetOptions(_promptStore);
+            _loadingModeCombo = true;
+            try
+            {
+                ModeComboBox.DisplayMemberPath = nameof(AiPrompts.PresetOption.Name);
+                ModeComboBox.ItemsSource = options;
+                ModeComboBox.SelectedItem = options.FirstOrDefault(o => o.Id == selectedId)
+                    ?? options.FirstOrDefault();
+            }
+            finally { _loadingModeCombo = false; }
+        }
+
+        /// <summary>用户在顶部「模式」下拉切换：等价于在 AI 面板切方案（同一收口 OnPresetChanged）。</summary>
+        private void ModeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_loadingModeCombo) return;
+            if (ModeComboBox.SelectedItem is AiPrompts.PresetOption opt
+                && _promptStore != null && opt.Id != _promptStore.ActivePresetId)
+            {
+                // 赋值/落盘/面板回刷都在 OnPresetChanged 这一个收口里
+                OnPresetChanged(opt.Id);
+            }
+        }
+
+        /// <summary>文献库按钮只在论文系方案下可见（含基于论文的自定义方案）。</summary>
+        private void RefreshLiteratureVisibility()
+        {
+            var academic = IsAcademicPreset();
+            LiteratureBtn.Visibility = academic ? Visibility.Visible : Visibility.Collapsed;
+
+            // 文献库窗口开着时切到非论文模式 → 直接关掉（文献库是论文专属，模式即边界）。
+            // Closed 回调会把 _literatureWindow 置 null，下次进论文模式重新按新状态打开。
+            if (!academic && _literatureWindow != null)
+                _literatureWindow.Close();
         }
 
         private async Task CallAiFunction(Func<IApiService, Task<AiResult>> function)

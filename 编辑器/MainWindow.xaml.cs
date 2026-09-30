@@ -1931,7 +1931,7 @@ namespace 编辑器
             {
                 if (_literatureWindow == null)
                 {
-                    var win = new LiteratureWindow(_currentProject) { Owner = this };
+                    var win = new LiteratureWindow(_currentProject, IsAcademicPreset()) { Owner = this };
                     win.Closed += (_, _) => _literatureWindow = null;
                     _literatureWindow = win;
                     win.Show();
@@ -1951,6 +1951,16 @@ namespace 编辑器
         }
 
         private void LiteratureWindow_Click(object sender, RoutedEventArgs e) => ShowLiteratureWindow();
+
+        /// <summary>
+        /// 当前生效方案是否「学术论文系」（内置论文，或基于论文的自定义方案）。
+        /// 在线检索入口只在论文系方案下开放。
+        /// </summary>
+        private bool IsAcademicPreset()
+        {
+            if (_promptStore == null) return false;
+            return _promptStore.ResolveBasePreset(_promptStore.ActivePresetId) == PromptPresets.IdAcademic;
+        }
 
         /// <summary>
         /// 设定集窗口里点「AI 生成 / 完善」：为某一章生成（或补全）内容。

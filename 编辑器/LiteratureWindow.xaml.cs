@@ -12,6 +12,8 @@ namespace 编辑器
     /// <summary>
     /// 参考文献库窗口：左侧列表（编号与 AI 上下文里的 [n] 一致）、右侧编辑表单。
     /// 编辑即时写回项目（与设定集窗口同款模式），删除 / 导入直接改库并刷新列表。
+    /// 「在线检索」只在提示词方案为学术论文（或基于论文方案的自定义方案）时开放：
+    /// 文献检索是论文场景的需求，小说 / 公文方案下不出现这个入口。
     /// </summary>
     public partial class LiteratureWindow : HandyControl.Controls.Window
     {
@@ -19,6 +21,8 @@ namespace 编辑器
         private LiteratureEntry? _current;
         private bool _loading;
         private List<ListItem> _items = new();
+        private readonly bool _enableSearch;
+        private List<LiteratureSearchResult> _searchResults = new();
 
         /// <summary>列表条目包装：编号 [n] 与 AI 上下文引用编号一致。</summary>
         private sealed class ListItem
@@ -39,10 +43,46 @@ namespace 编辑器
             public ListItem(LiteratureEntry entry, int no) { Entry = entry; No = no; }
         }
 
-        public LiteratureWindow(NovelProject project)
+        /// <summary>来源下拉的数据项。</summary>
+        private sealed record SourceItem(LiteratureSearchSource Source, string Name)
+        {
+            public override string ToString() => Name;
+        }
+
+        /// <summary>检索结果列表条目包装。</summary>
+        private sealed class ResultItem
+        {
+            public LiteratureSearchResult Result { get; }
+            public string Display => Result.Display;
+            public string Sub
+            {
+                get
+                {
+                    var parts = new List<string>();
+                    if (!string.IsNullOrWhiteSpace(Result.Authors)) parts.Add(Result.Authors);
+                    if (!string.IsNullOrWhiteSpace(Result.Doi)) parts.Add("DOI: " + Result.Doi);
+                    else parts.Add("(无 DOI)");
+                    return string.Join(" · ", parts);
+                }
+            }
+            public ResultItem(LiteratureSearchResult r) => Result = r;
+        }
+
+        /// <param name="enableSearch">是否开放「在线检索」（由 MainWindow 按当前提示词方案判定）。</param>
+        public LiteratureWindow(NovelProject project, bool enableSearch = false)
         {
             InitializeComponent();
             _project = project;
+            _enableSearch = enableSearch;
+
+            SearchToggleBtn.Visibility = enableSearch ? Visibility.Visible : Visibility.Collapsed;
+            SourceCombo.ItemsSource = new[]
+            {
+                new SourceItem(LiteratureSearchSource.OpenAlex, "OpenAlex"),
+                new SourceItem(LiteratureSearchSource.SemanticScholar, "Semantic Scholar"),
+            };
+            SourceCombo.SelectedIndex = 0;
+
             RefreshList(keep: null);
         }
 
@@ -231,6 +271,115 @@ namespace 编辑器
             var msg = imported > 0 ? $"成功导入 {imported} 条文献" : "没有可导入的文献";
             if (skipped > 0) msg += $"（跳过 {skipped} 条：解析失败或引用键重复）";
             HandyControl.Controls.MessageBox.Info(msg, "导入 BibTeX");
+        }
+
+        // ------------------------------------------------------------------
+        // 在线检索（论文方案下开放）
+        // ------------------------------------------------------------------
+
+        private void SearchToggle_Click(object sender, RoutedEventArgs e)
+        {
+            var show = SearchPanel.Visibility != Visibility.Visible;
+            SearchPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+            if (show)
+            {
+                SearchBox.Focus();
+                UpdateSearchActionRow();
+            }
+        }
+
+        private void SearchBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        {
+            if (e.Key == System.Windows.Input.Key.Enter)
+            {
+                e.Handled = true;
+                _ = RunSearchAsync();
+            }
+        }
+
+        private async void Search_Click(object sender, RoutedEventArgs e) => await RunSearchAsync();
+
+        private async Task RunSearchAsync()
+        {
+            if (!SearchBtn.IsEnabled) return;
+            var query = SearchBox.Text.Trim();
+            if (query.Length == 0)
+            {
+                HandyControl.Controls.MessageBox.Info("先输入检索词（标题 / 主题 / 作者）。", "在线检索");
+                return;
+            }
+
+            var source = (SourceCombo.SelectedItem as SourceItem)?.Source ?? LiteratureSearchSource.OpenAlex;
+            SearchBtn.IsEnabled = false;
+            SearchBtn.Content = "搜索中…";
+            SearchStatusText.Text = $"正在检索 {source}…";
+            try
+            {
+                _searchResults = await LiteratureSearch.SearchAsync(query, source, 15);
+                var items = _searchResults.Select(r => new ResultItem(r)).ToList();
+                SearchResultsList.ItemsSource = items;
+                SearchResultsList.Visibility = items.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+                UpdateSearchActionRow();
+                SearchStatusText.Text = items.Count == 0
+                    ? "没有检索到结果，换个检索词试试。"
+                    : $"检索到 {items.Count} 条（按相关性排序）。按住 Ctrl / Shift 可多选，选中后「导入选中」。";
+            }
+            catch (Exception ex)
+            {
+                _searchResults = new List<LiteratureSearchResult>();
+                SearchResultsList.ItemsSource = null;
+                UpdateSearchActionRow();
+                SearchStatusText.Text = "检索失败：" + ex.Message;
+            }
+            finally
+            {
+                SearchBtn.IsEnabled = true;
+                SearchBtn.Content = "搜索";
+            }
+        }
+
+        private void UpdateSearchActionRow()
+        {
+            var has = SearchResultsList.Items.Count > 0;
+            SearchActionRow.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void ImportSelected_Click(object sender, RoutedEventArgs e)
+        {
+            var selected = SearchResultsList.SelectedItems.OfType<ResultItem>()
+                .Select(r => r.Result).ToList();
+            if (selected.Count == 0)
+            {
+                HandyControl.Controls.MessageBox.Info("先在结果列表里选中要导入的文献。", "导入选中");
+                return;
+            }
+
+            // 与既有库 / 本批结果按 DOI 去重（无 DOI 的按标题小写兜底比对）
+            var existingDois = new HashSet<string>(
+                _project.LiteratureLibrary.Select(x => x.Doi).Where(d => d.Length > 0));
+            var existingTitles = new HashSet<string>(
+                _project.LiteratureLibrary.Select(x => x.Title.Trim().ToLowerInvariant()));
+            int added = 0, dup = 0;
+            foreach (var r in selected)
+            {
+                var doi = LiteratureSearch.NormalizeDoi(r.Doi);
+                var titleKey = r.Title.Trim().ToLowerInvariant();
+                if ((doi.Length > 0 && !existingDois.Add(doi))
+                    || (doi.Length == 0 && !existingTitles.Add(titleKey)))
+                {
+                    dup++;
+                    continue;
+                }
+                _project.LiteratureLibrary.Add(r.ToEntry());
+                added++;
+            }
+
+            _project.Save();
+            RefreshList(keep: null);
+            HandyControl.Controls.MessageBox.Info(
+                added > 0 ? $"已导入 {added} 条到文献库" + (dup > 0 ? $"（跳过 {dup} 条重复）" : "") + "。"
+                          : $"所选文献都已在库中（跳过 {dup} 条）。",
+                "导入选中");
         }
 
         // ------------------------------------------------------------------

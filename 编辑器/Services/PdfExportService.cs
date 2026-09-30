@@ -83,8 +83,9 @@ namespace 编辑器.Services
 
         /// <summary>
         /// 导出项目为 PDF 文件。
+        /// <paramref name="paperMode"/> 为 true 时按论文版式：摘要页 + 数字编号章节。
         /// </summary>
-        public static void Export(string filePath, NovelProject project)
+        public static void Export(string filePath, NovelProject project, bool paperMode = false)
         {
             EnsureInitialized();
 
@@ -101,7 +102,7 @@ namespace 编辑器.Services
                     page.Content().Column(col =>
                     {
                         // ---------- 封面 ----------
-                        col.Item().PaddingTop(160).AlignCenter()
+                        col.Item().PaddingTop(paperMode ? 120 : 160).AlignCenter()
                             .Text(Safe(project.ProjectName)).FontSize(28).Bold();
 
                         col.Item().PaddingTop(28).AlignCenter()
@@ -113,6 +114,31 @@ namespace 编辑器.Services
                         if (!string.IsNullOrWhiteSpace(project.Description))
                         {
                             col.Item().PaddingTop(48).Text(project.Description!).FontSize(12);
+                        }
+
+                        // ---------- 摘要页（论文模式）----------
+                        if (paperMode &&
+                            (!string.IsNullOrWhiteSpace(project.PaperAbstract) || !string.IsNullOrWhiteSpace(project.PaperKeywords)))
+                        {
+                            col.Item().PageBreak();
+                            col.Item().PaddingTop(40).AlignCenter()
+                                .Text("摘  要").FontSize(20).Bold();
+
+                            if (!string.IsNullOrWhiteSpace(project.PaperAbstract))
+                            {
+                                col.Item().PaddingTop(24)
+                                    .Text(project.PaperAbstract.Trim())
+                                    .ParagraphFirstLineIndentation(FirstLineIndent, Unit.Point);
+                            }
+
+                            if (!string.IsNullOrWhiteSpace(project.PaperKeywords))
+                            {
+                                col.Item().PaddingTop(20).Text(t =>
+                                {
+                                    t.Span("关键词：").Bold();
+                                    t.Span(project.PaperKeywords.Trim());
+                                });
+                            }
                         }
 
                         // ---------- 目录 ----------
@@ -127,18 +153,22 @@ namespace 编辑器.Services
 
                             foreach (var chapter in project.Chapters)
                             {
-                                col.Item().PaddingVertical(5).Text(
-                                    Safe($"第{chapter.ChapterNumber}章　{chapter.Title}")).FontSize(12);
+                                col.Item().PaddingVertical(5).Text(Safe(paperMode
+                                    ? $"{chapter.ChapterNumber}　{chapter.Title}"
+                                    : $"第{chapter.ChapterNumber}章　{chapter.Title}")).FontSize(12);
                             }
                         }
 
                         // ---------- 正文：每章一页 ----------
-                        foreach (var chapter in project.Chapters)
+                        for (int i = 0; i < project.Chapters.Count; i++)
                         {
+                            var chapter = project.Chapters[i];
                             col.Item().PageBreak();
 
-                            col.Item().PaddingTop(36).AlignCenter()
-                                .Text(Safe($"第{chapter.ChapterNumber}章　{chapter.Title}"))
+                            col.Item().PaddingTop(36)
+                                .Text(Safe(paperMode
+                                    ? $"{i + 1}　{chapter.Title}"
+                                    : $"第{chapter.ChapterNumber}章　{chapter.Title}"))
                                 .FontSize(16).Bold();
 
                             col.Item().PaddingTop(26);
@@ -165,6 +195,22 @@ namespace 编辑器.Services
                                             .ParagraphFirstLineIndentation(FirstLineIndent, Unit.Point);
                                     }
                                 }
+                            }
+                        }
+
+                        // ---------- 参考文献（文献库非空时自动追加）----------
+                        if (project.LiteratureLibrary.Count > 0)
+                        {
+                            col.Item().PageBreak();
+                            col.Item().PaddingTop(36).AlignCenter()
+                                .Text("参考文献").FontSize(16).Bold();
+                            col.Item().PaddingTop(20);
+
+                            for (int i = 0; i < project.LiteratureLibrary.Count; i++)
+                            {
+                                var text = LiteratureFormatter.FormatEntry(project.LiteratureLibrary[i], i + 1);
+                                col.Item().PaddingVertical(3)
+                                    .Text(text).FontSize(10.5f);
                             }
                         }
                     });

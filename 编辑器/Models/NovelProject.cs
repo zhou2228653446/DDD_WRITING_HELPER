@@ -36,6 +36,10 @@ namespace 编辑器
         // AI 生成时整个库当上下文、引用标 [n]，AI 自己不决定引用什么（防编造）。
         public List<LiteratureEntry> LiteratureLibrary { get; set; } = new();
 
+        // 论文导出用：摘要与关键词（论文模式导出时进摘要页；留空则该页省略）
+        public string PaperAbstract { get; set; } = "";
+        public string PaperKeywords { get; set; } = "";   // 分号或逗号分隔
+
         public void Save()
         {
             if (string.IsNullOrEmpty(FilePath))

@@ -383,6 +383,42 @@ namespace 编辑器
         }
 
         // ------------------------------------------------------------------
+        // 导出 BibTeX
+        // ------------------------------------------------------------------
+
+        private void ExportBib_Click(object sender, RoutedEventArgs e)
+        {
+            FlushEditors();
+            if (_project.LiteratureLibrary.Count == 0)
+            {
+                HandyControl.Controls.MessageBox.Warning("文献库为空，先添加或导入文献。", "导出 BibTeX");
+                return;
+            }
+
+            var dialog = new SaveFileDialog
+            {
+                Title = "导出 BibTeX",
+                Filter = "BibTeX 文件 (*.bib)|*.bib",
+                FileName = (_project.ProjectName ?? "references") + ".bib"
+            };
+            if (dialog.ShowDialog() != true) return;
+
+            try
+            {
+                System.IO.File.WriteAllText(dialog.FileName,
+                    LiteratureFormatter.ExportBibtex(_project.LiteratureLibrary),
+                    new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                HandyControl.Controls.MessageBox.Success(
+                    $"已导出 { _project.LiteratureLibrary.Count} 条到 {System.IO.Path.GetFileName(dialog.FileName)}，可直接导入 Zotero / JabRef。",
+                    "导出 BibTeX");
+            }
+            catch (Exception ex)
+            {
+                HandyControl.Controls.MessageBox.Error("导出失败：" + ex.Message, "导出 BibTeX");
+            }
+        }
+
+        // ------------------------------------------------------------------
         // 复制参考文献表
         // ------------------------------------------------------------------
 

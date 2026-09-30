@@ -13,8 +13,9 @@ namespace 编辑器.Services
     {
         /// <summary>
         /// 导出项目为 TXT 文本文件。
+        /// <paramref name="paperMode"/> 为 true 时附摘要页与数字编号章节。
         /// </summary>
-        public static void Export(string filePath, NovelProject project)
+        public static void Export(string filePath, NovelProject project, bool paperMode = false)
         {
             var sb = new StringBuilder();
 
@@ -32,6 +33,24 @@ namespace 编辑器.Services
             sb.AppendLine(new string('=', 40));
             sb.AppendLine();
 
+            // ---- 摘要页（论文模式）----
+            if (paperMode &&
+                (!string.IsNullOrWhiteSpace(project.PaperAbstract) || !string.IsNullOrWhiteSpace(project.PaperKeywords)))
+            {
+                sb.AppendLine("摘要");
+                sb.AppendLine();
+                if (!string.IsNullOrWhiteSpace(project.PaperAbstract))
+                {
+                    sb.AppendLine("　　" + project.PaperAbstract.Trim());
+                    sb.AppendLine();
+                }
+                if (!string.IsNullOrWhiteSpace(project.PaperKeywords))
+                    sb.AppendLine("关键词：" + project.PaperKeywords.Trim());
+                sb.AppendLine();
+                sb.AppendLine(new string('=', 40));
+                sb.AppendLine();
+            }
+
             // ---- 目录 ----
             if (project.Chapters.Count > 0)
             {
@@ -39,7 +58,9 @@ namespace 编辑器.Services
                 sb.AppendLine();
                 foreach (var chapter in project.Chapters)
                 {
-                    sb.AppendLine($"  第{chapter.ChapterNumber}章　{chapter.Title}");
+                    sb.AppendLine(paperMode
+                        ? $"  {chapter.ChapterNumber}　{chapter.Title}"
+                        : $"  第{chapter.ChapterNumber}章　{chapter.Title}");
                 }
                 sb.AppendLine();
                 sb.AppendLine(new string('=', 40));
@@ -51,7 +72,9 @@ namespace 编辑器.Services
             {
                 var chapter = project.Chapters[i];
 
-                sb.AppendLine($"第{chapter.ChapterNumber}章　{chapter.Title}");
+                sb.AppendLine(paperMode
+                    ? $"{i + 1}　{chapter.Title}"
+                    : $"第{chapter.ChapterNumber}章　{chapter.Title}");
                 sb.AppendLine();
 
                 if (!string.IsNullOrWhiteSpace(chapter.Content))
@@ -71,6 +94,17 @@ namespace 编辑器.Services
                     sb.AppendLine();
                     sb.AppendLine();
                 }
+            }
+
+            // ---- 参考文献（文献库非空时自动追加）----
+            if (project.LiteratureLibrary.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine();
+                sb.AppendLine("参考文献");
+                sb.AppendLine();
+                for (int i = 0; i < project.LiteratureLibrary.Count; i++)
+                    sb.AppendLine(LiteratureFormatter.FormatEntry(project.LiteratureLibrary[i], i + 1));
             }
 
             // UTF-8 with BOM：不带 BOM 时记事本会把中文识别成 ANSI 而乱码

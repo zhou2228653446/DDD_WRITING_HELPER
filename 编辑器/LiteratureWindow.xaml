@@ -245,7 +245,10 @@
                            TextWrapping="Wrap"/>
                 <Button x:Name="CopyListBtn" Grid.Column="1" Style="{StaticResource Btn.Primary}"
                         Content="复制参考文献表" Click="CopyList_Click"
-                        ToolTip="按 GB/T 7714 简化格式生成 [1]..[n] 参考文献表并复制到剪贴板"/>
+                        ToolTip="按 GB/T 7714-2015 顺序编码制生成 [1]..[n] 参考文献表并复制到剪贴板"/>
+                <Button x:Name="ExportBibBtn" Grid.Column="1" Style="{StaticResource Btn.Ghost}"
+                        Content="导出 BibTeX" Click="ExportBib_Click" Margin="0,0,140,0"
+                        ToolTip="把文献库导出为 .bib 文件（可导入 Zotero / JabRef）"/>
             </Grid>
         </Border>
     </Grid>

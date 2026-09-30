@@ -576,7 +576,7 @@ namespace 编辑器
             {
                 try
                 {
-                    WordExportService.Export(dialog.FileName, _currentProject);
+                    WordExportService.Export(dialog.FileName, _currentProject, IsAcademicPreset());
                     ShowNotification($"已导出为 Word：{Path.GetFileName(dialog.FileName)}");
 
                     // 询问是否打开
@@ -599,11 +599,11 @@ namespace 编辑器
         }
         private void ExportPdf_Click(object sender, RoutedEventArgs e) =>
             ExportProjectFile("PDF 文档 (*.pdf)|*.pdf", ".pdf", "PDF",
-                (path, project) => PdfExportService.Export(path, project));
+                (path, project) => PdfExportService.Export(path, project, IsAcademicPreset()));
 
         private void ExportTxt_Click(object sender, RoutedEventArgs e) =>
             ExportProjectFile("文本文件 (*.txt)|*.txt", ".txt", "TXT",
-                (path, project) => TxtExportService.Export(path, project));
+                (path, project) => TxtExportService.Export(path, project, IsAcademicPreset()));
 
         /// <summary>导出通用流程：校验项目 → 同步 AI 上下文 → 选路径 → 写文件 → 询问是否打开</summary>
         private void ExportProjectFile(string filter, string extension, string displayName,

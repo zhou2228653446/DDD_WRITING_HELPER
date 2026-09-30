@@ -692,6 +692,32 @@ namespace 编辑器
                     e.Cancel = true;
                 }
             }
+
+            ShowSupportPromptIfNeeded();
+        }
+
+        /// <summary>
+        /// 退出流程末尾弹「支持作者」窗口（请求 GitHub Star）。
+        /// 用户勾选「不再显示」后写进 appearance.json，以后退出不再打扰。
+        /// 放在 Closing 里而不是 Shutdown：主窗口关闭是唯一确定的"用户主动退出"时机。
+        /// </summary>
+        private void ShowSupportPromptIfNeeded()
+        {
+            try
+            {
+                var config = _appearanceManager.Load();
+                if (config.SuppressSupportPrompt) return;
+
+                var win = new SupportWindow { Owner = this };
+                win.ShowDialog();
+
+                if (win.SuppressRequested)
+                {
+                    config.SuppressSupportPrompt = true;
+                    _appearanceManager.Save(config);
+                }
+            }
+            catch { /* 弹窗失败绝不拦着用户退出 */ }
         }
 
         // 菜单快捷入口（委托给 AiPanelControl 回调）
@@ -1380,7 +1406,8 @@ namespace 编辑器
         }
 
         private void About_Click(object sender, RoutedEventArgs e) =>
-            MessageBox.Show("TdxClaw AI写作助手 v1.0", "关于", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show($"TdxClaw AI写作助手 v1.0\n开源仓库：\n{SupportWindow.RepoUrl}",
+                "关于", MessageBoxButton.OK, MessageBoxImage.Information);
 
         // 其他事件
         private void ProjectTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)

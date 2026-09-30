@@ -430,6 +430,9 @@ dotnet run   --project 编辑器/编辑器.csproj
 dotnet publish 编辑器/编辑器.csproj -c Release -p:EnableSingleFilePublish=true -o dist
 ```
 
+> 退出软件时会弹一次「支持作者」窗口——项目免费开源，去 GitHub 点个 Star 就是最大的支持；
+> 勾选「下次退出时不再显示」后就不会再打扰你。
+
 ### 首次配置
 
 1. 启动后会弹出欢迎窗口，按提示新建或打开一个项目

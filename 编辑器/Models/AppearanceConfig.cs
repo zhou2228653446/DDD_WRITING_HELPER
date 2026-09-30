@@ -54,5 +54,8 @@ namespace 编辑器
     {
         public string PresetName { get; set; } = "warm-paper";
         public string? BackgroundImagePath { get; set; }
+
+        /// <summary>退出时的「支持作者」弹窗是否不再显示（用户在弹窗里勾选后写 true）。</summary>
+        public bool SuppressSupportPrompt { get; set; }
     }
 }

@@ -1,0 +1,59 @@
+<hc:Window x:Class="编辑器.SupportWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:hc="https://handyorg.github.io/handycontrol"
+        Title="支持作者" Height="330" Width="480"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize" ShowInTaskbar="False"
+        Background="{DynamicResource Brush.Surface}"
+        FontFamily="{StaticResource Font.Ui}"
+        TextElement.Foreground="{DynamicResource Brush.Text}">
+
+    <Grid Margin="24,20,24,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="⭐ 觉得这款写作助手好用吗？"
+                   FontSize="{StaticResource FontSize.Title}" FontWeight="SemiBold"/>
+
+        <TextBlock Grid.Row="1" Margin="0,12,0,0" TextWrapping="Wrap"
+                   FontSize="{StaticResource FontSize.Body}"
+                   Foreground="{DynamicResource Brush.Text}"
+                   Text="项目完全免费、开源、无广告。去 GitHub 给它点一个 Star，就是对本软件最实在的支持——也能让更多写作者发现它。"/>
+
+        <Border Grid.Row="2" Margin="0,14,0,0" Padding="12,9"
+                Background="{DynamicResource Brush.Panel}"
+                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                CornerRadius="4">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="UrlText" Grid.Column="0" VerticalAlignment="Center"
+                           FontSize="{StaticResource FontSize.Small}"
+                           Foreground="{DynamicResource Brush.TextMuted}"
+                           TextTrimming="CharacterEllipsis"
+                           Text="https://github.com/zhou2228653446/DDD_WRITING_HELPER"/>
+                <Button Grid.Column="1" Style="{StaticResource Btn.Ghost}" Content="复制链接"
+                        Margin="8,0,0,0" Click="CopyUrl_Click"/>
+            </Grid>
+        </Border>
+
+        <CheckBox x:Name="SuppressCheck" Grid.Row="3" VerticalAlignment="Bottom"
+                  Content="下次退出时不再显示"
+                  FontSize="{StaticResource FontSize.Small}"
+                  Foreground="{DynamicResource Brush.TextMuted}"/>
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button Style="{StaticResource Btn.Ghost}" Content="以后再说" Click="Skip_Click"/>
+            <Button Style="{StaticResource Btn.Primary}" Content="去 GitHub 点 Star ⭐"
+                    Margin="8,0,0,0" Click="OpenGithub_Click"/>
+        </StackPanel>
+    </Grid>
+</hc:Window>

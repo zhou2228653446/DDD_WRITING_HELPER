@@ -66,7 +66,6 @@ namespace 编辑器
         // ---- 链接操作 ----
 
         private void OpenGithub_Click(object sender, RoutedEventArgs e) => OpenUrl(RepoUrl);
-        private void OpenHome_Click(object sender, RoutedEventArgs e) => OpenUrl(HomeUrl);
 
         private void CopyRepo_Click(object sender, RoutedEventArgs e) => Copy(RepoUrl);
         private void CopyHome_Click(object sender, RoutedEventArgs e) => Copy(HomeUrl);

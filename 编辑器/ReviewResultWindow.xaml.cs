@@ -11,11 +11,13 @@ namespace 编辑器
     {
         private readonly string _report;
 
-        public ReviewResultWindow(string chapterTitle, string report)
+        /// <param name="title">窗口标题主体（调用方决定前缀，如「审稿报告 · 第3章 xx」）。</param>
+        /// <param name="report">报告正文（只读展示）。</param>
+        public ReviewResultWindow(string title, string report)
         {
             InitializeComponent();
             _report = report;
-            TitleText.Text = $"审稿报告 · {chapterTitle}";
+            TitleText.Text = title;
             ReportBox.Text = report;
             MetaText.Text = $"生成时间 {DateTime.Now:HH:mm} · {report.Length} 字 · 只读，不写回正文";
         }

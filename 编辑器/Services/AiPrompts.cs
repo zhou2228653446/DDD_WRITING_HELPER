@@ -456,6 +456,10 @@ namespace 编辑器.Services
                       ③ 时间线：事件先后顺序、时间跨度、年龄与季节是否与既有章节冲突。
                       ④ 前后文：与所给「前情梗概」或相邻章节的事实冲突，伏笔状态异常
                          （已声明回收的伏笔再次出现且无解释）。
+                      ⑤ 伏笔状态（若提供了「伏笔登记」章）：本章正文若回收了登记中的伏笔、
+                         或新埋了明显伏笔，在问题清单末尾单列一节「伏笔章待更新」，逐条写
+                         「伏笔内容 → 建议状态（已回收/未回收）→ 依据（本章位置）」；
+                         没有变化就不要编造这一节。
                     - 每条问题按固定格式输出：
                       「[类别] 位置（引用原文短语）→ 矛盾点 → 与哪条设定冲突 → 建议修法（一句话）」
                     - 语气直接，不要客套；拿不准的写「存疑」并说明依据不足在哪。
@@ -534,13 +538,16 @@ namespace 编辑器.Services
         /// <param name="background">主要背景设定</param>
         /// <param name="writingStyle">文风设定</param>
         /// <param name="memory">AI 记忆（累积的写作偏好）</param>
+        /// <param name="narrativeViewpoint">叙事视角。非空时作为**硬约束**注入：只写该视角
+        /// 能感知到的内容。放在块里而不是散在任务说明里，是因为约束要跨全部正文功能生效。</param>
         public static string BuildContextBlock(
             string? fullOutline,
             string? chapterOutline,
             string? characters,
             string? background,
             string? writingStyle,
-            string? memory = null)
+            string? memory = null,
+            string? narrativeViewpoint = null)
         {
             var parts = new List<string>();
 
@@ -549,6 +556,15 @@ namespace 编辑器.Services
             Add(parts, Label(PromptPresets.LabelKeys.Characters), characters);
             Add(parts, Label(PromptPresets.LabelKeys.Background), background);
             Add(parts, Label(PromptPresets.LabelKeys.WritingStyle), writingStyle);
+            if (!string.IsNullOrWhiteSpace(narrativeViewpoint))
+            {
+                var vp = new StringBuilder();
+                vp.AppendLine(narrativeViewpoint.Trim());
+                vp.AppendLine();
+                vp.Append("【硬约束】所有产出必须严格遵循上述视角：只写这个视角能看见、听见、感知到、"
+                        + "推断出的内容；不得进入其他人物内心，不得交代该视角不可能知道的信息。");
+                parts.Add($"### {Label(PromptPresets.LabelKeys.NarrativeViewpoint)}（必须遵守）\n{vp}");
+            }
             Add(parts, Label(PromptPresets.LabelKeys.Memory), memory);
 
             if (parts.Count == 0) return "";

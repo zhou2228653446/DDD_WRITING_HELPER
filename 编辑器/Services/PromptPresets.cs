@@ -47,6 +47,7 @@ namespace 编辑器.Services
             public const string Characters = "Characters";
             public const string Background = "Background";
             public const string WritingStyle = "WritingStyle";
+            public const string NarrativeViewpoint = "NarrativeViewpoint";
             public const string Memory = "Memory";
         }
 
@@ -156,6 +157,7 @@ namespace 编辑器.Services
             [LabelKeys.Characters] = "主要人物设定",
             [LabelKeys.Background] = "主要背景设定",
             [LabelKeys.WritingStyle] = "文风设定",
+            [LabelKeys.NarrativeViewpoint] = "叙事视角",
             [LabelKeys.Memory] = "合作中累积的偏好",
         };
 
@@ -173,6 +175,7 @@ namespace 编辑器.Services
             [LabelKeys.Characters] = "研究对象与关键要素",
             [LabelKeys.Background] = "研究背景与理论基础",
             [LabelKeys.WritingStyle] = "写作风格",
+            [LabelKeys.NarrativeViewpoint] = "论述立场",
             [LabelKeys.Memory] = "合作中累积的偏好",
         };
 
@@ -348,6 +351,7 @@ namespace 编辑器.Services
             [LabelKeys.Characters] = "事项要素",
             [LabelKeys.Background] = "依据与背景材料",
             [LabelKeys.WritingStyle] = "文体风格",
+            [LabelKeys.NarrativeViewpoint] = "行文口径",
             [LabelKeys.Memory] = "合作中累积的偏好",
         };
 
@@ -517,6 +521,7 @@ namespace 编辑器.Services
             [LabelKeys.Characters] = "主要对象设定",
             [LabelKeys.Background] = "主要背景材料",
             [LabelKeys.WritingStyle] = "文风设定",
+            [LabelKeys.NarrativeViewpoint] = "叙事视角",
             [LabelKeys.Memory] = "合作中累积的偏好",
         };
 

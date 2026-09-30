@@ -24,10 +24,10 @@
             <StackPanel>
                 <TextBlock x:Name="TitleText" FontSize="{StaticResource FontSize.Title}"
                            FontWeight="SemiBold" Text="审稿报告"/>
-                <TextBlock Text="只读分析：报告不会改动正文。按「[类别] 位置 → 矛盾点 → 建议」逐条核对后自行修改。"
+                <TextBlock Text="只读分析：报告不会改动正文。按「[类别] 位置 → 矛盾点 → 建议」逐条核对后自行修改；若出现「伏笔章待更新」一节，请同步到设定集的伏笔章。"
                            FontSize="{StaticResource FontSize.Small}"
                            Foreground="{DynamicResource Brush.TextMuted}" Margin="0,4,0,0"
-                           TextWrapping="Wrap"/>
+                           TextWrapping="Wrap" x:Name="SubtitleText"/>
             </StackPanel>
         </Border>
 

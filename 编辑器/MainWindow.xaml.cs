@@ -1147,6 +1147,61 @@ namespace 编辑器
             return result;
         }
 
+        /// <summary>
+        /// 生成叙事视角声明。输入已有的正文或设定当素材，让 AI 从中提炼
+        /// 「这本书实际在用什么视角」，产出是一句话声明，非空即硬约束。
+        /// </summary>
+        private async Task<AiResult?> GenViewpointAsync()
+        {
+            var input = _aiPanel.InputTextBox.Text.Trim();
+            var existing = GetSettingValue(SettingSection.NarrativeViewpoint).Trim();
+            var isExpand = !string.IsNullOrEmpty(existing);
+            var systemPrompt = BuildSystemPrompt(
+                ResolveTaskText(isExpand ? AiPrompts.Keys.Expand : AiPrompts.Keys.WriteStyle,
+                    isExpand ? AiPrompts.Task.Expand : AiPrompts.Task.WriteStyle),
+                ResolveContractText(isExpand ? AiPrompts.Keys.Expand : AiPrompts.Keys.WriteStyle,
+                    AiPrompts.StructuredOutput));
+
+            string userPrompt;
+            if (isExpand)
+            {
+                userPrompt = AiPrompts.Section("已有的叙事视角声明", existing);
+                if (!string.IsNullOrEmpty(input)) userPrompt += $"\n修改要求：{input}";
+            }
+            else
+            {
+                userPrompt = "请为这部作品拟定「叙事视角」声明，格式如："
+                    + "「第三人称限知·跟随主角〈姓名〉（个别回忆段切主角视角）」。"
+                    + "要有明确的：人称、限知/全知、跟随对象；有例外场景就括注说明。";
+                var chapter = GetSelectedChapter();
+                if (chapter != null && !string.IsNullOrWhiteSpace(chapter.Content))
+                    userPrompt += "\n" + AiPrompts.Section("作者已有的文字（判断实际视角的依据）", chapter.Content);
+                if (!string.IsNullOrEmpty(GetSettingValue(SettingSection.WritingStyle).Trim()))
+                    userPrompt += "\n" + AiPrompts.Section("文风设定（其中的视角描述优先采纳）",
+                        GetSettingValue(SettingSection.WritingStyle));
+                if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
+            }
+
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(
+                userPrompt, systemPrompt, new CompletionOptions
+                {
+                    MaxTokens = 600,
+                    Temperature = 0.4,
+                    CancellationToken = _aiCts!.Token,
+                    OnNotice = _aiNotice,
+                    OnProgress = _tokenProgress
+                }));
+            if (IsUsable(result))
+            {
+                SetSettingValue(SettingSection.NarrativeViewpoint, result.Text);
+                _aiPanel.ResultTextBox.Text = result.Text;
+                _chatLogger?.Log("生成视角", input, result.Text);
+                RecordAiInteraction("生成视角", input, result.Text);
+                ShowNotification("已生成叙事视角（非空即对全部正文生成生效）");
+            }
+            return result;
+        }
+
         // ---- AI 回复操作 ----
 
         private void CopyAiResult()
@@ -1179,6 +1234,7 @@ namespace 编辑器
                 ("主要人物设定", SettingSection.CharacterSettings),
                 ("主要背景设定", SettingSection.BackgroundSettings),
                 ("文风设定", SettingSection.WritingStyle),
+                ("叙事视角", SettingSection.NarrativeViewpoint),
             };
 
             foreach (var (label, kind) in targets)
@@ -1964,14 +2020,30 @@ namespace 编辑器
                 : AiPrompts.Section("设定集与项目设定（比对基准）",
                     "（作者还没有维护设定集。只做前后文与常识层面的检查，涉及设定一致性的结论一律标「存疑」。）"));
 
-            // 前情：前面最近一章的梗概，帮助发现跨章矛盾
-            var prev = _currentProject.Chapters
+            // 前情链：前面最近 3 章的梗概（每章取开头压缩），帮 AI 看见「隔两章的矛盾」。
+            // 每章截 800 字：够覆盖人名/事件/时间指涉，又不会把 user 消息撑爆。
+            const int RecallChapters = 3;
+            const int BriefCharsPerChapter = 800;
+            var previous = _currentProject.Chapters
                 .Where(c => c.ChapterNumber < chapter.ChapterNumber && !string.IsNullOrWhiteSpace(c.Content))
-                .OrderByDescending(c => c.ChapterNumber).FirstOrDefault();
-            if (prev != null)
+                .OrderByDescending(c => c.ChapterNumber)
+                .Take(RecallChapters)
+                .OrderBy(c => c.ChapterNumber)
+                .ToList();
+            if (previous.Count > 0)
             {
-                var prevBrief = prev.Content.Length > 800 ? prev.Content[..800] + "…" : prev.Content;
-                userPrompt += "\n" + AiPrompts.Section("前一章内容梗概（供跨章比对）", prevBrief);
+                var briefs = new StringBuilder();
+                foreach (var p in previous)
+                {
+                    var brief = p.Content.Length > BriefCharsPerChapter
+                        ? p.Content[..BriefCharsPerChapter] + "…"
+                        : p.Content;
+                    briefs.AppendLine($"第{p.ChapterNumber}章 {p.Title}：");
+                    briefs.AppendLine(brief.Trim());
+                    briefs.AppendLine();
+                }
+                userPrompt += "\n" + AiPrompts.Section($"前情梗概（之前 {previous.Count} 章，供跨章比对）",
+                    briefs.ToString().TrimEnd());
             }
 
             UpdateStatus("正在审稿…");
@@ -1992,10 +2064,61 @@ namespace 编辑器
             if (IsUsable(result))
             {
                 _chatLogger?.Log("AI审稿·" + chapter.Title, "", result.Text);
-                var win = new ReviewResultWindow(chapter.Title, result.Text) { Owner = this };
+                var win = new ReviewResultWindow($"审稿报告 · {chapter.Title}", result.Text) { Owner = this };
                 win.Show();
                 UpdateStatus("审稿完成");
             }
+        }
+
+        // ------------------------------------------------------------------
+        // 角色出场统计（纯本地扫描，不调 AI）
+        // ------------------------------------------------------------------
+
+        /// <summary>「角色出场」按钮：统计每个角色的出场章次与连续缺席。</summary>
+        private void CharacterAppearance_Click(object sender, RoutedEventArgs e)
+        {
+            if (_currentProject == null)
+            {
+                ShowNotification("请先创建或打开项目", isError: true);
+                return;
+            }
+            if (_currentProject.Chapters.All(c => string.IsNullOrWhiteSpace(c.Content)))
+            {
+                ShowNotification("还没有任何章节有正文，无可统计", isError: true);
+                return;
+            }
+
+            // 名单来源兜底：结构化角色与人物设定文本都空时，从设定集人物档案章解析
+            var names = CharacterAppearanceService.CollectNames(_currentProject);
+            if (names.Count == 0 && _currentProject.SettingsBook != null)
+            {
+                var archive = _currentProject.SettingsBook.Chapters
+                    .FirstOrDefault(c => c.SourceKey == "characters");
+                if (archive != null)
+                {
+                    foreach (var rawLine in archive.Content.Split('\n'))
+                    {
+                        var line = rawLine.Trim().TrimStart('-', '*', '•', ' ', '　');
+                        if (line.Length < 2) continue;
+                        var m = System.Text.RegularExpressions.Regex.Match(
+                            line, @"^(?:\d+[\.、)\)]\s*)?([\u4e00-\u9fa5A-Za-z·]{2,8})(?=[：:，,（(\s])");
+                        if (m.Success) names.Add(m.Groups[1].Value);
+                    }
+                }
+            }
+            if (names.Count == 0)
+            {
+                ShowNotification("没找到角色名单：请先在「人物设定」里按「姓名：」的格式登记角色", isError: true);
+                return;
+            }
+
+            var stats = CharacterAppearanceService.Analyze(_currentProject);
+            var report = CharacterAppearanceService.FormatReport(_currentProject, stats);
+            var chapterTitle = _currentProject.Chapters.Count > 0
+                ? $"{_currentProject.ProjectName}（共 {_currentProject.Chapters.Count} 章）"
+                : _currentProject.ProjectName;
+            var win = new ReviewResultWindow($"角色出场统计 · {chapterTitle}", report) { Owner = this };
+            win.Show();
         }
 
         // ------------------------------------------------------------------
@@ -2175,6 +2298,7 @@ namespace 编辑器
                 case SettingSection.CharacterSettings: await GenCharacterAsync(); break;
                 case SettingSection.BackgroundSettings: await GenBackgroundAsync(); break;
                 case SettingSection.WritingStyle: await GenWritingStyleAsync(); break;
+                case SettingSection.NarrativeViewpoint: await GenViewpointAsync(); break;
             }
         }
 
@@ -2193,6 +2317,7 @@ namespace 编辑器
                 case SettingSection.CharacterSettings: _currentProject.CharacterSettings = text; break;
                 case SettingSection.BackgroundSettings: _currentProject.BackgroundSettings = text; break;
                 case SettingSection.WritingStyle: _currentProject.WritingStyle = text; break;
+                case SettingSection.NarrativeViewpoint: _currentProject.NarrativeViewpoint = text; break;
             }
 
             _settingsWindow?.SetValue(kind, text);
@@ -2210,6 +2335,7 @@ namespace 编辑器
                 SettingSection.CharacterSettings => _currentProject.CharacterSettings ?? "",
                 SettingSection.BackgroundSettings => _currentProject.BackgroundSettings ?? "",
                 SettingSection.WritingStyle => _currentProject.WritingStyle ?? "",
+                SettingSection.NarrativeViewpoint => _currentProject.NarrativeViewpoint ?? "",
                 _ => ""
             };
         }
@@ -2231,7 +2357,8 @@ namespace 编辑器
                 _currentProject.CharacterSettings,
                 _currentProject.BackgroundSettings,
                 _currentProject.WritingStyle,
-                _memoryManager?.GetRawMemory());
+                _memoryManager?.GetRawMemory(),
+                _currentProject.NarrativeViewpoint);
         }
 
         /// <summary>

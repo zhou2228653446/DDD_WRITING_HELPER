@@ -27,6 +27,10 @@ namespace 编辑器
         public string BackgroundSettings { get; set; } = "";    // 主要背景设定
         public string WritingStyle { get; set; } = "";          // 文风设定
 
+        // 叙事视角（如「第三人称限知·跟随主角林寒」）。非空时作为**硬约束**注入全部
+        // 正文类生成（续写/润色等）：AI 只许写该视角能感知到的内容，防止续写「切头」。
+        public string NarrativeViewpoint { get; set; } = "";
+
         // 「设定集」：把上面的设定统合成一本可制作、可导出的资料书（见 SettingsBook）。
         // 旧项目文件没有这个字段，反序列化时保持 null，首次打开设定集窗口时由
         // SettingsBookTemplates.EnsureBook 补建。

@@ -144,6 +144,9 @@
                     <Button Style="{StaticResource Btn.Ghost}" Content="AI 审稿" Margin="6,0,0,0"
                             ToolTip="对照设定集检查本章一致性，输出问题清单（只读，不改正文）"
                             Click="ReviewChapter_Click"/>
+                    <Button Style="{StaticResource Btn.Ghost}" Content="角色出场" Margin="6,0,0,0"
+                            ToolTip="统计每个角色出场章次与连续缺席（本地扫描，不花 token）"
+                            Click="CharacterAppearance_Click"/>
                     <Button Style="{StaticResource Btn.Ghost}" Content="设定"
                             ToolTip="全文大纲 / 人物设定等贯穿全书的设定"
                             Click="SettingsWindow_Click"/>

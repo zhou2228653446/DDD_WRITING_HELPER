@@ -13,7 +13,8 @@ namespace 编辑器
         ChapterOutline,     // 章节大纲
         CharacterSettings,  // 主要人物设定
         BackgroundSettings, // 主要背景设定
-        WritingStyle        // 文风设定
+        WritingStyle,       // 文风设定
+        NarrativeViewpoint  // 叙事视角（硬约束，注入全部正文类生成）
     }
 
     public class SettingSectionItem
@@ -70,6 +71,11 @@ namespace 编辑器
             {
                 Kind = SettingSection.WritingStyle, Title = "文风设定",
                 Hint = "叙述视角、语言风格、节奏与禁忌"
+            },
+            new SettingSectionItem
+            {
+                Kind = SettingSection.NarrativeViewpoint, Title = "叙事视角",
+                Hint = "一句话声明（如「第三人称限知·跟随主角」）。非空时作为硬约束：AI 只写该视角能感知的内容，防止续写切头"
             },
         };
 
@@ -234,6 +240,7 @@ namespace 编辑器
             SettingSection.CharacterSettings => _project?.CharacterSettings ?? "",
             SettingSection.BackgroundSettings => _project?.BackgroundSettings ?? "",
             SettingSection.WritingStyle => _project?.WritingStyle ?? "",
+            SettingSection.NarrativeViewpoint => _project?.NarrativeViewpoint ?? "",
             _ => ""
         };
 
@@ -248,6 +255,7 @@ namespace 编辑器
                 case SettingSection.CharacterSettings: _project.CharacterSettings = text; break;
                 case SettingSection.BackgroundSettings: _project.BackgroundSettings = text; break;
                 case SettingSection.WritingStyle: _project.WritingStyle = text; break;
+                case SettingSection.NarrativeViewpoint: _project.NarrativeViewpoint = text; break;
             }
         }
     }

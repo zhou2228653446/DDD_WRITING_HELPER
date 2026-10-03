@@ -64,6 +64,12 @@ namespace 编辑器
             var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
             var project = JsonSerializer.Deserialize<NovelProject>(json, options)
                 ?? throw new InvalidOperationException("项目文件格式错误");
+
+            // ⚠ 必须把 FilePath 覆盖成**实际打开的路径**，不能信文件里存的那一个。
+            // 项目文件自己也会序列化 FilePath（保存时的路径），一旦文件被复制/移动过，
+            // 里面存的就是过期路径 —— 而 Save() 是照 FilePath 写的，于是改动会静默写到
+            // 别处（最坏情况是覆盖另一个同名项目）。MCP 打开副本时实测踩到过。
+            project.FilePath = path;
             return project;
         }
     }

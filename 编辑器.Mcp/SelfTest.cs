@@ -141,6 +141,29 @@ internal static class SelfTest
                 after.Count > 0 ? Cut(Text(after[0]), 60) : "(无响应)");
             Assert("拒绝写入时原正文未被破坏",
                 NovelProject.Load(projPath).Chapters.First(c => c.ChapterNumber == 1).Content.Contains("霜降"), "");
+
+            // ---- 回归：打开副本后写入必须落在副本 ----
+            // 项目文件自身也会序列化 FilePath（保存时的路径）。文件被复制后里面存的是旧路径，
+            // 而 Save() 照 FilePath 写 —— 不覆盖就会静默写到原文件上（实测踩到过，差点覆盖用户稿子）。
+            var copyPath = Path.Combine(dir, "副本.tdxproj");
+            File.Copy(projPath, copyPath, true);
+
+            var probe = NovelProject.Load(copyPath);
+            Assert("Load 后 FilePath = 实际打开的路径（不信文件里存的旧路径）",
+                probe.FilePath == copyPath, probe.FilePath);
+
+            await CallAsync(new List<string>
+            {
+                Req(1, "tools/call", new { name = "project_open", arguments = new { path = copyPath } }),
+                Req(2, "tools/call", new { name = "chapter_write", arguments = new { number = 1, content = "只写副本", mode = "replace" } }),
+            });
+
+            var origAfter = NovelProject.Load(projPath);
+            var copyAfter = NovelProject.Load(copyPath);
+            Assert("打开副本后写入落在副本上",
+                copyAfter.Chapters.First(c => c.ChapterNumber == 1).Content.Contains("只写副本"), "");
+            Assert("打开副本不会污染原文件",
+                origAfter.Chapters.First(c => c.ChapterNumber == 1).Content.Contains("霜降"), "");
         }
         finally
         {

@@ -156,9 +156,15 @@ internal static class AiTools
         }
 
         if (!result.IsUsable)
+        {
+            // 出错时把服务端/本地的原因带出来——只说「没有可用内容」等于让 agent 瞎猜重试。
+            var why = string.IsNullOrWhiteSpace(result.Text) ? "" : $"返回内容：{Session.Truncate(result.Text, 300)}\n";
             return ToolResult.Fail(
-                $"模型没有返回可用内容。{(result.IsCanceled ? "（已取消）" : "（出错）")}\n" +
-                $"输出 token：{result.OutputTokens}。可以试试换模型或调小 maxTokens。");
+                $"模型没有返回可用内容。{(result.IsCanceled ? "（已取消）" : "（出错）")}\n{why}" +
+                $"输出 token：{result.OutputTokens}\n" +
+                "常见原因：Key 失效或欠费（401）、模型名不对（404）、服务商地址不通。\n" +
+                "可在软件「AI 设置」里点测试连接确认（MCP 与界面共用同一份配置）。");
+        }
 
         var head = $"[task={task} · model={config.Model} · 输入 {result.InputTokens} / 输出 {result.OutputTokens} token" +
                    (result.CachedInputTokens > 0 ? $" · 缓存命中 {result.CachedInputTokens}" : "") + "]\n\n";

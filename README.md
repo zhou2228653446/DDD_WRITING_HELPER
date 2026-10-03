@@ -28,6 +28,7 @@
 - [界面速览](#界面速览)
 - [技术栈](#技术栈)
 - [快速开始](#快速开始)
+- [MCP：让 AI 客户端直接读写你的书稿](#mcp让-ai-客户端直接读写你的书稿)
 - [配置与数据存放位置](#配置与数据存放位置)
 - [项目结构](#项目结构)
 - [几条设计说明](#几条设计说明)
@@ -433,6 +434,39 @@ dotnet publish 编辑器/编辑器.csproj -c Release -p:EnableSingleFilePublish=
 > 退出软件时会弹一次「支持作者」窗口——项目免费开源，去 GitHub 点个 Star 就是最大的支持；
 > 勾选「下次退出时不再显示」后就不会再打扰你。
 
+## MCP：让 AI 客户端直接读写你的书稿
+
+软件自带一个 **MCP 服务器**（`编辑器.Mcp`（exe 名 `TdxClaw.Mcp`）），配好之后 Claude Desktop / Cursor / WorkBuddy
+这类 AI 客户端就能直接打开你的 `.tdxproj`、读稿、改稿、导出，不用你在界面里点。
+
+**配置**：把 `docs/mcp-config-example.json` 里的 `mcpServers` 一节复制进客户端的 MCP
+配置文件，`command` 改成你本机 `dist\mcp\TdxClaw.Mcp.exe` 的路径（JSON 里反斜杠写两个）。
+`deploy.bat` 会把它和主程序一起发布出来。
+
+**14 个工具**，分四类：
+
+| 类别 | 工具 |
+|---|---|
+| 找项目 | `project_list`（扫目录找 .tdxproj）、`project_open` |
+| 读 | `chapters_list`、`chapter_read`、`chapter_search`（全文搜词，查伏笔/矛盾）、`settings_get`、`settings_book_get`（设定集 12 章）、`characters_stats`（谁多久没出场了） |
+| 写 | `chapter_write`（replace 覆盖 / append 追加）、`chapter_create`、`settings_set`、`settings_book_set` |
+| 产出 | `project_export`（docx / pdf / txt，论文版式传 `paperMode`）、**`ai_write`** |
+
+**`ai_write` 是重点**：它调的不是"一个裸模型"，而是**本软件调好的那套 AI**——当前生效的
+提示词方案（小说/论文/公文）+ 五项贯穿设定 + 设定集 + 叙事视角硬约束，和你在界面里点
+「续写」完全同源。可选 `continue` / `polish` / `expand` / `review`（一致性审稿）/
+`setting_book` / `name` / `chat`。它只返回文本，**不自动改稿**——确认后再用 `chapter_write` 落盘。
+
+**两条安全设计**：
+
+- **防止覆盖你的稿子**：MCP 是独立进程，和编辑器界面各有一份内存。写盘前会比对项目文件的
+  修改时间+长度，一旦发现磁盘上的项目已被别的实例改过，就拒绝写入并提示你先关掉界面里的
+  项目重新打开——把最致命的"静默覆盖"变成明确报错。
+- **写正文默认不自动**：`ai_write` 只生成，落盘要显式调 `chapter_write`。
+
+开发时可用 `编辑器.Mcp.exe --selftest` 跑一遍协议自检（24 项断言，覆盖分帧、通知不回、
+错误码、落盘、冲突防护）。
+
 ### 首次配置
 
 1. 启动后会弹出欢迎窗口，按提示新建或打开一个项目
@@ -514,6 +548,17 @@ dotnet publish 编辑器/编辑器.csproj -c Release -p:EnableSingleFilePublish=
    ├─ NovelSkills                                       技能包：内置/自定义/导入导出/任务命中
    ├─ AiMemoryManager / ChatSessionStore / ChatLogger / ProjectSnapshotManager
    └─ ApiProfileManager
+```
+
+MCP 服务器是独立工程，**不重写任何业务逻辑**，全部 ProjectReference 复用上面的 `Services/`：
+
+```
+编辑器.Mcp/
+├─ Program.cs       入口（--selftest 跑协议自检）
+├─ McpServer.cs     JSON-RPC 2.0 + stdio 主循环 + 14 个工具的 schema
+├─ NovelTools.cs    读写 / 检索 / 导出 + Session（含写前冲突检测）
+├─ AiTools.cs       ai_write：复用 AiPrompts 与两个 Service，与界面同源
+└─ SelfTest.cs      内置自检（24 项断言）
 ```
 
 ---

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>编辑器.Mcp</RootNamespace>
+    <!-- 程序集/产品名刻意用英文：客户端 spawn 进程时，中文 exe 名在某些
+         Node/Python 系的 MCP 客户端里会踩编码坑。命名空间仍用中文，与工程一致。 -->
+    <AssemblyName>TdxClaw.Mcp</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 直接复用主程序的服务层：项目读写 / 导出 / 提示词 / LLM 调用全部照搬，
+         不做第二套实现，避免 agent 与软件行为不一致。 -->
+    <ProjectReference Include="..\编辑器\编辑器.csproj" />
+  </ItemGroup>
+
+</Project>

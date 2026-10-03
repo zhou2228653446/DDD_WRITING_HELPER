@@ -1,0 +1,32 @@
+{
+  "_说明": "把 mcpServers 这一节复制进你的客户端 MCP 配置文件。command 换成你本机 dist\\mcp\\编辑器.Mcp.exe 的真实路径（JSON 里反斜杠要写两个）。",
+  "_配置位置": {
+    "Claude Desktop": "%APPDATA%\\Claude\\claude_desktop_config.json",
+    "Cursor": "项目根目录 .cursor\\mcp.json 或全局 ~/.cursor/mcp.json",
+    "WorkBuddy": "~/.workbuddy/mcp.json（配好后到连接器管理页点「信任」启用）"
+  },
+  "mcpServers": {
+    "tdxclaw-writer": {
+      "command": "D:\\编辑器\\dist\\mcp\\TdxClaw.Mcp.exe",
+      "args": [],
+      "env": {}
+    }
+  },
+  "_可用工具": [
+    "project_list      查找 .tdxproj 项目",
+    "project_open      打开项目（之后所有操作都针对它）",
+    "chapters_list     章节清单",
+    "chapter_read      读某章正文",
+    "chapter_search    全文搜索关键词（查伏笔/矛盾）",
+    "settings_get      五项贯穿设定 + 叙事视角",
+    "settings_book_get 设定集 12 章（带 key 可读某章）",
+    "characters_stats  角色出场统计（谁多久没出场了）",
+    "chapter_write     写正文（replace 覆盖 / append 追加）",
+    "chapter_create    新建章节",
+    "settings_set      改写贯穿设定",
+    "settings_book_set 改写设定集某章",
+    "project_export    导出 docx / pdf / txt（论文版式 paperMode）",
+    "ai_write          调用软件配好的 AI 写作（续写/润色/审稿...），与界面同源"
+  ],
+  "_典型用法": "让 agent 先 project_list 找到项目 → project_open 打开 → chapter_read 读稿 → 要它改就用 ai_write 生成，确认后 chapter_write 落盘。"
+}

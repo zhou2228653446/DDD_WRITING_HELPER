@@ -1,0 +1,7 @@
+[mcp_servers.tdxclaw-writing]
+command = "D:\\编辑器\\dist\\mcp\\TdxClaw.Mcp.exe"
+args = []
+
+# 排障时打开日志（客户端会吞掉 stderr，落盘才看得到）：
+# [mcp_servers.tdxclaw-writing.env]
+# TDX_MCP_LOG = "C:\\Users\\Administrator\\tdxclaw-mcp.log"

@@ -335,6 +335,74 @@ internal static class NovelTools
     }
 
     // ==================================================================
+    // 建项目
+    // ==================================================================
+
+    /// <summary>
+    /// project_create：agent 自己开一本新书。
+    /// 建好立刻 open（省一轮往返），并像界面新建项目那样把设定集 12 章骨架补上。
+    /// </summary>
+    public static ToolResult CreateProject(Session s, JsonElement args)
+    {
+        var dir = Str(args, "directory");
+        if (string.IsNullOrWhiteSpace(dir))
+            dir = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+
+        var name = Str(args, "name");
+        if (string.IsNullOrWhiteSpace(name)) name = "新建小说";
+
+        if (!Directory.Exists(dir))
+            return ToolResult.Fail($"目录不存在：{dir}");
+
+        var file = Path.Combine(dir, SafeFileName(name) + ".tdxproj");
+        if (File.Exists(file))
+            return ToolResult.Fail(
+                $"文件已存在：{file}\n如果是想打开这个项目，请用 project_open（直接覆盖别人的稿子是灾难）。");
+
+        var p = new NovelProject
+        {
+            ProjectName = name,
+            Description = Str(args, "description"),
+            FilePath = file,
+            CreatedDate = DateTime.Now,
+            ModifiedDate = DateTime.Now,
+            Chapters = new List<Chapter>(),
+        };
+
+        try
+        {
+            // 与界面新建项目一致：立刻补设定集骨架，agent 后面可以直接往里写
+            SettingsBookTemplates.EnsureBook(p);
+        }
+        catch (Exception ex)
+        {
+            // 骨架失败不影响建项目本身
+            Console.Error.WriteLine($"[mcp] 设定集骨架创建失败：{ex.Message}");
+        }
+
+        try
+        {
+            p.Save();
+        }
+        catch (Exception ex)
+        {
+            return ToolResult.Fail($"创建项目失败（写入 {file} 出错）：{ex.Message}");
+        }
+
+        var opened = s.Open(file);
+        return ToolResult.Ok($"✅ 已创建并打开项目「{name}」\n文件：{file}\n\n" + opened.Text);
+    }
+
+    /// <summary>文件名安全化（去掉 Windows 非法字符， Trim 掉末尾的点与空格）。</summary>
+    internal static string SafeFileName(string name)
+    {
+        var bad = Path.GetInvalidFileNameChars();
+        var s2 = new string(name.Select(ch => bad.Contains(ch) ? '_' : ch).ToArray());
+        s2 = s2.Trim().TrimEnd('.');
+        return string.IsNullOrWhiteSpace(s2) ? "新建小说" : s2;
+    }
+
+    // ==================================================================
     // 写
     // ==================================================================
 

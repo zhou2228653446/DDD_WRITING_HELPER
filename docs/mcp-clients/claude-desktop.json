@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "tdxclaw-writing": {
+      "command": "D:\\编辑器\\dist\\mcp\\TdxClaw.Mcp.exe",
+      "args": [],
+      "env": {}
+    }
+  }
+}

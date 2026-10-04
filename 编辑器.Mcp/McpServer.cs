@@ -130,7 +130,13 @@ internal static class McpServer
                 return RpcOk(id, new Dictionary<string, object?>
                 {
                     ["protocolVersion"] = "2024-11-05",
-                    ["capabilities"] = new Dictionary<string, object?> { ["tools"] = new { listChanged = false } },
+                    ["capabilities"] = new Dictionary<string, object?>
+                    {
+                        ["tools"] = new { listChanged = false },
+                        // 章节/设定也是资源：支持的客户端可以直接在对话里 @ 引用整章，
+                        // 省掉「先 list 再 read」一轮往返（见 Resources.cs）
+                        ["resources"] = new { listChanged = false, subscribe = false },
+                    },
                     ["serverInfo"] = new Dictionary<string, object?>
                     {
                         ["name"] = "TdxClaw 写作助手",
@@ -148,7 +154,21 @@ internal static class McpServer
                 return RpcOk(id, await CallToolAsync(parameters));
 
             case "resources/list":
-                return RpcOk(id, new Dictionary<string, object?> { ["resources"] = Array.Empty<object>() });
+                return RpcOk(id, new Dictionary<string, object?>
+                {
+                    ["resources"] = Resources.List(_session),
+                });
+
+            case "resources/read":
+            {
+                var uri = parameters.TryGetProperty("uri", out var uEl) ? uEl.GetString() ?? "" : "";
+                var (contents, isErr, msg) = Resources.Read(_session, uri);
+                if (isErr) return RpcError(id, -32602, msg!);
+                return RpcOk(id, new Dictionary<string, object?> { ["contents"] = contents });
+            }
+
+            case "resources/templates/list":
+                return RpcOk(id, new Dictionary<string, object?> { ["resourceTemplates"] = Array.Empty<object>() });
 
             case "prompts/list":
                 return RpcOk(id, new Dictionary<string, object?> { ["prompts"] = Array.Empty<object>() });
@@ -337,6 +357,39 @@ internal static class McpServer
                 required = new List<string> { "task" },
             },
         },
+        new ToolDef
+        {
+            name = "ai_config_check",
+            description =
+                "检查本软件的 AI 配置是否正常（服务商 / 模型 / Key 是否填了、能不能连通）。" +
+                "ai_write 报失败时先调这个定位原因：401 是 Key 失效或欠费，404 是模型名不对。" +
+                "★ 任何情况下都不输出 Key 本身。",
+            inputSchema = new ToolSchema
+            {
+                properties = new Dictionary<string, ToolProp>
+                {
+                    ["profile"] = new() { description = "要看哪个配置；留空看当前启用的" },
+                    ["probe"] = new() { type = "boolean", description = "是否真的发一个最小请求探测连通性（默认 true）" },
+                },
+            },
+        },
+        new ToolDef
+        {
+            name = "project_create",
+            description =
+                "新建一个 .tdxproj 项目并立刻打开（自动补设定集 12 章骨架）。" +
+                "同名文件已存在时报错而不是覆盖——直接覆盖别人的稿子是灾难。",
+            inputSchema = new ToolSchema
+            {
+                properties = new Dictionary<string, ToolProp>
+                {
+                    ["name"] = new() { description = "项目名（也是文件名）" },
+                    ["directory"] = new() { description = "放到哪个目录；留空放「文档」" },
+                    ["description"] = new() { description = "作品简介，可留空" },
+                },
+                required = new List<string> { "name" },
+            },
+        },
     };
 
     // ==================================================================
@@ -368,6 +421,16 @@ internal static class McpServer
                     var r0 = _session.Open(NovelTools.Str(args, "path"));
                     return ToolText(r0.Text, r0.IsError);
                 }
+                case "project_create":
+                {
+                    var r0 = NovelTools.CreateProject(_session, args);
+                    return ToolText(r0.Text, r0.IsError);
+                }
+                case "ai_config_check":
+                {
+                    var r0 = await AiTools.ConfigCheckAsync(args);
+                    return ToolText(r0.Text, r0.IsError);
+                }
             }
 
             // 需要项目的工具
@@ -390,7 +453,7 @@ internal static class McpServer
 
                 case "project_export": r = NovelTools.Export(p, args); break;
 
-                case "ai_write": r = await AiTools.WriteAsync(p, args); break;
+                case "ai_write": r = await AiTools.WriteAsync(_session, p, args); break;
 
                 default:
                     return ToolText($"未知工具「{name}」。用 tools/list 看有哪些工具。", true);
@@ -434,8 +497,20 @@ internal static class McpServer
         return dict;
     }
 
+    /// <summary>
+    /// 日志。默认只写 stderr；设环境变量 TDX_MCP_LOG=&lt;文件路径&gt; 时同时落盘。
+    /// ★ 有些客户端（Antigravity 等）会吞掉子进程的 stderr，排障时没有日志等于瞎子，
+    /// 所以留一个落盘开关。stdout 是协议通道，一个字节都不能污染。
+    /// </summary>
     private static void Log(string msg)
     {
-        try { Console.Error.WriteLine($"[mcp] {msg}"); } catch { /*  stderr 不可写也不能崩  */ }
+        var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {msg}";
+        try { Console.Error.WriteLine($"[mcp] {line}"); } catch { /* stderr 不可写也不能崩 */ }
+
+        var path = Environment.GetEnvironmentVariable("TDX_MCP_LOG");
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            try { File.AppendAllText(path, line + "\n"); } catch { }
+        }
     }
 }

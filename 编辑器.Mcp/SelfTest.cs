@@ -88,7 +88,7 @@ internal static class SelfTest
 
             var tools = lines[1].RootElement.GetProperty("result").GetProperty("tools").EnumerateArray()
                               .Select(t => t.GetProperty("name").GetString()!).ToList();
-            Assert("tools/list 列出 14 个工具", tools.Count == 14, string.Join(",", tools));
+            Assert("tools/list 列出 16 个工具", tools.Count == 16, string.Join(",", tools));
             Assert("工具集覆盖 读/写/导出/AI",
                 tools.Contains("chapter_read") && tools.Contains("chapter_write")
                 && tools.Contains("project_export") && tools.Contains("ai_write"), "");
@@ -164,7 +164,81 @@ internal static class SelfTest
                 copyAfter.Chapters.First(c => c.ChapterNumber == 1).Content.Contains("只写副本"), "");
             Assert("打开副本不会污染原文件",
                 origAfter.Chapters.First(c => c.ChapterNumber == 1).Content.Contains("霜降"), "");
+        // ==================================================================
+        // H. 资源（resources/*）+ 建项目 + AI 配置自检
+        // ==================================================================
+        {
+            var createDir = Path.Combine(dir, "新书目录");
+            Directory.CreateDirectory(createDir);
+
+            var hLines = await CallAsync(new List<string>
+            {
+                Req(1, "tools/call", new { name = "project_open", arguments = new { path = projPath } }),
+                Req(2, "resources/list", new { }),
+                Req(3, "resources/read", new { uri = "tdx://chapter/1" }),
+                Req(4, "resources/read", new { uri = "tdx://settings/full_outline" }),
+                Req(5, "resources/read", new { uri = "http://别的地方/x" }),          // 不认识的 URI
+                Req(6, "tools/call", new { name = "project_create", arguments = new { name = "Agent新书", directory = createDir, description = "由 MCP 自检创建" } }),
+                Req(7, "tools/call", new { name = "ai_config_check", arguments = new { probe = false } }),
+            });
+
+            // ---- resources/list ----
+            var list = hLines[1].RootElement.GetProperty("result").GetProperty("resources");
+            var uris = list.EnumerateArray()
+                           .Select(x => x.GetProperty("uri").GetString() ?? "").ToList();
+            Assert("H1 resources/list 列出章节资源", uris.Contains("tdx://chapter/1"), string.Join(",", uris));
+            Assert("H1 resources/list 列出设定资源",
+                uris.Contains("tdx://settings/full_outline"), "");
+            Assert("H1 resources/list 含设定集章", uris.Any(u => u.StartsWith("tdx://settings-book/")), "");
+
+            // ---- resources/read ----
+            var c1 = hLines[2].RootElement.GetProperty("result").GetProperty("contents")[0]
+                             .GetProperty("text").GetString() ?? "";
+            Assert("H2 resources/read 章节正文", c1.Contains("霜降"), Cut(c1, 40));
+
+            var outline = hLines[3].RootElement.GetProperty("result").GetProperty("contents")[0]
+                                  .GetProperty("text").GetString() ?? "";
+            Assert("H2 resources/read 设定内容", outline.Contains("林寒入山"), Cut(outline, 40));
+
+            Assert("H2 不认识的 URI → -32602",
+                hLines[4].RootElement.TryGetProperty("error", out var re) &&
+                re.GetProperty("code").GetInt32() == -32602, "");
+
+            // ---- project_create ----
+            var created = Text(hLines[5]);
+            Assert("H3 project_create 成功", created.Contains("已创建并打开"), Cut(created, 60));
+            var newFile = Path.Combine(createDir, "Agent新书.tdxproj");
+            Assert("H3 项目文件真的落盘", File.Exists(newFile), newFile);
+            if (File.Exists(newFile))
+            {
+                var np = NovelProject.Load(newFile);
+                Assert("H3 新项目自带设定集 12 章",
+                    np.SettingsBook?.Chapters.Count == 12, (np.SettingsBook?.Chapters.Count ?? -1).ToString());
+                Assert("H3 新项目 FilePath 指向新文件", np.FilePath == newFile, np.FilePath);
+            }
+
+            // ---- ai_config_check：必须能诊断，且绝不能把 Key 吐出来 ----
+            var chk = Text(hLines[6]);
+            Assert("H4 ai_config_check 有输出", chk.Contains("配置文件"), Cut(chk, 60));
+            var key = TryReadActiveKey();
+            if (!string.IsNullOrWhiteSpace(key))
+                Assert("H4 ai_config_check 不泄露 Key", !chk.Contains(key), "");
         }
+
+        // ==================================================================
+        // I. 工具清单应当包含新增的两个工具
+        // ==================================================================
+        {
+            var iLines = await CallAsync(new List<string> { Req(1, "tools/list", new { }) });
+            var names = iLines[0].RootElement.GetProperty("result").GetProperty("tools")
+                               .EnumerateArray()
+                               .Select(x => x.GetProperty("name").GetString() ?? "").ToList();
+            Assert("I1 工具含 ai_config_check", names.Contains("ai_config_check"), "");
+            Assert("I2 工具含 project_create", names.Contains("project_create"), "");
+            Assert("I3 工具数为 16", names.Count == 16, names.Count.ToString());
+        }
+        }
+
         finally
         {
             try { Directory.Delete(dir, true); } catch { }
@@ -205,6 +279,24 @@ internal static class SelfTest
         d.RootElement.GetProperty("result").TryGetProperty("isError", out var f) && f.GetBoolean();
 
     private static string Cut(string s, int n) => s.Length <= n ? s : s[..n];
+
+    /// <summary>
+    /// 读当前启用配置的 Key —— **唯一用途**是断言「自检输出里不含它」，防止以后有人在
+    /// ai_config_check 里多打一行把密钥漏给 agent。读完即判，绝不打印。
+    /// </summary>
+    private static string TryReadActiveKey()
+    {
+        try
+        {
+            var path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "TdxClaw", "api_profiles.json");
+            var mgr = new ApiProfileManager(path);
+            mgr.Load();
+            return mgr.ActiveProfile?.ApiKey ?? "";
+        }
+        catch { return ""; }
+    }
 
     private static void Assert(string name, bool ok, string detail)
     {

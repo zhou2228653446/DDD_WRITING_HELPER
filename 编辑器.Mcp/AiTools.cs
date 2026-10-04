@@ -14,7 +14,7 @@ namespace 编辑器.Mcp;
 /// </summary>
 internal static class AiTools
 {
-    public static async Task<ToolResult> WriteAsync(NovelProject p, JsonElement args)
+    public static async Task<ToolResult> WriteAsync(Session s, NovelProject p, JsonElement args)
     {
         var task = NovelTools.Str(args, "task", "continue").Trim().ToLowerInvariant();
         var instruction = NovelTools.Str(args, "instruction");
@@ -23,21 +23,32 @@ internal static class AiTools
         var writeBack = NovelTools.Bool(args, "writeBack", false);
 
         // ---- 1. 取 API 配置（和界面共用同一份 api_profiles.json）----
+        ApiProfileManager? mgr = null;
         ApiConfig config;
         try
         {
-            var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TdxClaw");
-            var mgr = new ApiProfileManager(Path.Combine(dir, "api_profiles.json"));
-            mgr.Load();
-            config = mgr.ActiveProfile
-                     ?? throw new InvalidOperationException("没有已启用的 API 配置");
+            mgr = LoadProfiles();
+            var want = NovelTools.Str(args, "profile");
+            if (!string.IsNullOrWhiteSpace(want))
+            {
+                // 允许 agent 指定用哪一个配置（比如论文走 GPT、小说走 DeepSeek）
+                config = mgr.Profiles.TryGetValue(want, out var chosen)
+                    ? chosen
+                    : throw new InvalidOperationException(
+                        $"没有名为「{want}」的配置。已有的：{string.Join("、", mgr.GetProfileNames())}");
+            }
+            else
+            {
+                config = mgr.ActiveProfile
+                         ?? throw new InvalidOperationException("没有已启用的 API 配置");
+            }
         }
         catch (Exception ex)
         {
             return ToolResult.Fail(
                 $"读取 API 配置失败：{ex.Message}\n" +
-                "请先在软件里「AI 设置」配好服务商与 Key（MCP 与界面共用同一份配置）。");
+                "请先在软件里「AI 设置」配好服务商与 Key（MCP 与界面共用同一份配置），" +
+                "或用 ai_config_check 查看当前配置状态。");
         }
 
         // ---- 2. 拼提示词（全部走 AiPrompts，与界面同源）----
@@ -169,15 +180,144 @@ internal static class AiTools
         var head = $"[task={task} · model={config.Model} · 输入 {result.InputTokens} / 输出 {result.OutputTokens} token" +
                    (result.CachedInputTokens > 0 ? $" · 缓存命中 {result.CachedInputTokens}" : "") + "]\n\n";
 
-        // 写回正文是危险操作，默认关闭，必须 agent 显式要求
+        var body = head + result.Text;
+
+        // ---- 5. 可选写回正文 ----
+        // 默认关闭：正文是作者的稿子，绝不能在 agent 没明确要求时替他改。
+        // 真写回时同样要过防覆盖检查（Session.IsStale），和 chapter_write 一个规矩。
         if (writeBack && chapter != null && task is "continue" or "polish" or "expand")
         {
-            return ToolResult.Ok(head + result.Text +
-                $"\n\n⚠ writeBack 需要调用方自己确认：本工具不直接改正文，请复制上面的内容，" +
-                $"用 chapter_write（mode=replace 或 append）写入第{chapter.ChapterNumber}章。");
+            if (s.IsStale(out var stale))
+            {
+                return ToolResult.Fail(
+                    stale.Text + "\n\n本次生成的内容**没有写入**（正文如下，请人工确认后再写入）：\n\n" + body);
+            }
+
+            // 续写/扩写默认追加（接在后面），润色默认替换（改的就是这一章）
+            var mode = NovelTools.Str(args, "writeMode",
+                task == "polish" ? "replace" : "append").ToLowerInvariant();
+            var append = mode != "replace";
+            int before = chapter.WordCount;
+
+            if (append)
+            {
+                var sep = chapter.Content.EndsWith('\n') || chapter.Content.Length == 0 ? "" : "\n";
+                chapter.Content = chapter.Content + sep + result.Text;
+            }
+            else
+            {
+                chapter.Content = result.Text;
+            }
+
+            chapter.ModifiedDate = DateTime.Now;
+            chapter.LastModified = DateTime.Now;
+            s.Save();
+
+            return ToolResult.Ok(body +
+                $"\n\n✅ 已{(append ? "追加到" : "覆盖")}第{chapter.ChapterNumber}章「{chapter.Title}」：" +
+                $"{before} 字 → {chapter.WordCount} 字（writeMode={mode}）。");
         }
 
-        return ToolResult.Ok(head + result.Text);
+        return ToolResult.Ok(body +
+            "\n\n（只返回文本，未改动正文。要落盘：再调一次加 writeBack=true，" +
+            "或自行整理后用 chapter_write 写入。）");
+    }
+
+    /// <summary>
+    /// ai_config_check：让 agent 自己能诊断"为什么调不通"。
+    /// ai_write 失败时最常见的原因是 Key 失效/欠费（401）或模型名不对（404），
+    /// 如果只回一句「没有可用内容」，agent 只能盲目重试。这里把配置状态与（可选的）
+    /// 真实连通性探测结果摊开给它看。
+    ///
+    /// ★ 安全：任何情况下都**不输出 Key 本身**，只给长度和是否为空。
+    /// </summary>
+    public static async Task<ToolResult> ConfigCheckAsync(JsonElement args)
+    {
+        ApiProfileManager mgr;
+        try
+        {
+            mgr = LoadProfiles();
+        }
+        catch (Exception ex)
+        {
+            return ToolResult.Fail($"读取 API 配置失败：{ex.Message}\n配置目录：{ConfigDir()}");
+        }
+
+        var names = mgr.GetProfileNames();
+        var sb = new StringBuilder();
+        sb.AppendLine($"配置文件：{mgr.GetJsonPath()}");
+        sb.AppendLine($"已配置：{names.Count} 个{(names.Count == 0 ? "（还没有配置过）" : "：" + string.Join("、", names))}");
+        sb.AppendLine($"当前启用：{(string.IsNullOrWhiteSpace(mgr.ActiveProfileName) ? "（无）" : mgr.ActiveProfileName)}");
+
+        var want = NovelTools.Str(args, "profile");
+        var name = string.IsNullOrWhiteSpace(want) ? mgr.ActiveProfileName : want;
+        if (string.IsNullOrWhiteSpace(name) || !mgr.Profiles.TryGetValue(name, out var cfg))
+        {
+            sb.AppendLine("\n⚠ 没有可用的配置。请在软件「AI 设置」里添加服务商与 Key。");
+            return ToolResult.Ok(sb.ToString());
+        }
+
+        var key = cfg.ApiKey ?? "";
+        var provider = ApiProviders.Find(cfg.Provider);
+        sb.AppendLine();
+        sb.AppendLine($"—— 配置「{name}」——");
+        sb.AppendLine($"服务商：{provider?.Name ?? cfg.Provider ?? "（未填）"}（id={cfg.Provider}）");
+        sb.AppendLine($"模型：{cfg.Model ?? "（未填）"}");
+        sb.AppendLine($"地址：{cfg.ApiUrl ?? "（未填）"}");
+        sb.AppendLine($"Key：{(key.Length == 0 ? "❌ 空" : $"已填（{key.Length} 字符）")}");
+
+        var problems = new List<string>();
+        if (key.Length == 0) problems.Add("Key 为空");
+        if (string.IsNullOrWhiteSpace(cfg.Model)) problems.Add("没填模型名");
+        if (string.IsNullOrWhiteSpace(cfg.ApiUrl)) problems.Add("没填接口地址");
+
+        var probe = NovelTools.Bool(args, "probe", true);
+        if (probe && problems.Count == 0)
+        {
+            sb.AppendLine("\n连通性探测：");
+            IApiService service = IsAnthropic(cfg) ? new AnthropicService(cfg) : new OpenAIService(cfg);
+            try
+            {
+                var r = await service.CompleteTextAsync(
+                    "回复一个字：好",
+                    "你是连通性测试。只回复一个字。",
+                    new CompletionOptions { MaxTokens = 16, Temperature = 0, Model = cfg.Model ?? "" });
+
+                if (r.IsUsable)
+                {
+                    sb.AppendLine($"✅ 通。模型回复：{Session.Truncate(r.Text.Trim(), 40)}" +
+                                  $"（输入 {r.InputTokens} / 输出 {r.OutputTokens} token）");
+                }
+                else
+                {
+                    problems.Add("模型返回不可用");
+                    sb.AppendLine($"❌ 调不通：{Session.Truncate(r.Text, 300)}");
+                    sb.AppendLine("   常见原因：Key 失效或欠费（401）、模型名不存在（404）、地址不通。");
+                }
+            }
+            catch (Exception ex)
+            {
+                problems.Add("请求异常");
+                sb.AppendLine($"❌ 请求异常：{ex.Message}");
+            }
+        }
+
+        sb.AppendLine();
+        sb.AppendLine(problems.Count == 0
+            ? "结论：配置看起来正常，可以直接用 ai_write。"
+            : "结论：❌ " + string.Join("；", problems) + "。请在软件「AI 设置」里修正后再调用 ai_write。");
+
+        return ToolResult.Ok(sb.ToString());
+    }
+
+    private static string ConfigDir() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TdxClaw");
+
+    private static ApiProfileManager LoadProfiles()
+    {
+        var mgr = new ApiProfileManager(Path.Combine(ConfigDir(), "api_profiles.json"));
+        mgr.Load();
+        return mgr;
     }
 
     private static bool IsAnthropic(ApiConfig c)

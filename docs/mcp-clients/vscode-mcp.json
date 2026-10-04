@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "tdxclaw-writing": {
+      "type": "stdio",
+      "command": "D:\\编辑器\\dist\\mcp\\TdxClaw.Mcp.exe",
+      "args": []
+    }
+  }
+}

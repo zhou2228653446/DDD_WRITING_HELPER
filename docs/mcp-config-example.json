@@ -1,5 +1,5 @@
 {
-  "_说明": "把 mcpServers 这一节复制进你的客户端 MCP 配置文件。command 换成你本机 dist\\mcp\\编辑器.Mcp.exe 的真实路径（JSON 里反斜杠要写两个）。",
+  "_说明": "把 mcpServers 这一节复制进你的客户端 MCP 配置文件。或直接双击 install-mcp.bat 自动安装。command 换成你本机 dist\\mcp\\TdxClaw.Mcp.exe 的真实路径（JSON 里反斜杠要写两个）。",
   "_配置位置": {
     "Claude Desktop": "%APPDATA%\\Claude\\claude_desktop_config.json",
     "Cursor": "项目根目录 .cursor\\mcp.json 或全局 ~/.cursor/mcp.json",
@@ -26,7 +26,10 @@
     "settings_set      改写贯穿设定",
     "settings_book_set 改写设定集某章",
     "project_export    导出 docx / pdf / txt（论文版式 paperMode）",
-    "ai_write          调用软件配好的 AI 写作（续写/润色/审稿...），与界面同源"
+    "project_create    新建项目（自动带设定集 12 章骨架，同名拒绝覆盖）",
+    "ai_write          调用软件配好的 AI 写作（续写/润色/审稿...），与界面同源",
+    "ai_config_check   诊断 AI 配置（Key/模型/连通性，不输出 Key 本身）"
   ],
+  "_资源": "支持资源的客户端（Antigravity/Cline 等）可直接引用 tdx://chapter/3、tdx://settings/full_outline、tdx://settings-book/foreshadow",
   "_典型用法": "让 agent 先 project_list 找到项目 → project_open 打开 → chapter_read 读稿 → 要它改就用 ai_write 生成，确认后 chapter_write 落盘。"
 }

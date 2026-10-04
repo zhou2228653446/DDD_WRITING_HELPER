@@ -436,36 +436,50 @@ dotnet publish 编辑器/编辑器.csproj -c Release -p:EnableSingleFilePublish=
 
 ## MCP：让 AI 客户端直接读写你的书稿
 
-软件自带一个 **MCP 服务器**（`编辑器.Mcp`（exe 名 `TdxClaw.Mcp`）），配好之后 Claude Desktop / Cursor / WorkBuddy
-这类 AI 客户端就能直接打开你的 `.tdxproj`、读稿、改稿、导出，不用你在界面里点。
+软件自带一个 **MCP 服务器**（`编辑器.Mcp`（exe 名 `TdxClaw.Mcp`）），配好之后 Antigravity / Claude Desktop /
+Cursor / WorkBuddy / Cline 这类 AI 客户端就能直接打开你的 `.tdxproj`、读稿、改稿、导出，不用你在界面里点。
+
+**一键安装**：双击根目录 **`install-mcp.bat`**——它自动检测本机装了哪些客户端
+（Antigravity / Claude Desktop / Cursor / WorkBuddy / Cline / VS Code / Codex / Continue），
+把配置**合并**进去（原有的其它 MCP 服务器不受影响，写入前自动备份）。逐家配置文件位置的
+对照表在 `docs/mcp-clients/README.md`，也可以手动复制对应片段。**装完要重启客户端。**
 
 **配置**：把 `docs/mcp-config-example.json` 里的 `mcpServers` 一节复制进客户端的 MCP
 配置文件，`command` 改成你本机 `dist\mcp\TdxClaw.Mcp.exe` 的路径（JSON 里反斜杠写两个）。
 `deploy.bat` 会把它和主程序一起发布出来。
 
-**14 个工具**，分四类：
+**16 个工具**，分五类：
 
 | 类别 | 工具 |
 |---|---|
-| 找项目 | `project_list`（扫目录找 .tdxproj）、`project_open` |
+| 找项目 | `project_list`（扫目录找 .tdxproj）、`project_open`、`project_create`（新书自动带设定集 12 章骨架；同名文件拒绝覆盖） |
 | 读 | `chapters_list`、`chapter_read`、`chapter_search`（全文搜词，查伏笔/矛盾）、`settings_get`、`settings_book_get`（设定集 12 章）、`characters_stats`（谁多久没出场了） |
 | 写 | `chapter_write`（replace 覆盖 / append 追加）、`chapter_create`、`settings_set`、`settings_book_set` |
 | 产出 | `project_export`（docx / pdf / txt，论文版式传 `paperMode`）、**`ai_write`** |
+| 诊断 | `ai_config_check`（服务商/模型/Key 状态 + 可选真连通探测；**绝不输出 Key 本身**） |
+
+**资源（resources）**：打开项目后，章节、五项设定、设定集各章都以 `tdx://` 资源暴露
+（`tdx://chapter/3`、`tdx://settings/full_outline`、`tdx://settings-book/foreshadow`）。
+支持资源的客户端（Antigravity、Cline 等）可以在对话里直接 @ 引用整章，省掉先 list 再 read 一轮往返。
 
 **`ai_write` 是重点**：它调的不是"一个裸模型"，而是**本软件调好的那套 AI**——当前生效的
 提示词方案（小说/论文/公文）+ 五项贯穿设定 + 设定集 + 叙事视角硬约束，和你在界面里点
 「续写」完全同源。可选 `continue` / `polish` / `expand` / `review`（一致性审稿）/
-`setting_book` / `name` / `chat`。它只返回文本，**不自动改稿**——确认后再用 `chapter_write` 落盘。
+`setting_book` / `name` / `chat`。默认只返回文本；显式传 `writeBack=true` 才写回正文
+（续写/扩写默认追加、润色默认替换，可用 `writeMode` 指定，同样受防覆盖保护）。
 
 **两条安全设计**：
 
 - **防止覆盖你的稿子**：MCP 是独立进程，和编辑器界面各有一份内存。写盘前会比对项目文件的
   修改时间+长度，一旦发现磁盘上的项目已被别的实例改过，就拒绝写入并提示你先关掉界面里的
   项目重新打开——把最致命的"静默覆盖"变成明确报错。
-- **写正文默认不自动**：`ai_write` 只生成，落盘要显式调 `chapter_write`。
+- **写正文默认不自动**：`ai_write` 只生成；`writeBack=true` 是 agent 的显式动作，且照样过防覆盖检查。
 
-开发时可用 `编辑器.Mcp.exe --selftest` 跑一遍协议自检（24 项断言，覆盖分帧、通知不回、
-错误码、落盘、冲突防护）。
+**排障**：客户端吞 stderr 看不到日志时，在配置里加
+`"env": { "TDX_MCP_LOG": "C:\\临时\\tdxclaw-mcp.log" }` 让服务器把日志落盘。
+
+开发时可用 `TdxClaw.Mcp.exe --selftest` 跑一遍协议自检（42 项断言，覆盖分帧、通知不回、
+错误码、落盘、冲突防护、资源读写、建项目、Key 不泄露）。
 
 ### 首次配置
 
@@ -555,7 +569,7 @@ MCP 服务器是独立工程，**不重写任何业务逻辑**，全部 ProjectR
 ```
 编辑器.Mcp/
 ├─ Program.cs       入口（--selftest 跑协议自检）
-├─ McpServer.cs     JSON-RPC 2.0 + stdio 主循环 + 14 个工具的 schema
+├─ McpServer.cs     JSON-RPC 2.0 + stdio 主循环 + 16 个工具的 schema
 ├─ NovelTools.cs    读写 / 检索 / 导出 + Session（含写前冲突检测）
 ├─ AiTools.cs       ai_write：复用 AiPrompts 与两个 Service，与界面同源
 └─ SelfTest.cs      内置自检（24 项断言）

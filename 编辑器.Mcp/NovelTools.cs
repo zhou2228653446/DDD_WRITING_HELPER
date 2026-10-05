@@ -108,6 +108,39 @@ internal sealed class Session
         Restamp();
     }
 
+    /// <summary>
+    /// 整体替换当前项目（恢复快照用）。换完立即落盘，和界面「恢复版本」的行为一致。
+    /// </summary>
+    public void Replace(NovelProject project)
+    {
+        Project = project;
+        Save();
+    }
+
+    /// <summary>
+    /// 改稿前存一份快照——这是 MCP 侧唯一能撤销的手段。
+    ///
+    /// ★ 界面每次 AI 改稿前都会 TakeSnapshot（"续写前备份"之类），MCP 早期没有。
+    /// 而 MCP 恰恰是 agent **自动**改稿的场景：一次 chapter_write 覆盖错章就是几千字
+    /// 直接没了，比界面里手点更容易出事。所以写盘前一律先存一份。
+    ///
+    /// 快照落在 .snapshots/ 子目录，不动项目文件本身，因此不会触发 IsStale 误判
+    /// （IsStale 只比对项目文件的修改时间与长度）。
+    /// </summary>
+    public void Snapshot(string description)
+    {
+        try
+        {
+            if (Project == null) return;
+            new ProjectSnapshotManager(Path).SaveSnapshot(Project, description);
+        }
+        catch (Exception ex)
+        {
+            // 快照只是保险，失败不能阻断写入——否则磁盘一满就什么都写不了了
+            Console.Error.WriteLine($"[mcp] 快照失败（不阻断写入）：{ex.Message}");
+        }
+    }
+
     /// <summary>写完、重新打开后都要刷新指纹——自己写的改动不算「被别人改」。</summary>
     public void Restamp() => _stamp = StampOf(Path);
 
@@ -422,6 +455,12 @@ internal static class NovelTools
         var append = Str(args, "mode", "replace").Equals("append", StringComparison.OrdinalIgnoreCase);
         int before = c.WordCount;
 
+        // ⚠ 快照必须存**在改内存之前**，不是"在写盘之前"。
+        // Save() 序列化的就是 Project 这个对象：一旦先改了 c.Content，快照里存的
+        // 就已经是新内容了——真覆盖错章时这份快照救不回任何东西（自检里那条
+        // "快照记的是改写之前的内容"就是专门盯这个的）。
+        s.Snapshot($"MCP {(append ? "追加" : "覆盖")}第{c.ChapterNumber}章前");
+
         if (append)
         {
             var sep = c.Content.EndsWith('\n') || c.Content.Length == 0 ? "" : "\n";
@@ -452,6 +491,7 @@ internal static class NovelTools
         int next = p.Chapters.Count == 0 ? 1 : p.Chapters.Max(c => c.ChapterNumber) + 1;
         var content = Str(args, "content");
 
+        s.Snapshot("MCP 新建章节前");   // 加进列表之前存，理由同 WriteChapter
         p.Chapters.Add(new Chapter
         {
             ChapterNumber = next,
@@ -461,6 +501,7 @@ internal static class NovelTools
             ModifiedDate = DateTime.Now,
             LastModified = DateTime.Now,
         });
+        s.Snapshot("MCP 新建章节前");
         s.Save();
 
         return ToolResult.Ok($"已新建第{next}章「{title}」（{content.Length} 字）。");
@@ -473,27 +514,48 @@ internal static class NovelTools
         var field = Str(args, "field").Trim().ToLowerInvariant();
         var text = Str(args, "text");
 
-        switch (field)
+        // 先校验字段再存快照：快照必须早于赋值，否则存的是改完的状态
+        if (!IsKnownSettingField(field))
+            return ToolResult.Fail(
+                $"未知字段「{field}」。可选：full_outline / chapter_outline / characters / " +
+                "background / writing_style / narrative_viewpoint / description");
+
+        s.Snapshot($"MCP 改写设定「{field}」前");
+        ApplySettingField(p, field, text);
+        s.Save();
+
+        return ToolResult.Ok($"已更新「{field}」（{text.Length} 字）。");
+    }
+
+    private static bool IsKnownSettingField(string field) => field switch
+    {
+        "outline" or "full_outline" or "chapter_outline" or "characters" or "character"
+            or "background" or "style" or "writing_style" or "viewpoint"
+            or "narrative_viewpoint" or "description" => true,
+        _ => false,
+    };
+
+    /// <summary>
+    /// 把文本写进某项贯穿设定。抽出来是为了让 settings_set 和 ai_write 的写回走同一条路径——
+    /// 两条路径各写一份 switch，迟早会漏掉一个字段。
+    /// </summary>
+    internal static bool ApplySettingField(NovelProject p, string field, string text)
+    {
+        switch (field.Trim().ToLowerInvariant())
         {
             case "outline":
-            case "full_outline": p.FullOutline = text; break;
-            case "chapter_outline": p.ChapterOutline = text; break;
+            case "full_outline": p.FullOutline = text; return true;
+            case "chapter_outline": p.ChapterOutline = text; return true;
             case "characters":
-            case "character": p.CharacterSettings = text; break;
-            case "background": p.BackgroundSettings = text; break;
+            case "character": p.CharacterSettings = text; return true;
+            case "background": p.BackgroundSettings = text; return true;
             case "style":
-            case "writing_style": p.WritingStyle = text; break;
+            case "writing_style": p.WritingStyle = text; return true;
             case "viewpoint":
-            case "narrative_viewpoint": p.NarrativeViewpoint = text; break;
-            case "description": p.Description = text; break;
-            default:
-                return ToolResult.Fail(
-                    $"未知字段「{field}」。可选：full_outline / chapter_outline / characters / " +
-                    "background / writing_style / narrative_viewpoint / description");
+            case "narrative_viewpoint": p.NarrativeViewpoint = text; return true;
+            case "description": p.Description = text; return true;
+            default: return false;
         }
-
-        s.Save();
-        return ToolResult.Ok($"已更新「{field}」（{text.Length} 字）。");
     }
 
     public static ToolResult SetSettingsBook(Session s, NovelProject p, JsonElement args)
@@ -513,6 +575,7 @@ internal static class NovelTools
 
         var content = Str(args, "content");
         var append = Str(args, "mode", "replace").Equals("append", StringComparison.OrdinalIgnoreCase);
+        s.Snapshot($"MCP 改写设定集「{ch.Title}」前");   // 赋值之前存
         ch.Content = append && !string.IsNullOrWhiteSpace(ch.Content)
             ? ch.Content.TrimEnd() + "\n" + content
             : content;
@@ -565,6 +628,385 @@ internal static class NovelTools
         catch (Exception ex)
         {
             return ToolResult.Fail($"导出失败：{ex.Message}");
+        }
+    }
+
+    // ==================================================================
+    // 章节结构管理（改名 / 删除 / 重排）
+    //
+    // ★ 为什么必须给：这个场景里 agent 是操作员，用户只说一句话。
+    // 「这两章合并一下」「第 5 章挪到前面」「这章删了重写」——agent 手上没有工具
+    // 就只能回一句"我做不了"，协作当场断掉。
+    // 删除是危险操作，所以删之前一律存快照（也正因为有 snapshot_restore 兜底，
+    // 才敢把删除开放给 agent）。
+    // ==================================================================
+
+    public static ToolResult RenameChapter(Session s, NovelProject p, JsonElement args)
+    {
+        if (s.IsStale(out var stale)) return stale;
+
+        var n = Int(args, "number", -1);
+        var c = p.Chapters.FirstOrDefault(x => x.ChapterNumber == n);
+        if (c == null) return ToolResult.Fail($"没有第 {n} 章。用 chapters_list 看现有章节号。");
+
+        var title = Str(args, "title").Trim();
+        if (string.IsNullOrWhiteSpace(title)) return ToolResult.Fail("title 不能为空。");
+
+        var old = c.Title;
+        s.Snapshot($"MCP 重命名第{n}章前");
+        c.Title = title;
+        s.Save();
+
+        return ToolResult.Ok($"第{n}章已改名：「{old}」→「{title}」");
+    }
+
+    public static ToolResult DeleteChapter(Session s, NovelProject p, JsonElement args)
+    {
+        if (s.IsStale(out var stale)) return stale;
+
+        var n = Int(args, "number", -1);
+        var c = p.Chapters.FirstOrDefault(x => x.ChapterNumber == n);
+        if (c == null) return ToolResult.Fail($"没有第 {n} 章。用 chapters_list 看现有章节号。");
+
+        var title = c.Title;
+        var words = c.WordCount;
+
+        s.Snapshot($"MCP 删除第{n}章「{title}」前");
+        p.Chapters.Remove(c);
+        Renumber(p);
+        s.Save();
+
+        return ToolResult.Ok(
+            $"已删除第{n}章「{title}」（{words} 字），其余章节已重排编号。\n" +
+            "删之前存了快照，用 snapshot_list 找到它、snapshot_restore 可以撤回来。");
+    }
+
+    /// <summary>把某章移到新位置，其余顺移后重新编号。</summary>
+    public static ToolResult ReorderChapter(Session s, NovelProject p, JsonElement args)
+    {
+        if (s.IsStale(out var stale)) return stale;
+
+        var from = Int(args, "number", -1);
+        var to = Int(args, "toNumber", -1);
+        if (from <= 0 || to <= 0)
+            return ToolResult.Fail("number 和 toNumber 都要给（把第 number 章移到第 toNumber 个位置）。");
+
+        var c = p.Chapters.FirstOrDefault(x => x.ChapterNumber == from);
+        if (c == null) return ToolResult.Fail($"没有第 {from} 章。用 chapters_list 看现有章节号。");
+
+        var ordered = p.Chapters.OrderBy(x => x.ChapterNumber).ToList();
+        ordered.Remove(c);
+        ordered.Insert(Math.Clamp(to - 1, 0, ordered.Count), c);
+        p.Chapters = ordered;
+        Renumber(p);
+
+        s.Snapshot($"MCP 调整第{from}章顺序前");
+        s.Save();
+
+        return ToolResult.Ok($"「{c.Title}」已从 {from} 移到第 {c.ChapterNumber} 章，其余章节已重排。");
+    }
+
+    /// <summary>
+    /// 章号重排成 1..n 连续。
+    /// 章号是 chapter_read / chapter_write 唯一的定位依据，中间留空洞只会让 agent 找不到章。
+    /// </summary>
+    private static void Renumber(NovelProject p)
+    {
+        int i = 1;
+        foreach (var c in p.Chapters.OrderBy(x => x.ChapterNumber))
+            c.ChapterNumber = i++;
+    }
+
+    // ==================================================================
+    // 章节梗概
+    // ==================================================================
+
+    /// <summary>
+    /// 写某一章的梗概。
+    ///
+    /// ★ 长篇能不能写完，几乎全看这一条。ai_write 给续写/审稿带的前情只取前 1~3 章正文
+    /// 各 800 字——写到三四十章时，AI 对前面发生了什么基本是瞎的，人物性格、埋过的伏笔
+    /// 全靠猜。梗概链才是把几十章串起来的东西：每章写完顺手存一句，后面任何一章都能
+    /// 低成本拿到全书脉络。
+    /// </summary>
+    public static ToolResult SetChapterSummary(Session s, NovelProject p, JsonElement args)
+    {
+        if (s.IsStale(out var stale)) return stale;
+
+        var n = Int(args, "number", -1);
+        var c = p.Chapters.FirstOrDefault(x => x.ChapterNumber == n);
+        if (c == null) return ToolResult.Fail($"没有第 {n} 章。用 chapters_list 看现有章节号。");
+
+        var summary = Str(args, "summary").Trim();
+        s.Snapshot($"MCP 改写第{n}章梗概前");
+        c.Summary = summary;
+        s.Save();
+
+        return ToolResult.Ok(string.IsNullOrWhiteSpace(summary)
+            ? $"已清空第{n}章的梗概。"
+            : $"已写入第{n}章梗概（{summary.Length} 字）。");
+    }
+
+    // ==================================================================
+    // 版本快照（回滚）
+    // ==================================================================
+
+    public static ToolResult ListSnapshots(Session s)
+    {
+        if (string.IsNullOrEmpty(s.Path)) return ToolResult.Fail("还没有打开项目。");
+
+        var entries = new ProjectSnapshotManager(s.Path).LoadIndex();
+        if (entries.Count == 0)
+            return ToolResult.Ok("这个项目还没有快照。写入正文、改写设定、AI 生成时都会自动存。");
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"共 {entries.Count} 个快照（时间正序，最新在最后）：");
+        foreach (var e in entries)
+            sb.AppendLine($"  {e.Id}   {e.Timestamp:MM-dd HH:mm:ss}   {e.Description}");
+        sb.AppendLine("\n用 snapshot_restore 传 id 恢复。");
+        return ToolResult.Ok(sb.ToString());
+    }
+
+    public static ToolResult RestoreSnapshot(Session s, JsonElement args)
+    {
+        if (string.IsNullOrEmpty(s.Path)) return ToolResult.Fail("还没有打开项目。");
+
+        var id = Str(args, "id").Trim();
+        if (id.Length == 0) return ToolResult.Fail("id 不能为空。先用 snapshot_list 看有哪些版本。");
+
+        var mgr = new ProjectSnapshotManager(s.Path);
+        var entry = mgr.LoadIndex()
+            .FirstOrDefault(e => string.Equals(e.Id, id, StringComparison.OrdinalIgnoreCase));
+        if (entry == null) return ToolResult.Fail($"没有 id 为「{id}」的快照。用 snapshot_list 看列表。");
+
+        var snapshot = mgr.LoadSnapshot(entry);
+        if (snapshot == null) return ToolResult.Fail($"快照 {id} 读取失败（文件可能已损坏）。");
+
+        // 恢复之前先给"当前状态"留一份——否则这一步自己就成了不可撤销的操作
+        s.Snapshot($"恢复到快照 {id} 之前");
+
+        // ⚠ 快照里存的 FilePath 是**存快照那一刻**的路径，过期了就会写到别处
+        // （同一个坑在打开副本时踩过），必须覆盖成当前实际路径。
+        snapshot.FilePath = s.Path;
+        s.Replace(snapshot);
+
+        return ToolResult.Ok(
+            $"已恢复到快照 {id}（{entry.Timestamp:MM-dd HH:mm:ss} · {entry.Description}）。\n" +
+            "恢复前的状态也存成了新快照，反悔就再恢复回去。");
+    }
+
+    // ==================================================================
+    // 结构化人物卡
+    // ==================================================================
+
+    /// <summary>
+    /// 人物档案（NovelProject.Characters）。
+    /// 与「人物设定」自由文本是两回事：这里是一张张带字段的卡，
+    /// 用户说"给主角加个口头禅""配角年龄改小两岁"，改的是具体的字段，
+    /// 不是把几千字的设定文本重新生成一遍。
+    /// </summary>
+    public static ToolResult ListCharacters(NovelProject p)
+    {
+        if (p.Characters.Count == 0)
+            return ToolResult.Ok(
+                "还没有结构化人物卡。（settings_get 里那份「人物设定」是自由文本，和这里是两回事）\n" +
+                "用 character_upsert 建一张，例如 name=林寒 role=主角。");
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"「{p.ProjectName}」共 {p.Characters.Count} 张人物卡：");
+        foreach (var c in p.Characters)
+        {
+            var bits = new List<string>();
+            if (c.Age > 0) bits.Add($"{c.Age}岁");
+            if (!string.IsNullOrWhiteSpace(c.Gender)) bits.Add(c.Gender);
+            if (!string.IsNullOrWhiteSpace(c.Role)) bits.Add(c.Role);
+            sb.AppendLine($"  · {c.Name}{(bits.Count > 0 ? "（" + string.Join(" · ", bits) + "）" : "")}   id={ShortId(c.CharacterId)}");
+            if (!string.IsNullOrWhiteSpace(c.Personality))
+                sb.AppendLine($"      性格：{Session.Truncate(c.Personality, 60)}");
+            if (!string.IsNullOrWhiteSpace(c.Background))
+                sb.AppendLine($"      背景：{Session.Truncate(c.Background, 60)}");
+        }
+        sb.AppendLine("\ncharacter_upsert 给 id 就是改，不给则按姓名匹配，都没有就新建。");
+        return ToolResult.Ok(sb.ToString());
+    }
+
+    public static ToolResult UpsertCharacter(Session s, NovelProject p, JsonElement args)
+    {
+        if (s.IsStale(out var stale)) return stale;
+
+        var name = Str(args, "name").Trim();
+        if (string.IsNullOrWhiteSpace(name)) return ToolResult.Fail("name 不能为空。");
+
+        var id = Str(args, "id").Trim();
+        var c = id.Length > 0
+            ? p.Characters.FirstOrDefault(x => x.CharacterId.StartsWith(id, StringComparison.OrdinalIgnoreCase))
+            : null;
+        c ??= p.Characters.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase));
+
+        var isNew = c == null;
+        c ??= new Character { Name = name };
+        if (isNew)
+            p.Characters.Add(c);
+        else
+            c.Name = name;
+
+        // ★ 只覆盖**传了的**字段。agent 常常只想改一条性格，
+        // 无脑整体赋值会把没传的字段清空——那种静默丢数据最难查。
+        if (Has(args, "role")) c.Role = Str(args, "role");
+        if (Has(args, "age")) c.Age = Int(args, "age", c.Age);
+        if (Has(args, "gender")) c.Gender = Str(args, "gender");
+        if (Has(args, "occupation")) c.Occupation = Str(args, "occupation");
+        if (Has(args, "appearance")) c.Appearance = Str(args, "appearance");
+        if (Has(args, "personality")) c.Personality = Str(args, "personality");
+        if (Has(args, "background")) c.Background = Str(args, "background");
+
+        s.Snapshot($"MCP {(isNew ? "新建" : "修改")}人物「{name}」前");
+        s.Save();
+
+        return ToolResult.Ok($"已{(isNew ? "新建" : "更新")}人物卡「{c.Name}」 id={ShortId(c.CharacterId)}" +
+                             (isNew ? "（没传的字段留空，之后可再改）" : "（只改了本次传入的字段）"));
+    }
+
+    public static ToolResult DeleteCharacter(Session s, NovelProject p, JsonElement args)
+    {
+        if (s.IsStale(out var stale)) return stale;
+
+        var id = Str(args, "id").Trim();
+        var name = Str(args, "name").Trim();
+        if (id.Length == 0 && name.Length == 0)
+            return ToolResult.Fail("给 id 或 name 其中一个。");
+
+        var c = id.Length > 0
+            ? p.Characters.FirstOrDefault(x => x.CharacterId.StartsWith(id, StringComparison.OrdinalIgnoreCase))
+            : p.Characters.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (c == null) return ToolResult.Fail($"没有匹配的人物。用 characters_list 看现有卡片。");
+
+        s.Snapshot($"MCP 删除人物「{c.Name}」前");
+        p.Characters.Remove(c);
+        s.Save();
+
+        return ToolResult.Ok($"已删除人物卡「{c.Name}」（删前已存快照）。");
+    }
+
+    private static bool Has(JsonElement a, string key) =>
+        a.ValueKind == JsonValueKind.Object && a.TryGetProperty(key, out _);
+
+    private static string ShortId(string id) => id.Length <= 8 ? id : id[..8];
+
+    // ==================================================================
+    // 项目进度画像
+    // ==================================================================
+
+    /// <summary>
+    /// 一次调用拿到"这本书现在什么状态"。
+    /// 用户最常问的就是「写到哪了」「还差多少」「接下来该干嘛」——
+    /// 没有这个工具，agent 得自己 chapters_list + settings_get 各调一次再拼，
+    /// 而且它拼不出"下一步该做什么"这种判断。
+    /// </summary>
+    public static ToolResult ProjectStatus(Session s, NovelProject p)
+    {
+        var chapters = p.Chapters.OrderBy(c => c.ChapterNumber).ToList();
+        var total = chapters.Sum(c => c.WordCount);
+        var empty = chapters.Count(c => c.WordCount == 0);
+        var withSummary = chapters.Count(c => !string.IsNullOrWhiteSpace(c.Summary));
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"【{p.ProjectName}】");
+        sb.AppendLine($"章节：{chapters.Count} 章 · 共 {total} 字" +
+                      (empty > 0 ? $" · {empty} 章还是空的" : ""));
+
+        if (chapters.Count > 0)
+        {
+            var longest = chapters.OrderByDescending(c => c.WordCount).First();
+            sb.AppendLine($"最长：第{longest.ChapterNumber}章「{longest.Title}」{longest.WordCount} 字" +
+                          $" · 平均 {total / chapters.Count} 字/章");
+        }
+
+        sb.AppendLine($"梗概：{withSummary}/{chapters.Count} 章有梗概");
+
+        var filled = new List<string>();
+        if (!string.IsNullOrWhiteSpace(p.FullOutline)) filled.Add("全文大纲");
+        if (!string.IsNullOrWhiteSpace(p.ChapterOutline)) filled.Add("章节大纲");
+        if (!string.IsNullOrWhiteSpace(p.CharacterSettings)) filled.Add("人物设定");
+        if (!string.IsNullOrWhiteSpace(p.BackgroundSettings)) filled.Add("背景设定");
+        if (!string.IsNullOrWhiteSpace(p.WritingStyle)) filled.Add("文风设定");
+        if (!string.IsNullOrWhiteSpace(p.NarrativeViewpoint)) filled.Add("叙事视角");
+        sb.AppendLine($"设定：{(filled.Count == 0 ? "（一项都没填）" : string.Join("、", filled))}");
+
+        sb.AppendLine($"设定集：{p.SettingsBook?.Chapters.Count ?? 0} 章 · 人物卡：{p.Characters.Count} 张 · " +
+                      $"快照：{new ProjectSnapshotManager(s.Path).LoadIndex().Count} 个");
+
+        // 下一步建议——用户问"接下来干嘛"时，agent 不该自己瞎猜顺序
+        sb.AppendLine();
+        sb.AppendLine("下一步建议：" + SuggestNext(p, chapters, empty, filled.Count));
+
+        return ToolResult.Ok(sb.ToString());
+    }
+
+    private static string SuggestNext(NovelProject p, List<Chapter> chapters, int empty, int filledSettings)
+    {
+        if (!string.IsNullOrWhiteSpace(p.FullOutline) == false)
+            return "先定全文大纲：ai_write task=outline";
+        if (chapters.Count == 0)
+            return "大纲有了，开始建章节：chapter_create（或 ai_write task=chapter_outline 先出章节大纲）";
+        if (empty > 0)
+        {
+            var first = chapters.First(c => c.WordCount == 0);
+            return $"写第{first.ChapterNumber}章「{first.Title}」：ai_write task=continue number={first.ChapterNumber}";
+        }
+        if (chapters.Count(c => string.IsNullOrWhiteSpace(c.Summary)) > 0)
+            return "给写完的章补梗概（chapter_summary_set）——长篇跨章连贯靠它";
+        return "全部章节都有内容了，可以 ai_write task=review 做一轮一致性审稿，再 project_export 导出";
+    }
+
+    // ==================================================================
+    // AI 写作记忆
+    // ==================================================================
+
+    /// <summary>
+    /// 读写 AI 写作记忆（&lt;项目目录&gt;/.ai_memory/memory.md）。
+    /// 这个场景里用户一直在纠正和指导——"别写死主角""对话别太长""这段太啰嗦"。
+    /// 这些话如果只停留在对话里，下一轮就忘了。让 agent 把它们沉淀进记忆，
+    /// 后面每次生成都会自动带上（ai_write 内部已注入）。
+    /// </summary>
+    public static ToolResult GetMemory(NovelProject p)
+    {
+        try
+        {
+            var mem = new AiMemoryManager(p.FilePath);
+            mem.Load();
+            var text = mem.GetRawMemory();
+            return ToolResult.Ok(string.IsNullOrWhiteSpace(text)
+                ? "还没有 AI 写作记忆。"
+                : $"AI 写作记忆（{text.Length} 字）：\n\n{text}");
+        }
+        catch (Exception ex)
+        {
+            return ToolResult.Fail($"读取记忆失败：{ex.Message}");
+        }
+    }
+
+    public static ToolResult SetMemory(Session s, NovelProject p, JsonElement args)
+    {
+        var text = Str(args, "text");
+        var append = Str(args, "mode", "replace").Equals("append", StringComparison.OrdinalIgnoreCase);
+
+        try
+        {
+            var mem = new AiMemoryManager(p.FilePath);
+            mem.Load();
+            var old = mem.GetRawMemory();
+            var final = append && !string.IsNullOrWhiteSpace(old)
+                ? old.TrimEnd() + "\n" + text
+                : text;
+            mem.SetMemory(final);
+
+            return ToolResult.Ok($"已{(append ? "追加到" : "覆盖")}AI 写作记忆（{final.Length} 字）。" +
+                                 "之后每次生成都会自动带上它。");
+        }
+        catch (Exception ex)
+        {
+            return ToolResult.Fail($"写入记忆失败：{ex.Message}");
         }
     }
 }

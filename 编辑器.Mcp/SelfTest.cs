@@ -88,7 +88,7 @@ internal static class SelfTest
 
             var tools = lines[1].RootElement.GetProperty("result").GetProperty("tools").EnumerateArray()
                               .Select(t => t.GetProperty("name").GetString()!).ToList();
-            Assert("tools/list 列出 16 个工具", tools.Count == 16, string.Join(",", tools));
+            Assert("tools/list 列出 28 个工具", tools.Count == 28, string.Join(",", tools));
             Assert("工具集覆盖 读/写/导出/AI",
                 tools.Contains("chapter_read") && tools.Contains("chapter_write")
                 && tools.Contains("project_export") && tools.Contains("ai_write"), "");
@@ -164,6 +164,35 @@ internal static class SelfTest
                 copyAfter.Chapters.First(c => c.ChapterNumber == 1).Content.Contains("只写副本"), "");
             Assert("打开副本不会污染原文件",
                 origAfter.Chapters.First(c => c.ChapterNumber == 1).Content.Contains("霜降"), "");
+
+            // ---- 回归：改稿前必须留快照 ----
+            // MCP 是 agent **自动**改稿的场景，一次覆盖错章就是几千字没了，比界面里手点
+            // 更容易出事。界面每次 AI 操作前都 TakeSnapshot，MCP 也必须存，否则没有后悔药。
+            var snapDir = Path.Combine(Path.GetDirectoryName(projPath)!, ".snapshots");
+            var snapFiles = Directory.Exists(snapDir)
+                ? Directory.GetFiles(snapDir, "*.json")
+                           .Where(f => !string.Equals(Path.GetFileName(f), "index.json", StringComparison.OrdinalIgnoreCase))
+                           .ToList()
+                : new List<string>();
+            Assert("改稿前存了快照（agent 改坏能回滚）", snapFiles.Count > 0,
+                Directory.Exists(snapDir)
+                    ? string.Join(",", snapFiles.Select(Path.GetFileName))
+                    : "(.snapshots 目录不存在)");
+            // ⚠ 不能直接搜文件文本：System.Text.Json 默认把非 ASCII 转成 \uXXXX，
+            // 快照里的「霜降」实际写作 \u971C\u964D，文本 Contains 必然落空。要反序列化再看。
+            Assert("快照记的是改写之前的内容（不是改完的状态）",
+                snapFiles.Count > 0 && snapFiles.Any(f =>
+                {
+                    try
+                    {
+                        var snap = JsonSerializer.Deserialize<NovelProject>(
+                            File.ReadAllText(f),
+                            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        return snap?.Chapters.Any(c => c.Content.Contains("霜降")) == true;
+                    }
+                    catch { return false; }
+                }),
+                snapFiles.Count == 0 ? "(没有快照文件)" : "快照里找不到改写前的原稿内容");
         // ==================================================================
         // H. 资源（resources/*）+ 建项目 + AI 配置自检
         // ==================================================================
@@ -235,7 +264,105 @@ internal static class SelfTest
                                .Select(x => x.GetProperty("name").GetString() ?? "").ToList();
             Assert("I1 工具含 ai_config_check", names.Contains("ai_config_check"), "");
             Assert("I2 工具含 project_create", names.Contains("project_create"), "");
-            Assert("I3 工具数为 16", names.Count == 16, names.Count.ToString());
+            Assert("I3 工具数为 28", names.Count == 28, names.Count.ToString());
+            Assert("I4 章节结构管理齐备（改名/删除/重排）",
+                names.Contains("chapter_rename") && names.Contains("chapter_delete")
+                && names.Contains("chapter_reorder"), "");
+            Assert("I5 快照可回滚（list/restore）",
+                names.Contains("snapshot_list") && names.Contains("snapshot_restore"), "");
+            Assert("I6 协作类工具齐备（进度画像 / 梗概 / 人物卡 / 记忆）",
+                names.Contains("project_status") && names.Contains("chapter_summary_set")
+                && names.Contains("character_upsert") && names.Contains("memory_set"), "");
+        }
+
+        // ==================================================================
+        // J. agent 自主操作所需的能力：章节管理 / 梗概 / 人物卡 / 快照回滚
+        //
+        // 场景是"用户在 agent 里用自然语言指挥，具体操作全由 agent 完成"——
+        // 所以凡是被改坏、被删掉的东西，agent 都得能自己收拾，不能让人回界面点。
+        // ==================================================================
+        {
+            var jLines = await CallAsync(new List<string>
+            {
+                Req(1, "tools/call", new { name = "project_open", arguments = new { path = projPath } }),
+                Req(2, "tools/call", new { name = "project_status", arguments = new { } }),
+                Req(3, "tools/call", new { name = "chapter_rename", arguments = new { number = 2, title = "改名后的第二章" } }),
+                Req(4, "tools/call", new { name = "chapter_summary_set", arguments = new { number = 1, summary = "林寒初入山门。" } }),
+                Req(5, "tools/call", new { name = "characters_list", arguments = new { } }),
+                Req(6, "tools/call", new { name = "character_upsert", arguments = new { name = "林寒", role = "主角", age = 19 } }),
+                Req(7, "tools/call", new { name = "character_upsert", arguments = new { name = "林寒", personality = "话少，认死理" } }),
+                Req(8, "tools/call", new { name = "characters_list", arguments = new { } }),
+            });
+
+            Assert("J1 project_status 给出进度与下一步建议",
+                Text(jLines[1]).Contains("下一步建议"), Cut(Text(jLines[1]), 60));
+            Assert("J2 chapter_rename 改名成功",
+                Text(jLines[2]).Contains("改名后的第二章"), Cut(Text(jLines[2]), 50));
+            Assert("J3 chapter_summary_set 写入梗概",
+                Text(jLines[3]).Contains("梗概"), Cut(Text(jLines[3]), 50));
+            Assert("J4 无人物卡时给出可操作提示",
+                Text(jLines[4]).Contains("还没有结构化人物卡"), Cut(Text(jLines[4]), 50));
+            Assert("J5 character_upsert 新建人物卡",
+                Text(jLines[5]).Contains("新建"), Cut(Text(jLines[5]), 50));
+
+            var afterUpsert = Text(jLines[7]);
+            Assert("J6 更新只改传入字段，不覆盖未传的（角色/年龄还在）",
+                afterUpsert.Contains("话少，认死理") && afterUpsert.Contains("主角") && afterUpsert.Contains("19"),
+                Cut(afterUpsert, 60));
+
+            // ---- 删章 → 用快照自己捞回来 ----
+            var kLines = await CallAsync(new List<string>
+            {
+                Req(1, "tools/call", new { name = "chapter_reorder", arguments = new { number = 2, toNumber = 1 } }),
+                Req(2, "tools/call", new { name = "chapter_delete", arguments = new { number = 2 } }),
+            });
+            Assert("J7 chapter_reorder 移动章节",
+                Text(kLines[0]).Contains("移到"), Cut(Text(kLines[0]), 50));
+            Assert("J8 chapter_delete 删除并重排",
+                Text(kLines[1]).Contains("已删除"), Cut(Text(kLines[1]), 50));
+            Assert("J9 删除后只剩一章",
+                NovelProject.Load(projPath).Chapters.Count == 1,
+                NovelProject.Load(projPath).Chapters.Count.ToString());
+
+            var snapEntries = new ProjectSnapshotManager(projPath).LoadIndex();
+            var lastId = snapEntries.Count == 0 ? "" : snapEntries[^1].Id;
+            var rLines = await CallAsync(new List<string>
+            {
+                Req(1, "tools/call", new { name = "project_open", arguments = new { path = projPath } }),
+                Req(2, "tools/call", new { name = "snapshot_restore", arguments = new { id = lastId } }),
+            });
+            Assert("J10 snapshot_restore 恢复成功",
+                Text(rLines[1]).Contains("已恢复"), Cut(Text(rLines[1]), 50));
+            Assert("J11 被删的章从快照里回来了",
+                NovelProject.Load(projPath).Chapters.Count == 2,
+                NovelProject.Load(projPath).Chapters.Count.ToString());
+        }
+
+        // ==================================================================
+        // K. 进度回报：客户端声明了 progressToken，长任务就必须沿途推通知
+        // ==================================================================
+        {
+            // 刻意用非法 task：它在"读配置 / 调模型"之前就返回，
+            // 既能验证通知确实发出，又不会真去调一次模型——自检不该花钱、也不该联网。
+            var raw = "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{"
+                    + "\"name\":\"ai_write\",\"arguments\":{\"task\":\"__不是任务__\"},"
+                    + "\"_meta\":{\"progressToken\":\"selftest-1\"}}}";
+
+            var kLines = await CallAsync(new List<string> { raw });
+            var progress = kLines.Where(d =>
+                d.RootElement.TryGetProperty("method", out var m) &&
+                m.GetString() == "notifications/progress").ToList();
+
+            Assert("K1 给了 progressToken 就沿途发进度通知",
+                progress.Count > 0, $"收到 {progress.Count} 条");
+            Assert("K2 进度通知回传原 token",
+                progress.Count > 0 &&
+                progress[0].RootElement.GetProperty("params")
+                           .GetProperty("progressToken").GetString() == "selftest-1",
+                progress.Count == 0
+                    ? "(没有通知)"
+                    : progress[0].RootElement.GetProperty("params")
+                                 .GetProperty("progressToken").ToString());
         }
         }
 

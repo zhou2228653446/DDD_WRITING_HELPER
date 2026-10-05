@@ -36,7 +36,7 @@
 
 ## 装完怎么确认通了
 
-1. 客户端重启后在 MCP/工具列表里应该看到 `tdxclaw-writing`，展开有 17 个工具
+1. 客户端重启后在 MCP/工具列表里应该看到 `tdxclaw-writing`，展开有 16 个工具
    （`project_list` / `project_open` / `project_create` / `chapters_list` / `chapter_read` /
    `chapter_search` / `chapter_write` / `chapter_create` / `settings_get` / `settings_set` /
    `settings_book_get` / `settings_book_set` / `characters_stats` / `project_export` /

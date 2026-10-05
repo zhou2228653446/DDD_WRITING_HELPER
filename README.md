@@ -60,6 +60,13 @@
 
 - **项目 / 章节树**：新建、重命名、删除、上移下移；单文件 `.tdxproj` 存整个项目
 - **正文编辑**：撤销 / 重做 / 剪切 / 复制 / 粘贴，实时字数统计
+- **全书查找替换**（Ctrl+F）：跨章搜索带上下文预览，双击跳到那一处并选中；支持单处替换与
+  全书替换。改人名、查伏笔埋在哪几章都靠它
+- **自动保存**：编辑中每 60 秒自动存盘，切到别的程序时立即存一次；写盘走「写临时文件 →
+  原子替换 → 留 `.bak`」，不会在写一半时留下损坏的项目文件。**落盘在后台线程**——
+  50 万字序列化一次要两三百毫秒，放在 UI 线程就是每 60 秒卡一下，而且往往正好卡在打字时
+- **写作统计**：状态栏常驻「今日 +N 字 · 连续 N 天」，点开看最近两周的量。统计按项目
+  单独记在 `<项目目录>/.stats/`
 - **设定窗口**：全文大纲、章节大纲、人物、背景、文风集中在独立窗口维护
 - **叙事视角**：一句话声明（如「第三人称限知·跟随主角」），非空即硬约束——AI 续写/润色只写该视角能感知的内容，防止「切头」进别人内心
 - **角色出场统计**：一键扫描全书，统计每个角色的出场章次、总次数与连续缺席（纯本地文本扫描，不花 token）
@@ -246,10 +253,52 @@ system 提示词按**会不会跨请求复用**分段发送：
 
 ### 外观与交互
 
-- **四套内置主题**：温润纸白 / 墨色玻璃 / 雾绿纸张 / 暖砂纸卷，支持热切换
-- **纸纹质感**：主题色与程序生成的颗粒合成进同一个画刷，面板 / 编辑区 / 菜单分层设强度
-- **背景图**、圆角、配色全部走 **Design Token**，改一处全局生效
+**配色与材质是两个独立维度，可任意组合**（8 套配色 × 6 种材质 = 48 种观感）。
+以前两者是绑死的——选「温润纸白」就只能配纸纹，想要毛玻璃得有人再抄一整套。
+
+**8 套配色**：温润纸白 / 墨色玻璃 / 雾绿纸张 / 暖砂纸卷 / 深海蓝 / 晨雾灰 / 赤陶 / 松墨
+
+**6 种材质**：
+
+| 材质 | 观感 |
+|---|---|
+| **纸纹** | 细颗粒纸面 + 极淡暖光。最像纸的一种，也是默认 |
+| **绒面** | 粗块纤维颗粒 + 几乎零反光。布面精装的手感 |
+| **毛玻璃** | 细磨砂 + 柔和漫射光 + 中等透光。底色偏冷，没有边缘亮线 |
+| **清玻璃** | 几乎无颗粒 + 强反光 + 高透光 + 边缘折射亮线 |
+| **液态玻璃** | 斜向流动高光带 + 强边缘光 + 高透光。光泽最强的一种 |
+| **纯色** | 完全无质感，没有颗粒也没有光。最省性能也最干净 |
+
+三个维度的跨度是**故意拉开的**——材质之间只差一点点的话，切换时会觉得"好像没换"，
+那等于白做了：颗粒 0 → 0.44、柔光 0 → 0.62、透光 0 → 0.45，外加"边缘光"这个强特征
+（玻璃边缘的折射亮线，磨砂面没有——它比柔光更抓眼）。
+
+浅色主题下白色柔光打在浅底上几乎看不见，所以玻璃类还会把底色**往冷灰拉一点**：
+真实玻璃确实偏冷，这样即使柔光看不出来，颜色本身也在说"这是玻璃"。
+
+对照图（调材质参数时直接看这两张）：`docs/preview/materials-warm.png` /
+`docs/preview/materials-dark.png`。
+
+还有**材质强度**滑块（0 = 关掉质感，1 = 默认观感，2 = 加倍）。
+
+- **质感是真的合成进画刷的**，不是叠半透明层：底色 + 颗粒 + 柔光 + 高光用 `DrawingGroup`
+  叠成一个 `DrawingBrush`，强度完全可控。靠 alpha 叠层"透出"底纹实测透出率不到 1%，
+  会被 8bit 色深直接量化掉（采样标准差精确为 0），等于没做
+- **纸纹/绒面走 256px 平铺**（颗粒清晰，大面积看不出重复）；**玻璃类走相对拉伸**——
+  大面积渐变一旦平铺就会变成重复的斜条纹。**任何规律性渐变都不能进平铺画布**，
+  只有随机噪声才能（这个坑踩过一次，满屏割裂色块）
+- **颗粒分三种形态**：细砂（纸纹）/ 2×2 纤维团（绒面，布的手感靠它）/ 微尘（玻璃类）。
+  颗粒 alpha 上限给到 0x40 以上——早先给 0x2E 时六种材质肉眼几乎分不出
+- 玻璃类材质的**边框会自动变淡**：实色边框会立刻把"玻璃"说破
+- **背景图 + 透光材质**是效果最好的组合：面板透出的就是真实画面
+- 章节树直接显示每章字数，随打字实时更新
+- 背景图、圆角、配色全部走 **Design Token**，改一处全局生效
 - 按钮、菜单、下拉、窗口采用统一的**动效**（只动透明度与变换，不触发布局重算）
+
+> 关于"真毛玻璃"：WPF 没有实时背景模糊，真亚克力要靠 DWM 的
+> `SetWindowCompositionAttribute`，代价是开启 `AllowsTransparency`——那会让整个窗口走
+> 分层渲染路径，长时间码字时性能损失肉眼可见。所以这里做的是视觉模拟：
+> 靠颗粒 + 大面积柔光 + 半透光还原观感，配背景图时最接近真玻璃。
 
 ---
 
@@ -448,25 +497,42 @@ Cursor / WorkBuddy / Cline 这类 AI 客户端就能直接打开你的 `.tdxproj
 配置文件，`command` 改成你本机 `dist\mcp\TdxClaw.Mcp.exe` 的路径（JSON 里反斜杠写两个）。
 `deploy.bat` 会把它和主程序一起发布出来。
 
-**16 个工具**，分五类：
+**28 个工具**，分六类：
 
 | 类别 | 工具 |
 |---|---|
-| 找项目 | `project_list`（扫目录找 .tdxproj）、`project_open`、`project_create`（新书自动带设定集 12 章骨架；同名文件拒绝覆盖） |
-| 读 | `chapters_list`、`chapter_read`、`chapter_search`（全文搜词，查伏笔/矛盾）、`settings_get`、`settings_book_get`（设定集 12 章）、`characters_stats`（谁多久没出场了） |
-| 写 | `chapter_write`（replace 覆盖 / append 追加）、`chapter_create`、`settings_set`、`settings_book_set` |
+| 找项目 · 看进度 | `project_list`（扫目录找 .tdxproj）、`project_open`、`project_create`（新书自动带设定集 12 章骨架；同名文件拒绝覆盖）、**`project_status`**（一次拿到进度画像 + 下一步建议） |
+| 读 | `chapters_list`、`chapter_read`、`chapter_search`（全文搜词，查伏笔/矛盾）、`settings_get`、`settings_book_get`（设定集 12 章）、`characters_stats`（谁多久没出场了）、`characters_list`、`memory_get`、`snapshot_list` |
+| 写正文 | `chapter_write`（replace 覆盖 / append 追加）、`chapter_create`、`chapter_rename`、`chapter_delete`、`chapter_reorder`、`chapter_summary_set`（写章节梗概） |
+| 写设定 | `settings_set`、`settings_book_set`、`character_upsert`（建/改人物卡）、`character_delete`、`memory_set`（沉淀作者偏好） |
 | 产出 | `project_export`（docx / pdf / txt，论文版式传 `paperMode`）、**`ai_write`** |
-| 诊断 | `ai_config_check`（服务商/模型/Key 状态 + 可选真连通探测；**绝不输出 Key 本身**） |
+| 诊断 · 回滚 | `ai_config_check`（服务商/模型/Key 状态 + 可选真连通探测；**绝不输出 Key 本身**）、`snapshot_restore` |
+
+设计取向是**让 agent 能独立完成整本书**：凡是界面里能做、MCP 里做不到的操作都补齐了——
+用户说一句「这两章合并」「刚才那次改坏了撤回」，agent 得真能做，而不是回一句"我做不了"。
 
 **资源（resources）**：打开项目后，章节、五项设定、设定集各章都以 `tdx://` 资源暴露
 （`tdx://chapter/3`、`tdx://settings/full_outline`、`tdx://settings-book/foreshadow`）。
 支持资源的客户端（Antigravity、Cline 等）可以在对话里直接 @ 引用整章，省掉先 list 再 read 一轮往返。
 
 **`ai_write` 是重点**：它调的不是"一个裸模型"，而是**本软件调好的那套 AI**——当前生效的
-提示词方案（小说/论文/公文）+ 五项贯穿设定 + 设定集 + 叙事视角硬约束，和你在界面里点
-「续写」完全同源。可选 `continue` / `polish` / `expand` / `review`（一致性审稿）/
-`setting_book` / `name` / `chat`。默认只返回文本；显式传 `writeBack=true` 才写回正文
-（续写/扩写默认追加、润色默认替换，可用 `writeMode` 指定，同样受防覆盖保护）。
+提示词方案（小说/论文/公文）+ 五项贯穿设定 + 设定集 + 叙事视角硬约束 + AI 写作记忆 +
+参考文献库 + 技能，和你在界面里点按钮完全同源。
+
+任务（`task`）分两组：
+
+| | 任务 | 说明 |
+|---|---|---|
+| **写正文** | `continue` 续写 / `polish` 润色 / `expand` 扩写 / `review` 一致性审稿 / `name` 起名 / `chat` 自由问答 | 针对某一章，需传 `number` |
+| **从零建书** | `outline` 全文大纲 / `chapter_outline` 章节大纲 / `character` 人物设定 / `background` 背景设定 / `write_style` 文风 / `setting_book` 补设定集 | 已有内容时自动改成"在原有基础上完善"而非重写 |
+
+`skill` 可指定手法（传 `none` 表示不用）。默认只返回文本；显式传 `writeBack=true` 才落盘——
+正文类写章节（续写/扩写默认追加、润色默认替换），设定类写对应设定字段，都可用
+`writeMode` 指定，同样受防覆盖保护。每次写入前自动存快照。
+
+**长任务会沿途推进度**：客户端在请求里带 `_meta.progressToken` 时，`ai_write` 会持续发
+`notifications/progress`（阶段性提示 + 已生成 token 数）——生成几千字要几十秒，
+全程黑屏和卡死没有区别。
 
 **两条安全设计**：
 
@@ -478,8 +544,9 @@ Cursor / WorkBuddy / Cline 这类 AI 客户端就能直接打开你的 `.tdxproj
 **排障**：客户端吞 stderr 看不到日志时，在配置里加
 `"env": { "TDX_MCP_LOG": "C:\\临时\\tdxclaw-mcp.log" }` 让服务器把日志落盘。
 
-开发时可用 `TdxClaw.Mcp.exe --selftest` 跑一遍协议自检（42 项断言，覆盖分帧、通知不回、
-错误码、落盘、冲突防护、资源读写、建项目、Key 不泄露）。
+开发时可用 `TdxClaw.Mcp.exe --selftest` 跑一遍协议自检（59 项断言，覆盖分帧、通知不回、
+错误码、落盘、冲突防护、写前快照、章节管理、快照回滚、人物卡、进度回报、资源读写、
+建项目、Key 不泄露）。
 
 ### 首次配置
 
@@ -506,7 +573,7 @@ Cursor / WorkBuddy / Cline 这类 AI 客户端就能直接打开你的 `.tdxproj
 | `settings.json` | 上次打开的项目等基础设置 |
 | `api_profiles.json` | 多套 API 配置。`Provider` 存服务商标识（如 `deepseek` / `anthropic`），旧配置里的显示名（`DeepSeek` / `Claude`）同样能识别。这个文件在设置页有「JSON 编辑」页，可以直接手改 |
 | `model_cache.json` | 「拉取列表」查到的真实模型清单，按「服务商@主机:端口」分组缓存。单独一个文件是为了不把几百个模型名塞进你要手改的 `api_profiles.json` |
-| `appearance.json` | 主题预设与背景图 |
+| `appearance.json` | 配色（`PresetName`）、材质（`MaterialName`）、材质强度、背景图 |
 | `system_prompts.json` | 你改过的提示词（**只存与内置不同的条目**，所以内置文本后续改进时会自动跟随） |
 | `polish_presets.json` | 润色风格预设 |
 | `skills.json` | 自定义技能（只存自定义；内置技能写死在代码里，随版本升级） |
@@ -518,6 +585,10 @@ Cursor / WorkBuddy / Cline 这类 AI 客户端就能直接打开你的 `.tdxproj
 | `.ai_memory/` | 写作经验（`memory.md`） |
 | `.snapshots/` | 历史版本与索引 |
 | `.chat/` | AI 对话记录（`ai_log.md`） |
+| `.stats/` | 写作统计（每日净增字数，供「今日字数 / 连续天数」用） |
+
+项目文件保存时会在同目录留一份 `<项目名>.tdxproj.bak`（上一版）。写盘走「写 `.tmp` → 原子
+替换」，所以正常退出不需要它；真遇到新版本有问题时，把 `.bak` 改回 `.tdxproj` 即可。
 
 项目文件本身是单个 `.tdxproj`（JSON）。上面这些目录以及项目文件都已在 `.gitignore` 里忽略，
 不会被误提交到版本库。
@@ -532,6 +603,8 @@ Cursor / WorkBuddy / Cline 这类 AI 客户端就能直接打开你的 `.tdxproj
 ├─ 编辑器.csproj
 ├─ App.xaml / App.xaml.cs       应用入口、全局资源合并
 ├─ MainWindow.xaml(.cs)         主窗口：菜单、章节树、编辑区、导出、AI 调度
+├─ FindReplaceWindow.xaml(.cs)  全书查找替换（Ctrl+F，跨章 + 跳转 + 快照保护）
+├─ WritingStatsWindow.xaml(.cs) 写作统计：今日字数 / 连续天数 / 最近两周
 ├─ AiPanelControl.xaml(.cs)     AI 面板（可停靠 / 可弹出）
 ├─ FloatingAiWindow.xaml(.cs)   浮动 AI 窗口
 ├─ SettingsWindow.xaml(.cs)     设定窗口：大纲 / 人物 / 背景 / 文风
@@ -554,13 +627,14 @@ Cursor / WorkBuddy / Cline 这类 AI 客户端就能直接打开你的 `.tdxproj
    ├─ TokenEstimator / ModelContextCatalog             上下文体积估算 + 模型窗口表
    ├─ CompactPolicy / MicroCompactor                   压缩阈值决策 + 本地省略旧回复
    ├─ ContextSummarizer / ChatContextCompactor         摘要生成 + 预算编排
-   ├─ ThemeTokens / AppearanceManager / Motion         主题与动效
+   ├─ ThemeTokens / AppearanceManager / Motion         配色 × 材质 → Design Token、动效
    ├─ WordExportService / PdfExportService / TxtExportService
    ├─ SettingsBookTemplates / SettingsBookExportService  设定集：模板成书 + 三格式导出
    ├─ BibtexParser                                      BibTeX 解析（花括号嵌套容错）
    ├─ LiteratureSearchService                           在线文献检索（OpenAlex / Semantic Scholar，免 Key）
    ├─ NovelSkills                                       技能包：内置/自定义/导入导出/任务命中
    ├─ AiMemoryManager / ChatSessionStore / ChatLogger / ProjectSnapshotManager
+   ├─ WritingStatsService                             每日字数与连续天数（按项目统计）
    └─ ApiProfileManager
 ```
 
@@ -572,7 +646,7 @@ MCP 服务器是独立工程，**不重写任何业务逻辑**，全部 ProjectR
 ├─ McpServer.cs     JSON-RPC 2.0 + stdio 主循环 + 16 个工具的 schema
 ├─ NovelTools.cs    读写 / 检索 / 导出 + Session（含写前冲突检测）
 ├─ AiTools.cs       ai_write：复用 AiPrompts 与两个 Service，与界面同源
-└─ SelfTest.cs      内置自检（24 项断言）
+└─ SelfTest.cs      内置自检（59 项断言）
 ```
 
 ---
@@ -583,9 +657,23 @@ MCP 服务器是独立工程，**不重写任何业务逻辑**，全部 ProjectR
 纯事件处理省掉了绑定层与状态同步的心智负担，逻辑集中在 `MainWindow.xaml.cs`。
 代价是主窗口代码较长 —— 这是有意识的取舍，不是欠债。
 
-**主题为什么走 Design Token。** 颜色全部收敛到 `Themes/Tokens.xaml`，运行时把当前预设
-写到应用级资源字典的**顶层**，因此一处生效、全局包含浮动窗口一起变。所有颜色引用使用
-`DynamicResource`（而非 `StaticResource`）以保证热切换。同时必须覆盖 HandyControl 的皮肤键，
+**外观为什么拆成配色 + 材质。** 原来 `ThemePreset` 把颜色和质感绑在一起，改一个颜色
+要同时改材质参数，想让某套配色配毛玻璃就得复制一整套预设。现在 `ColorScheme` 只描述颜色、
+`Material` 只描述质感（颗粒 / 柔光 / 透光 / 高光），两者自由组合 —— 8 × 6 = 48 种观感，
+新增一套配色只是加一条数据。
+
+**质感为什么合成进画刷而不是叠半透明层。** 靠多层 alpha 叠加来"透出"底纹，实测透出率被
+压到 1% 以下，会被 8bit 色深直接量化掉（采样标准差精确为 0），等于没做。正确做法是用
+`DrawingGroup` 把底色、颗粒、柔光、高光叠成一个 `DrawingBrush` —— 强度完全可控，
+各区域质地也一致。
+
+**平铺 vs 拉伸。** 纸纹/绒面用 256px 平铺（颗粒清晰，大面积看不出重复）；玻璃类用
+`RelativeToBoundingBox` 相对拉伸，因为大面积渐变一旦平铺就会变成重复的斜条纹。
+代价是颗粒会被一起拉大，所以玻璃类材质的颗粒都很弱——本来也不靠它。
+
+**颜色全部收敛到 Design Token。** 运行时把当前配色+材质写到应用级资源字典的**顶层**，
+因此一处生效、全局包含浮动窗口一起变。所有颜色引用使用 `DynamicResource`
+（而非 `StaticResource`）以保证热切换。同时必须覆盖 HandyControl 的皮肤键，
 否则夜间模式会出现「面板变深、内容区惨白」的割裂。
 
 **提示词的键与方案解耦。** 代码只认槽位键（如 `Task.Continue`），具体文本由「当前方案 + 覆写」
@@ -610,6 +698,7 @@ MCP 服务器是独立工程，**不重写任何业务逻辑**，全部 ProjectR
 
 **质感不是叠透明度。** 面板 alpha 只透出很少的底纹，再乘纸纹自身的 alpha，有效值会被 8 位色深
 量化掉（实测标准差精确为 0，等于没做）。正确做法是把主题纯色与程序生成的颗粒**合成进同一个画刷**。
+材质系统只是把这个思路推广到六种质感上，并额外支持半透光与高光层。
 
 ---
 

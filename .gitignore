@@ -378,12 +378,16 @@ pdf_pages/
 # 根目录示例项目文件
 /*.tdxproj
 
+# 项目文件的写盘备份（Save 时自动留的上一版，用户数据）
+*.tdxproj.bak
+
 # AI 记忆文件（用户数据）
 .ai_memory/
 
 # 项目快照（用户数据）
 .snapshots/
 .chat/
+.stats/
 
 # WorkBuddy 本地工作数据（记忆、验证产物，不上传）
 .workbuddy/

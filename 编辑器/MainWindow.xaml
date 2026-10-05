@@ -7,6 +7,8 @@
         xmlns:hc="https://handyorg.github.io/handycontrol"
         mc:Ignorable="d"
         Title="AI写作助手" Height="800" Width="1200" MinWidth="880" MinHeight="560"
+        UseLayoutRounding="True"
+        Padding="0" BorderThickness="0"
         Background="{DynamicResource Brush.Surface}"
         FontFamily="{StaticResource Font.Ui}"
         TextElement.Foreground="{DynamicResource Brush.Text}">
@@ -88,6 +90,8 @@
                 <MenuItem Header="剪切(_T)" Command="ApplicationCommands.Cut"/>
                 <MenuItem Header="复制(_C)" Command="ApplicationCommands.Copy"/>
                 <MenuItem Header="粘贴(_P)" Command="ApplicationCommands.Paste"/>
+                <Separator/>
+                <MenuItem Header="查找替换(_F)" InputGestureText="Ctrl+F" Click="FindReplace_Click"/>
             </MenuItem>
             <MenuItem Header="AI助手(_A)" Foreground="{DynamicResource Brush.Text}" Padding="10,6">
                 <MenuItem Header="续写(_W)" Click="ContinueWriting_Click"/>
@@ -103,6 +107,7 @@
                 <Separator/>
                 <MenuItem Header="设定窗口(_W)..." Click="SettingsWindow_Click"/>
                 <MenuItem Header="设定集(_B)..." Click="SettingsBookWindow_Click"/>
+                <MenuItem Header="写作统计(_T)..." Click="WritingStats_Click"/>
                 <MenuItem Header="参考文献库(_L)..." Click="LiteratureWindow_Click"/>
                 <MenuItem Header="外观设置(_S)..." Click="AppearanceSettings_Click"/>
                 <MenuItem Header="路径设置(_P)..." Click="PathSettings_Click"/>
@@ -138,6 +143,12 @@
                             ToolTip="新建章节" Click="NewChapter_Click"/>
                     <Button Style="{StaticResource Btn.Icon}" Content="&#xE74D;"
                             ToolTip="删除选中章节" Click="DeleteChapter_Click"/>
+
+                    <Border Width="1" Height="18" Margin="8,0" Background="{DynamicResource Brush.Border}"/>
+
+                    <Button Style="{StaticResource Btn.Icon}" Content="&#xE721;"
+                            ToolTip="查找替换（Ctrl+F）：全书找词、统一改人名，双击结果跳到那一处"
+                            Click="FindReplace_Click"/>
 
                     <Border Width="1" Height="18" Margin="8,0" Background="{DynamicResource Brush.Border}"/>
 
@@ -247,8 +258,20 @@
                                                VerticalAlignment="Center"/>
                                 </HierarchicalDataTemplate>
                                 <DataTemplate DataType="{x:Type local:Chapter}">
-                                    <TextBlock Text="{Binding Title}" VerticalAlignment="Center"
-                                               TextTrimming="CharacterEllipsis"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{Binding Title}"
+                                                   VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding WordCount}"
+                                                   VerticalAlignment="Center" Margin="10,0,2,0"
+                                                   FontSize="{StaticResource FontSize.Caption}"
+                                                   Foreground="{DynamicResource Brush.TextMuted}"
+                                                   ToolTip="本章字数"/>
+                                    </Grid>
                                 </DataTemplate>
                             </TreeView.Resources>
                             <TreeView.ContextMenu>
@@ -338,6 +361,12 @@
                     <TextBlock x:Name="TokenUsageTextBlock" Text="" VerticalAlignment="Center"
                                FontSize="{StaticResource FontSize.Small}"
                                Foreground="{DynamicResource Brush.TextMuted}"/>
+                    <TextBlock Text="·" Margin="8,0" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Brush.TextMuted}"/>
+                    <TextBlock x:Name="StatsTextBlock" Text="" VerticalAlignment="Center" Cursor="Hand"
+                               FontSize="{StaticResource FontSize.Small}"
+                               MouseLeftButtonUp="StatsTextBlock_MouseLeftButtonUp"
+                               ToolTip="今日新增字数与连续写稿天数（按项目单独统计）· 点击查看最近两周"/>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">

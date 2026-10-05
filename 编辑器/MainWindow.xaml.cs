@@ -5,8 +5,11 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using System.IO;
 using System.Text.Json;
@@ -36,6 +39,47 @@ namespace 编辑器
 
         private AiMemoryManager? _memoryManager;
         private readonly DispatcherTimer _notificationTimer = new();
+
+        // ==================================================================
+        // 自动保存 / 写作统计 / 查找替换
+        // ==================================================================
+
+        /// <summary>
+        /// 自动保存定时器。
+        ///
+        /// ★ 为什么必须有：保存原本只在"新建项目 / 增删改章节 / 手动点保存"这些离散动作
+        /// 上触发——也就是说**在编辑框里敲字是不保存的**。写三小时不点保存，一次崩溃
+        /// 全没了。而催着人记得按 Ctrl+S 是最烂的解法：人会忘。
+        /// </summary>
+        private readonly DispatcherTimer _autoSaveTimer = new();
+
+        /// <summary>距上次保存之后，正文又有过改动。</summary>
+        private bool _isDirty;
+
+        /// <summary>正在跟踪改动的章节（订阅了它的 PropertyChanged）。</summary>
+        private Chapter? _trackedChapter;
+
+        private WritingStatsService? _writingStats;
+        private FindReplaceWindow? _findReplaceWindow;
+
+        /// <summary>写盘串行化：后台自动保存与手动保存不能同时写同一个文件。</summary>
+        private readonly object _saveLock = new();
+
+        /// <summary>后台自动保存是否正在跑。跑着就不再触发第二次。</summary>
+        private bool _autoSaveRunning;
+
+        /// <summary>
+        /// 字数刷新的防抖定时器。
+        /// 正文绑定是 UpdateSourceTrigger=PropertyChanged——每敲一个字都会触发一次
+        /// PropertyChanged。不防抖的话，每输入一个字都要重算全书字数、刷三个状态栏文本、
+        /// 再走一遍统计服务；写到几万字时这点开销会累积成可感的输入延迟。
+        /// 防抖成"停手 300ms 后刷一次"，既不迟钝也不拖慢输入。
+        /// </summary>
+        private readonly DispatcherTimer _wordCountTimer = new();
+        private static readonly TimeSpan WordCountDebounce = TimeSpan.FromMilliseconds(300);
+
+        /// <summary>自动保存间隔。太短写盘频繁，太长失去意义——长篇写作 1 分钟是合理折中。</summary>
+        private static readonly TimeSpan AutoSaveInterval = TimeSpan.FromSeconds(60);
         private CancellationTokenSource? _aiCts;
         private Action<int, int>? _tokenProgress;
 
@@ -125,6 +169,8 @@ namespace 编辑器
 
             RefreshProfileSwitcher();
             ApplyActiveProfile();
+
+            InitAutoSave();
 
             UpdateStatus("就绪");
         }
@@ -399,9 +445,134 @@ namespace 编辑器
         private void SaveProject()
         {
             SyncAiContextToProject();
-            _currentProject!.ModifiedDate = DateTime.Now;
-            var json = JsonSerializer.Serialize(_currentProject, _jsonOptions);
-            File.WriteAllText(_currentProject.FilePath, json);
+            // 走 NovelProject.Save()：它内部更新 ModifiedDate，并做「写 .tmp → 原子替换 →
+            // 留 .bak」——直接 WriteAllText 会在写盘途中留下一个半截文件的窗口，
+            // 而整本书就这一个文件。
+            // lock 是为了和后台自动保存互斥：两个线程同时写同一个文件，
+            // .tmp 会被互相覆盖，原子替换也就没了意义。
+            lock (_saveLock)
+            {
+                _currentProject!.Save();
+            }
+            _isDirty = false;
+            _writingStats?.Save();
+            UpdateWritingStats();
+        }
+
+        // ==================================================================
+        // 自动保存
+        // ==================================================================
+
+        private void InitAutoSave()
+        {
+            _autoSaveTimer.Interval = AutoSaveInterval;
+            _autoSaveTimer.Tick += AutoSaveTimer_Tick;
+            _autoSaveTimer.Start();
+
+            _wordCountTimer.Interval = WordCountDebounce;
+            _wordCountTimer.Tick += (_, _) =>
+            {
+                _wordCountTimer.Stop();
+                UpdateWordCount(GetSelectedChapter()?.Content);
+            };
+
+            // 切到别的应用时立刻存一次。定时保存管的是"写着写着崩了"，
+            // 失焦保存管的是"切出去干别的然后忘了这回事"。
+            Deactivated += (_, _) => TryAutoSave();
+        }
+
+        private void AutoSaveTimer_Tick(object? sender, EventArgs e) => TryAutoSave();
+
+        /// <summary>
+        /// 有改动才写盘。自动保存必须静默——每次弹通知等于逼人关掉它。
+        ///
+        /// ★ 落盘放在后台线程。整本书就一个文件，50 万字序列化一次要两三百毫秒，
+        /// 再加上写 .tmp 和复制 .bak——放在 UI 线程就是"每 60 秒卡一下"，
+        /// 而且往往正好卡在打字的时候。UI 线程只留 SyncAiContextToProject
+        /// （它要读 AI 面板里的控件，必须在主线程）。
+        ///
+        /// 后台序列化时用户可能正在敲字，严格说存在读到"半新半旧"的窗口。
+        /// 这里是有意接受的：string 引用赋值是原子的，读到的内容本身自洽；
+        /// 真出了异常（比如恰好在改 Chapters 列表）也只是这一次没存上，
+        /// 会标回脏、下个周期再存一次。比起每 60 秒冻结一次 UI，这个代价划算得多。
+        /// </summary>
+        private void TryAutoSave()
+        {
+            if (!_isDirty || _currentProject == null || _autoSaveRunning) return;
+
+            var project = _currentProject;
+            var stats = _writingStats;
+
+            _isDirty = false;          // 先清；保存期间继续输入会重新标脏，不会漏掉
+            _autoSaveRunning = true;
+
+            try { SyncAiContextToProject(); }
+            catch { /* 同步失败不该耽误存盘 */ }
+
+            Task.Run(() =>
+            {
+                try
+                {
+                    lock (_saveLock)
+                    {
+                        project.Save();
+                        stats?.Save();
+                    }
+                    RunOnUi(() => UpdateStatus($"已自动保存 · {DateTime.Now:HH:mm:ss}"));
+                }
+                catch (Exception ex)
+                {
+                    // 没存上就标回脏，下个周期再试。绝不弹窗打断写作。
+                    RunOnUi(() =>
+                    {
+                        _isDirty = true;
+                        UpdateStatus($"自动保存失败：{ex.Message}（稍后重试，也可手动保存）");
+                    });
+                }
+                finally
+                {
+                    RunOnUi(() => _autoSaveRunning = false);
+                }
+            });
+        }
+
+        /// <summary>回 UI 线程执行。窗口已关闭时 Dispatcher 会抛，静默吞掉即可。</summary>
+        private void RunOnUi(Action action)
+        {
+            try { Dispatcher.Invoke(action); }
+            catch { }
+        }
+
+        /// <summary>
+        /// 跟踪当前章节的改动，用来标记"有未保存内容"。
+        ///
+        /// 只跟踪当前编辑中的那一章就够了：正文只在编辑框里变，
+        /// 而其它改动路径（AI 写回、增删章节）本来就各自调了 SaveProject。
+        /// </summary>
+        private void TrackChapterChanges(Chapter? chapter)
+        {
+            if (ReferenceEquals(_trackedChapter, chapter)) return;
+
+            if (_trackedChapter != null)
+                _trackedChapter.PropertyChanged -= OnTrackedChapterChanged;
+
+            _trackedChapter = chapter;
+
+            if (chapter != null)
+                chapter.PropertyChanged += OnTrackedChapterChanged;
+        }
+
+        private void OnTrackedChapterChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName is nameof(Chapter.Content) or nameof(Chapter.Title))
+            {
+                _isDirty = true;
+
+                // 让字数真的跟着敲字走。原来只在切章 / AI 写回时才刷，
+                // 界面上标着"实时字数统计"，实际一动不动。
+                _wordCountTimer.Stop();
+                _wordCountTimer.Start();
+            }
         }
 
         private void NewChapter_Click(object sender, RoutedEventArgs e)
@@ -1428,6 +1599,8 @@ namespace 编辑器
 
             EditorTabControl.SelectedItem = existingTab;
             UpdateChapterInfo(chapter);
+            TrackChapterChanges(chapter);
+            _findReplaceWindow?.SetCurrentChapter(chapter);
         }
 
         private void EditorTabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1437,6 +1610,8 @@ namespace 编辑器
             {
                 UpdateChapterInfo(chapter);
                 UpdateWordCount(chapter.Content);
+                TrackChapterChanges(chapter);
+                _findReplaceWindow?.SetCurrentChapter(chapter);
             }
         }
 
@@ -1454,13 +1629,17 @@ namespace 编辑器
 
         private void ApplyAppearance(AppearanceConfig config)
         {
-            var preset = AppearanceManager.GetPreset(config.PresetName)
-                ?? AppearanceManager.BuiltInPresets[0];
+            var preset = AppearanceManager.GetColorScheme(config.PresetName)
+                         ?? AppearanceManager.ColorSchemes[0];
 
-            // 1) 统一注入设计 token —— 颜色全部写到全局资源字典顶层，
+            // 材质与配色分开选——同一个配色换毛玻璃/液态玻璃是另一种观感，
+            // 不必再复制一整套"毛玻璃版 xx"。
+            var material = AppearanceManager.ResolveMaterial(config.MaterialName);
+            var intensity = config.MaterialIntensity <= 0 ? 0 : config.MaterialIntensity;
+
+            // 1) 统一注入设计 token —— 颜色与质感全部写到全局资源字典顶层，
             //    XAML 侧一律用 DynamicResource 消费，一处生效全局（含浮动 AI 面板窗口）。
-            //    这同时修掉了旧实现的两个 bug：TextColor / SplitterBg 从未被应用。
-            ThemeTokens.Apply(preset);
+            ThemeTokens.Apply(preset, material, intensity);
 
             // 2) 背景图（可选）：图片铺满内容区，两侧面板改为半透明以透出图片
             var hasImage = !string.IsNullOrEmpty(config.BackgroundImagePath)
@@ -1476,8 +1655,12 @@ namespace 编辑器
                         Stretch = System.Windows.Media.Stretch.UniformToFill,
                         Opacity = 0.35
                     };
-                    ProjectPanelBorder.Background = preset.GetSemiTransparentPanelBg(0.88);
-                    AiPanelBorder.Background = preset.GetSemiTransparentPanelBg(0.88);
+                    // 透光材质（毛玻璃/清玻璃/液态玻璃）在背景图模式下要透得更多——
+                    // 透出来的就是真实画面，这才是"玻璃"该有的样子；
+                    // 纸纹/绒面则维持原来的 0.88，纸张本来就不透光。
+                    var alpha = Math.Clamp(0.88 - material.Translucency * intensity * 1.2, 0.55, 1.0);
+                    ProjectPanelBorder.Background = preset.GetSemiTransparentPanelBg(alpha);
+                    AiPanelBorder.Background = preset.GetSemiTransparentPanelBg(alpha);
                     return;
                 }
                 catch
@@ -1875,6 +2058,12 @@ namespace 编辑器
 
             _chatSession = new ChatSessionStore(_currentProject.FilePath);
 
+            // 写作统计按项目走（每本书各记各的码字节奏）
+            _writingStats = new WritingStatsService(_currentProject.FilePath);
+            _writingStats.Load();
+            _writingStats.RecordTotal(TotalWordCount());
+            UpdateWritingStats();
+
             // 压缩器挂在对话记忆上（阈值要按当前模型算，所以也依赖模型名）。
             // 它自己会在空项目/无服务时安全退化，不需要额外的判空。
             AttachCompactor();
@@ -1925,6 +2114,138 @@ namespace 编辑器
         {
             var wordCount = string.IsNullOrEmpty(content) ? 0 : content.Length;
             WordCountTextBlock.Text = $"字数: {wordCount}";
+
+            // 每敲一下都要让统计看到最新的全书总字数——今日增量是相对"当天起点"算的。
+            // RecordTotal 内部自己节流，不会每个字都写文件。
+            _writingStats?.RecordTotal(TotalWordCount());
+            UpdateWritingStats();
+        }
+
+        private int TotalWordCount() =>
+            _currentProject?.Chapters.Sum(c => c.WordCount) ?? 0;
+
+        /// <summary>把「今日写了多少 / 连续几天」刷到状态栏。</summary>
+        private void UpdateWritingStats()
+        {
+            if (_writingStats == null)
+            {
+                StatsTextBlock.Text = "";
+                return;
+            }
+
+            var today = _writingStats.TodayWords;
+            var streak = _writingStats.StreakDays;
+            StatsTextBlock.Text = today > 0
+                ? $"今日 +{today} 字 · 连续 {streak} 天"
+                : $"今日还没动笔 · 连续 {streak} 天";
+        }
+
+        // ==================================================================
+        // 查找替换
+        // ==================================================================
+
+        private void FindReplace_Click(object sender, RoutedEventArgs e) => ShowFindReplace();
+
+        private void WritingStats_Click(object sender, RoutedEventArgs e) => ShowWritingStats();
+
+        private void StatsTextBlock_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => ShowWritingStats();
+
+        private void ShowWritingStats()
+        {
+            if (_currentProject == null || _writingStats == null)
+            {
+                ShowNotification("请先打开或新建项目", isError: true);
+                return;
+            }
+
+            _writingStats.RecordTotal(TotalWordCount());
+            new WritingStatsWindow(_writingStats, TotalWordCount()) { Owner = this }.ShowDialog();
+        }
+
+        /// <summary>Ctrl+F 唤起查找替换。编辑框不处理这个组合键，事件会冒泡到窗口。</summary>
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            if (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control)
+            {
+                ShowFindReplace();
+                e.Handled = true;
+                return;
+            }
+            base.OnKeyDown(e);
+        }
+
+        private void ShowFindReplace()
+        {
+            if (_currentProject == null)
+            {
+                ShowNotification("请先打开或新建项目", isError: true);
+                return;
+            }
+
+            if (_findReplaceWindow != null)
+            {
+                _findReplaceWindow.Activate();
+                return;
+            }
+
+            var project = _currentProject;
+            var win = new FindReplaceWindow(project, GetSelectedChapter())
+            {
+                // 替换直接改 Chapter.Content，不走编辑框的撤销栈，Ctrl+Z 撤不回来，
+                // 所以交给版本历史兜底（窗口内部保证同一批替换只存一次）。
+                SnapshotRequested = desc => _snapshotManager?.SaveSnapshot(project, desc),
+
+                JumpRequested = JumpToHit,
+
+                ContentChanged = () =>
+                {
+                    _isDirty = true;
+                    UpdateWordCount(GetSelectedChapter()?.Content);
+                },
+            };
+
+            win.Closed += (_, _) => _findReplaceWindow = null;
+            _findReplaceWindow = win;
+            win.Show();
+        }
+
+        /// <summary>跳到某章的某一处：打开该章页签，聚焦正文框并选中命中内容。</summary>
+        private void JumpToHit(Chapter chapter, int index, int length)
+        {
+            OpenChapterTab(chapter);
+
+            // 页签内容由 DataTemplate 生成，切过去之后视觉树才建起来，
+            // 所以要推到 Loaded 之后再找编辑框，否则拿到的是空引用。
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                var box = FindContentTextBox(EditorTabControl);
+                if (box == null || index > box.Text.Length) return;
+
+                box.Focus();
+                box.Select(index, Math.Min(length, box.Text.Length - index));
+                box.ScrollToLine(box.Text.Substring(0, index).Split('\n').Length - 1);
+            }), System.Windows.Threading.DispatcherPriority.Loaded);
+        }
+
+        /// <summary>
+        /// 找编辑区里的正文输入框。模板里有两个 TextBox（标题、正文），
+        /// 正文那个开了 AcceptsReturn —— 以此区分，比按视觉树顺序取第二个稳。
+        /// </summary>
+        private static TextBox? FindContentTextBox(DependencyObject root)
+        {
+            var boxes = new List<TextBox>();
+            Collect(root, boxes);
+            return boxes.FirstOrDefault(b => b.AcceptsReturn);
+
+            static void Collect(DependencyObject node, List<TextBox> result)
+            {
+                for (int i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
+                {
+                    var child = VisualTreeHelper.GetChild(node, i);
+                    if (child is TextBox tb) result.Add(tb);
+                    Collect(child, result);
+                }
+            }
         }
 
         private string? ShowInputDialog(string title, string message, string defaultValue = "")

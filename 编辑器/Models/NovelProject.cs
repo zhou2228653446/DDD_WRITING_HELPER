@@ -52,7 +52,29 @@ namespace 编辑器
             ModifiedDate = DateTime.Now;
             var options = new JsonSerializerOptions { WriteIndented = true };
             string json = JsonSerializer.Serialize(this, options);
-            File.WriteAllText(FilePath, json);
+
+            // ★ 原子写 + 保留上一版。
+            // 整本书就这一个文件，直接 WriteAllText 会在「清空旧内容」和「写完新内容」
+            // 之间留下一个时间窗：此刻断电或强杀，落盘的就是一个半截的 JSON，整本报废。
+            // 先写 .tmp 再用 Move 原子替换，这个窗口就没了。
+            // 替换前把上一版另存为 .bak：万一新版本本身有问题（序列化异常、误覆盖），
+            // 还有一个可捞的上一版。几十万字也就几 MB，这个代价值得。
+            var tmp = FilePath + ".tmp";
+            File.WriteAllText(tmp, json);
+
+            try
+            {
+                if (File.Exists(FilePath))
+                    File.Copy(FilePath, FilePath + ".bak", true);
+                // 同卷内的 Move(overwrite) 是原子操作
+                File.Move(tmp, FilePath, true);
+            }
+            catch
+            {
+                // 替换失败时把 .tmp 留在原地——内容还在，别让异常把它带走
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+                throw;
+            }
         }
 
         public static NovelProject Load(string path)
@@ -119,7 +141,15 @@ namespace 编辑器
         public string Content
         {
             get => _content;
-            set { if (_content != value) { _content = value; Notify(); } }
+            set
+            {
+                if (_content == value) return;
+                _content = value;
+                Notify();
+                // WordCount 是计算属性，不通知的话界面上绑了字数的地方（章节树）
+                // 会一直停留在打开时的旧值。
+                Notify(nameof(WordCount));
+            }
         }
 
         public string Summary { get; set; } = "";

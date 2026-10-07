@@ -108,8 +108,9 @@ namespace 编辑器
                     var text = c.Content ?? "";
                     if (text.Length == 0) continue;
 
-                    int idx = 0, n = 0;
-                    while ((idx = text.IndexOf(find, idx, cmp)) >= 0)
+                    // 命中收集交给 TextSearch：这段逻辑有单元测试兜底
+                    int n = 0;
+                    foreach (var idx in Services.TextSearch.FindAll(text, find, cmp, MaxHits - hits.Count))
                     {
                         n++;
                         hits.Add(new Hit
@@ -117,9 +118,8 @@ namespace 编辑器
                             Chapter = c,
                             Index = idx,
                             Location = $"第{c.ChapterNumber}章「{c.Title}」 · 第 {n} 处",
-                            Snippet = MakeSnippet(text, idx, find.Length),
+                            Snippet = Services.TextSearch.Snippet(text, idx, find.Length),
                         });
-                        idx += find.Length;
                         if (hits.Count >= MaxHits) break;
                     }
                     if (hits.Count >= MaxHits) break;
@@ -137,35 +137,8 @@ namespace 编辑器
                       + " · 双击跳到那一处");
         }
 
-        /// <summary>命中处前后各取一段，命中词本身用【】括出来——长片段里一眼能看到匹配在哪。</summary>
-        private static string MakeSnippet(string text, int idx, int len)
-        {
-            const int pad = 45;
-            int from = Math.Max(0, idx - pad);
-            int to = Math.Min(text.Length, idx + len + pad);
-
-            var sb = new StringBuilder();
-            if (from > 0) sb.Append('…');
-            sb.Append(Flatten(text[from..idx]));
-            sb.Append('【').Append(Flatten(text.Substring(idx, len))).Append('】');
-            sb.Append(Flatten(text[(idx + len)..to]));
-            if (to < text.Length) sb.Append('…');
-            return sb.ToString();
-
-            static string Flatten(string s) => s.Replace("\r", " ").Replace("\n", " ");
-        }
-
-        private static int CountOf(string text, string find, StringComparison cmp)
-        {
-            if (find.Length == 0 || text.Length == 0) return 0;
-            int count = 0, idx = 0;
-            while ((idx = text.IndexOf(find, idx, cmp)) >= 0)
-            {
-                count++;
-                idx += find.Length;
-            }
-            return count;
-        }
+        private static int CountOf(string text, string find, StringComparison cmp) =>
+            Services.TextSearch.Count(text, find, cmp);
 
         // ==================================================================
         // 替换
@@ -183,8 +156,7 @@ namespace 编辑器
 
             var text = hit.Chapter.Content ?? "";
             // 正文可能已经被别处改过，索引会失效——失效就重查，别盲改
-            if (hit.Index + find.Length > text.Length ||
-                string.Compare(text, hit.Index, find, 0, find.Length, Comparison) != 0)
+            if (!Services.TextSearch.MatchesAt(text, hit.Index, find, Comparison))
             {
                 SetStatus("这一处已经不在原位了，已重新查找。");
                 Find();
@@ -192,7 +164,7 @@ namespace 编辑器
             }
 
             SnapshotOnce();
-            hit.Chapter.Content = text.Remove(hit.Index, find.Length).Insert(hit.Index, ReplaceBox.Text);
+            hit.Chapter.Content = Services.TextSearch.ReplaceAt(text, hit.Index, find.Length, ReplaceBox.Text);
             Touch();
             Find();
             SetStatus("已替换 1 处。");

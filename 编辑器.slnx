@@ -1,3 +1,5 @@
 <Solution>
+  <Project Path="编辑器.Mcp/编辑器.Mcp.csproj" />
+  <Project Path="编辑器.Tests/编辑器.Tests.csproj" />
   <Project Path="编辑器/编辑器.csproj" />
 </Solution>

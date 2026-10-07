@@ -709,11 +709,16 @@ internal static class NovelTools
     /// <summary>
     /// 章号重排成 1..n 连续。
     /// 章号是 chapter_read / chapter_write 唯一的定位依据，中间留空洞只会让 agent 找不到章。
+    ///
+    /// ⚠ 必须按 **List 里的顺序**编号，不能先按 ChapterNumber 排一遍：
+    /// 重排章节时 List 已经是新顺序、但章号还是旧值，按章号排序等于把顺序又还原回去，
+    /// 于是"移动到第 1 位"完全失效。这个 bug 是单元测试抓出来的——肉眼看这几行
+    /// 怎么看都觉得是对的。（删除场景两种写法结果相同，所以只在这里暴露。）
     /// </summary>
     private static void Renumber(NovelProject p)
     {
         int i = 1;
-        foreach (var c in p.Chapters.OrderBy(x => x.ChapterNumber))
+        foreach (var c in p.Chapters)
             c.ChapterNumber = i++;
     }
 

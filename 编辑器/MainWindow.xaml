@@ -107,6 +107,7 @@
                 <Separator/>
                 <MenuItem Header="设定窗口(_W)..." Click="SettingsWindow_Click"/>
                 <MenuItem Header="设定集(_B)..." Click="SettingsBookWindow_Click"/>
+                <MenuItem Header="大纲(_O)..." Click="OutlineWindow_Click"/>
                 <MenuItem Header="写作统计(_T)..." Click="WritingStats_Click"/>
                 <MenuItem Header="参考文献库(_L)..." Click="LiteratureWindow_Click"/>
                 <MenuItem Header="外观设置(_S)..." Click="AppearanceSettings_Click"/>

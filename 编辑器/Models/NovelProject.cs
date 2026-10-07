@@ -44,6 +44,44 @@ namespace 编辑器
         public string PaperAbstract { get; set; } = "";
         public string PaperKeywords { get; set; } = "";   // 分号或逗号分隔
 
+        /// <summary>
+        /// 把章号重排成 1..n 连续（按 Chapters 列表的当前顺序）。
+        ///
+        /// ⚠ 必须按**列表顺序**编号，不能先按 ChapterNumber 排序：
+        /// 调整章节顺序后列表已是新顺序、章号还是旧值，按章号排序等于把顺序还原回去，
+        /// 移动就完全失效了——这个 bug 单元测试抓出来过一次。
+        ///
+        /// 章号是唯一定位依据（chapter_read / chapter_write / 资源 URI），
+        /// 中间留空洞会让 agent 找不到章，所以增删移动之后一律要调一次。
+        /// </summary>
+        public void RenumberChapters()
+        {
+            int i = 1;
+            foreach (var c in Chapters)
+                c.ChapterNumber = i++;
+        }
+
+        /// <summary>
+        /// 把某章在列表里移动 <paramref name="delta"/> 位（负数上移、正数下移），
+        /// 然后重排章号。到头了就返回 false，不做任何改动。
+        ///
+        /// 收敛到这里是为了让大纲窗口和 MCP 共用同一套规则——"移动 + 重排"的组合
+        /// 最容易在章号上出错，两处各写一份迟早不一致。
+        /// </summary>
+        public bool MoveChapter(Chapter chapter, int delta)
+        {
+            var ordered = Chapters.OrderBy(c => c.ChapterNumber).ToList();
+            int index = ordered.IndexOf(chapter);
+            int target = index + delta;
+            if (index < 0 || target < 0 || target >= ordered.Count) return false;
+
+            ordered.RemoveAt(index);
+            ordered.Insert(target, chapter);
+            Chapters = ordered;
+            RenumberChapters();
+            return true;
+        }
+
         public void Save()
         {
             if (string.IsNullOrEmpty(FilePath))

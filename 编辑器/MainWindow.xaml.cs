@@ -98,6 +98,7 @@ namespace 编辑器
         private SettingsWindow? _settingsWindow;
         private SettingsBookWindow? _settingsBookWindow;
         private LiteratureWindow? _literatureWindow;
+        private OutlineWindow? _outlineWindow;
         private static readonly string _settingsFile = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TdxClaw", "settings.json");
 
@@ -2531,6 +2532,56 @@ namespace 编辑器
         }
 
         private void LiteratureWindow_Click(object sender, RoutedEventArgs e) => ShowLiteratureWindow();
+
+        // ==================================================================
+        // 大纲视图
+        // ==================================================================
+
+        private void OutlineWindow_Click(object sender, RoutedEventArgs e) => ShowOutlineWindow();
+
+        private void ShowOutlineWindow()
+        {
+            if (_currentProject == null)
+            {
+                MessageBox.Show("请先创建或打开项目", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (_outlineWindow != null)
+            {
+                if (_outlineWindow.WindowState == WindowState.Minimized)
+                    _outlineWindow.WindowState = WindowState.Normal;
+                _outlineWindow.Activate();
+                return;
+            }
+
+            var win = new OutlineWindow(_currentProject, OpenChapterFromOutline, OnOutlineStructureChanged)
+            {
+                Owner = this
+            };
+            win.Closed += (_, _) => _outlineWindow = null;
+            _outlineWindow = win;
+            win.Show();
+        }
+
+        /// <summary>大纲里双击卡片：打开这一章并把主窗口顶到前台。</summary>
+        private void OpenChapterFromOutline(Chapter chapter)
+        {
+            OpenChapterTab(chapter);
+            Activate();
+        }
+
+        /// <summary>
+        /// 大纲里改了结构（改名 / 增删 / 移动 / 写梗概）：刷新章节树并标记待保存。
+        /// 这里不写盘——交给自动保存，避免和后台保存抢同一个文件。
+        /// </summary>
+        private void OnOutlineStructureChanged()
+        {
+            // 卡片自己已经刷新过了，这里只管主窗口这一侧
+            _isDirty = true;
+            RefreshProjectView();
+            UpdateWordCount(GetSelectedChapter()?.Content);
+        }
 
         /// <summary>
         /// 当前生效方案是否「学术论文系」（内置论文，或基于论文的自定义方案）。

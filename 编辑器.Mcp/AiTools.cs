@@ -562,8 +562,7 @@ internal static class AiTools
         return ToolResult.Ok(sb.ToString());
     }
 
-    private static string ConfigDir() =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TdxClaw");
+    private static string ConfigDir() => NovelTools.ResolveConfigDirectory();
 
     private static ApiProfileManager LoadProfiles()
     {

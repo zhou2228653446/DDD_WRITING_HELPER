@@ -249,9 +249,9 @@ internal static class McpServer
         "1. 找书与打开：先用 project_list 查找 .tdxproj，调用 project_open(path) 打开，或用 project_create(name, directory/path, description, ...) 新建（支持直接传完整 .tdxproj 路径并顺带填初始设定）；打开后优先调 project_status 获取全书进度画像与下一步建议。\n" +
         "2. 读稿与检索：chapters_list 看目录，chapter_read 读单章，chapter_search 全书搜词查伏笔/矛盾，settings_get 读五项贯穿设定（含结构化人物卡汇总），settings_book_get 读 12 章设定集，characters_list / characters_stats 看人物卡与出场统计，memory_get 读 AI 写作记忆。\n" +
         "3. 写稿与管章：chapter_create(title, content, summary) 新建章，chapter_write(number, content, mode=replace/append) 写正文，chapter_rename 改标题，chapter_reorder 调序，chapter_delete 删章，chapter_summary_set(number, summary) 写章节梗概（每章写完建议顺手更新梗概，续写/审稿会自动注入全部前情梗概 + 紧邻上章末尾 800 字）。\n" +
-        "4. 改设定与记忆：settings_set 支持单项 (field, text) 或批量同时传多个字段 (full_outline / chapter_outline / characters / background / writing_style / narrative_viewpoint / description)；settings_book_set(key, content, mode) 改设定集；character_upsert(name, role, age, gender, occupation, appearance, personality, background, abilities, relationships, notes) 管理结构化人物卡；memory_set 沉淀作者长期偏好。\n" +
+        "4. 改设定与记忆：settings_set 支持单项 (field, text) 或批量同时传多个字段 (full_outline / chapter_outline / characters / background / writing_style / narrative_viewpoint / description)；settings_book_set(key, content, mode) 改设定集（12 章内置 key：world / power / geography / history / factions / customs / characters / relations / timeline / foreshadow / style / glossary）；character_upsert(name, role, age, gender, occupation, appearance, personality, background, abilities, relationships, notes) 管理结构化人物卡；memory_set 沉淀作者长期偏好。\n" +
         "5. 调用本软件 AI（ai_write）：自动注入五项设定 + 结构化人物卡 + 设定集 + 章节梗概链 + 上章末尾 + 记忆 + 文献库。task 支持 continue（续写，默认 maxTokens=16384）/ polish（润色）/ expand（扩写，默认 16384）/ review（一致性审稿）/ name（起名）/ chat（自由问答，默认 16384）/ outline / chapter_outline / character / background / write_style / setting_book。默认 writeBack=false 只返回文本；显式传 writeBack=true 才落盘。报失败时先调 ai_config_check 诊断。\n" +
-        "6. 安全与回滚：所有写操作均串行加锁、写前自动存快照（高频轻量设定/人物卡修改自动合并防刷屏）并检查文件冲突；改错可随时用 snapshot_list + snapshot_restore 回滚；完稿用 project_export 导出 docx / pdf / txt。\n" +
+        "6. 安全与回滚：所有写操作均串行加锁、写前自动存快照（高频轻量设定/人物卡修改自动合并防刷屏）并检查文件冲突；改错可随时用 snapshot_list + snapshot_restore 回滚；完稿用 project_export(format, output/path) 导出 docx / pdf / txt。\n" +
         "7. 资源（tdx://）：打开项目后可通过 list_resources / read_resource 直接读取 tdx://chapter/{number}、tdx://settings/{key}、tdx://settings-book/{key}。";
 
     // ==================================================================
@@ -263,12 +263,12 @@ internal static class McpServer
         new ToolDef
         {
             name = "project_list",
-            description = "查找 .tdxproj 项目文件。不给 directory 就扫描当前目录/文档/桌面。",
+            description = "查找 .tdxproj 项目文件。不给 directory 就自动扫描软件默认项目目录（Documents\\TdxClaw\\Projects 或自定义路径）、当前目录、文档与桌面。",
             inputSchema = new ToolSchema
             {
                 properties = new Dictionary<string, ToolProp>
                 {
-                    ["directory"] = new() { description = "要扫描的目录；留空则扫常见位置" },
+                    ["directory"] = new() { description = "要扫描的目录（也支持传 path）；留空则扫软件默认项目目录与常见位置" },
                 },
             },
         },
@@ -331,7 +331,7 @@ internal static class McpServer
             {
                 properties = new Dictionary<string, ToolProp>
                 {
-                    ["key"] = new() { description = "章的 SourceKey（如 characters / world / foreshadow），也可给标题片段" },
+                    ["key"] = new() { description = "章的 SourceKey（内置 12 章：world / power / geography / history / factions / customs / characters / relations / timeline / foreshadow / style / glossary），也可给标题片段" },
                 },
             },
         },
@@ -379,7 +379,7 @@ internal static class McpServer
                 properties = new Dictionary<string, ToolProp>
                 {
                     ["field"] = new() { description = "单项修改时的字段名：full_outline / chapter_outline / characters / background / writing_style / narrative_viewpoint / description" },
-                    ["text"] = new() { description = "单项修改时的新内容" },
+                    ["text"] = new() { description = "单项修改时的新内容（也兼容 content）" },
                     ["full_outline"] = new() { description = "全文大纲（批量模式直接传）" },
                     ["chapter_outline"] = new() { description = "章节大纲（批量模式直接传）" },
                     ["characters"] = new() { description = "人物设定自由文本（批量模式直接传）" },
@@ -398,8 +398,8 @@ internal static class McpServer
             {
                 properties = new Dictionary<string, ToolProp>
                 {
-                    ["key"] = new() { description = "章的 SourceKey 或标题片段" },
-                    ["content"] = new() { description = "新内容" },
+                    ["key"] = new() { description = "章的 SourceKey（world / power / geography / history / factions / customs / characters / relations / timeline / foreshadow / style / glossary）或标题片段" },
+                    ["content"] = new() { description = "新内容（也兼容 text）" },
                     ["mode"] = new() { description = "replace（默认）或 append" },
                 },
                 required = new List<string> { "key", "content" },
@@ -452,7 +452,7 @@ internal static class McpServer
             {
                 properties = new Dictionary<string, ToolProp>
                 {
-                    ["number"] = new() { type = "integer", description = "要移动的章号" },
+                    ["number"] = new() { type = "integer", description = "要移动的章号（也兼容 fromNumber）" },
                     ["toNumber"] = new() { type = "integer", description = "移到第几个位置（从 1 开始）" },
                 },
                 required = new List<string> { "number", "toNumber" },
@@ -555,7 +555,7 @@ internal static class McpServer
             {
                 properties = new Dictionary<string, ToolProp>
                 {
-                    ["text"] = new() { description = "要记下的内容" },
+                    ["text"] = new() { description = "要记下的内容（也兼容 content）" },
                     ["mode"] = new() { description = "replace（默认）或 append" },
                 },
                 required = new List<string> { "text" },
@@ -570,10 +570,10 @@ internal static class McpServer
                 properties = new Dictionary<string, ToolProp>
                 {
                     ["format"] = new() { description = "docx / pdf / txt，默认 docx" },
-                    ["output"] = new() { description = "输出文件完整路径" },
+                    ["output"] = new() { description = "输出文件完整路径（也兼容传 path）" },
+                    ["path"] = new() { description = "output 的别名，导出文件完整路径" },
                     ["paperMode"] = new() { type = "boolean", description = "是否按论文版式（首页连排摘要+数字编号章节+GB/T 7714 文献）" },
                 },
-                required = new List<string> { "output" },
             },
         },
         new ToolDef
@@ -627,14 +627,14 @@ internal static class McpServer
             name = "project_create",
             description =
                 "新建一个 .tdxproj 项目并立刻打开（自动补设定集 12 章骨架）。" +
-                "支持传 directory 或 path（可直接传完整 .tdxproj 文件路径），并可在建书时顺带写入初始贯穿设定。" +
+                "支持传 directory 或 path（可直接传完整 .tdxproj 文件路径），不传目录时默认放到软件项目目录（Documents\\TdxClaw\\Projects 或自定义路径），并可在建书时顺带写入初始贯穿设定。" +
                 "同名文件已存在时报错而不是覆盖——直接覆盖别人的稿子是灾难。",
             inputSchema = new ToolSchema
             {
                 properties = new Dictionary<string, ToolProp>
                 {
                     ["name"] = new() { description = "项目名（也是文件名；若 path 已含 .tdxproj 文件名可省略）" },
-                    ["directory"] = new() { description = "放到哪个目录；留空放「文档」" },
+                    ["directory"] = new() { description = "放到哪个目录；留空放软件默认项目目录（Documents\\TdxClaw\\Projects）" },
                     ["path"] = new() { description = "directory 的别名，支持传目录路径或完整 .tdxproj 文件路径" },
                     ["description"] = new() { description = "作品简介，可留空" },
                     ["full_outline"] = new() { description = "初始全文大纲，可留空" },

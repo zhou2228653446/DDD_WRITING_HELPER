@@ -194,6 +194,16 @@ internal static class NovelTools
         return def;
     }
 
+    internal static string StrAny(JsonElement a, string def, params string[] keys)
+    {
+        foreach (var k in keys)
+        {
+            var val = Str(a, k);
+            if (!string.IsNullOrEmpty(val)) return val;
+        }
+        return def;
+    }
+
     internal static int Int(JsonElement a, string key, int def)
     {
         if (a.ValueKind == JsonValueKind.Object && a.TryGetProperty(key, out var v))
@@ -210,6 +220,16 @@ internal static class NovelTools
                 if (m.Success && int.TryParse(m.Value, out var extracted))
                     return extracted;
             }
+        }
+        return def;
+    }
+
+    internal static int IntAny(JsonElement a, int def, params string[] keys)
+    {
+        foreach (var k in keys)
+        {
+            var val = Int(a, k, int.MinValue);
+            if (val != int.MinValue) return val;
         }
         return def;
     }
@@ -231,22 +251,77 @@ internal static class NovelTools
         return def;
     }
 
+    /// <summary>
+    /// 读取主程序保存的 paths.json，保证仅分发 exe 时 MCP 与主程序使用完全相同的项目目录和配置目录。
+    /// </summary>
+    internal static string ResolveProjectsDirectory()
+    {
+        try
+        {
+            var pathsFile = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TdxClaw", "paths.json");
+            if (File.Exists(pathsFile))
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(pathsFile));
+                if (doc.RootElement.TryGetProperty("ProjectsDirectory", out var p) &&
+                    p.ValueKind == JsonValueKind.String &&
+                    !string.IsNullOrWhiteSpace(p.GetString()))
+                {
+                    return p.GetString()!;
+                }
+            }
+        }
+        catch { }
+
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "TdxClaw", "Projects");
+    }
+
+    internal static string ResolveConfigDirectory()
+    {
+        try
+        {
+            var pathsFile = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TdxClaw", "paths.json");
+            if (File.Exists(pathsFile))
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(pathsFile));
+                if (doc.RootElement.TryGetProperty("ConfigDirectory", out var c) &&
+                    c.ValueKind == JsonValueKind.String &&
+                    !string.IsNullOrWhiteSpace(c.GetString()))
+                {
+                    return c.GetString()!;
+                }
+            }
+        }
+        catch { }
+
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TdxClaw");
+    }
+
+    private static readonly EnumerationOptions SafeRecurseOptions = new()
+    {
+        IgnoreInaccessible = true,
+        RecurseSubdirectories = true,
+        MaxRecursionDepth = 4,
+    };
+
     // ==================================================================
     // 读
     // ==================================================================
 
     public static ToolResult ListProjects(JsonElement args)
     {
-        var dir = Str(args, "directory");
+        var dir = StrAny(args, "", "directory", "path", "dir");
         if (string.IsNullOrWhiteSpace(dir))
         {
-            // 没给目录就扫几个常见位置：工作目录 + 仓库目录（由 exe 位置上推） + 我的文档 + 桌面
+            // 没给目录就扫几个常见位置：软件默认项目目录 + 工作目录 + 仓库目录（由 exe 位置上推） + 我的文档 + 桌面
             var repoRoot = "";
             try { repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..")); }
             catch { }
 
             var candidates = new[]
             {
+                ResolveProjectsDirectory(),
                 Directory.GetCurrentDirectory(),
                 repoRoot,
                 Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
@@ -258,7 +333,7 @@ internal static class NovelTools
                 if (string.IsNullOrEmpty(c) || !Directory.Exists(c)) continue;
                 try
                 {
-                    found.AddRange(Directory.GetFiles(c, "*.tdxproj", SearchOption.AllDirectories));
+                    found.AddRange(Directory.GetFiles(c, "*.tdxproj", SafeRecurseOptions));
                 }
                 catch { /* 权限不足的目录跳过 */ }
             }
@@ -267,7 +342,7 @@ internal static class NovelTools
 
             var sb = new System.Text.StringBuilder();
             sb.AppendLine("找到项目：");
-            foreach (var f in found.Distinct().Take(50))
+            foreach (var f in found.Distinct(StringComparer.OrdinalIgnoreCase).Take(50))
                 sb.AppendLine("  " + f);
             return ToolResult.Ok(sb.ToString());
         }
@@ -275,7 +350,7 @@ internal static class NovelTools
         if (!Directory.Exists(dir))
             return ToolResult.Fail($"目录不存在：{dir}");
 
-        var files = Directory.GetFiles(dir, "*.tdxproj", SearchOption.AllDirectories);
+        var files = Directory.GetFiles(dir, "*.tdxproj", SafeRecurseOptions);
         if (files.Length == 0)
             return ToolResult.Ok($"目录 {dir} 下没有 .tdxproj 项目文件。");
 
@@ -426,10 +501,7 @@ internal static class NovelTools
     /// </summary>
     public static ToolResult CreateProject(Session s, JsonElement args)
     {
-        var dir = Str(args, "directory").Trim();
-        if (string.IsNullOrWhiteSpace(dir))
-            dir = Str(args, "path").Trim();
-
+        var dir = StrAny(args, "", "directory", "path", "dir").Trim();
         var name = Str(args, "name").Trim();
 
         // 若 dir 或 name 传入了完整 .tdxproj 文件路径，自动拆分出父目录与书名
@@ -453,7 +525,10 @@ internal static class NovelTools
         }
 
         if (string.IsNullOrWhiteSpace(dir))
-            dir = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        {
+            dir = ResolveProjectsDirectory();
+            try { Directory.CreateDirectory(dir); } catch { }
+        }
         if (string.IsNullOrWhiteSpace(name))
             name = "新建小说";
 
@@ -528,7 +603,7 @@ internal static class NovelTools
         if (c == null)
             return ToolResult.Fail($"没有第 {n} 章。用 chapters_list 看现有章节号，或 chapter_create 新建。");
 
-        var content = Str(args, "content");
+        var content = StrAny(args, "", "content", "text");
         if (string.IsNullOrWhiteSpace(content))
             return ToolResult.Fail("content 不能为空。");
 
@@ -569,7 +644,7 @@ internal static class NovelTools
         if (string.IsNullOrWhiteSpace(title)) title = "新建章节";
 
         int next = p.Chapters.Count == 0 ? 1 : p.Chapters.Max(c => c.ChapterNumber) + 1;
-        var content = Str(args, "content");
+        var content = StrAny(args, "", "content", "text");
 
         s.Snapshot("MCP 新建章节前");   // 只在加进列表之前存一次，避免新建后重复存一份覆盖态快照
         p.Chapters.Add(new Chapter
@@ -611,7 +686,7 @@ internal static class NovelTools
                 return ToolResult.Fail(
                     $"未知字段「{field}」。可选：full_outline / chapter_outline / characters / " +
                     "background / writing_style / narrative_viewpoint / description");
-            updates.Add((field, Str(args, "text")));
+            updates.Add((field, StrAny(args, "", "text", "content", "value")));
         }
 
         // 支持批量一次性写入多项设定（例如同时传 full_outline、writing_style、narrative_viewpoint）
@@ -689,7 +764,7 @@ internal static class NovelTools
         if (ch == null)
             return ToolResult.Fail($"设定集里没有匹配「{key}」的章。不带参数调 settings_book_get 看清单。");
 
-        var content = Str(args, "content");
+        var content = StrAny(args, "", "content", "text", "value");
         var append = Str(args, "mode", "replace").Equals("append", StringComparison.OrdinalIgnoreCase);
         s.Snapshot($"MCP 改写设定集「{ch.Title}」前", lightweight: true);   // 赋值之前存
         ch.Content = append && !string.IsNullOrWhiteSpace(ch.Content)
@@ -707,9 +782,9 @@ internal static class NovelTools
     public static ToolResult Export(NovelProject p, JsonElement args)
     {
         var format = Str(args, "format", "docx").Trim().ToLowerInvariant();
-        var output = Str(args, "output");
+        var output = StrAny(args, "", "output", "path", "filePath");
         if (string.IsNullOrWhiteSpace(output))
-            return ToolResult.Fail("output 不能为空（导出文件的完整路径）。");
+            return ToolResult.Fail("output（或 path）不能为空（导出文件的完整路径）。");
 
         var paper = Bool(args, "paperMode", false);
 
@@ -802,7 +877,7 @@ internal static class NovelTools
     {
         if (s.IsStale(out var stale)) return stale;
 
-        var from = Int(args, "number", -1);
+        var from = IntAny(args, -1, "number", "fromNumber");
         var to = Int(args, "toNumber", -1);
         if (from <= 0 || to <= 0)
             return ToolResult.Fail("number 和 toNumber 都要给（把第 number 章移到第 toNumber 个位置）。");
@@ -849,7 +924,7 @@ internal static class NovelTools
         var c = p.Chapters.FirstOrDefault(x => x.ChapterNumber == n);
         if (c == null) return ToolResult.Fail($"没有第 {n} 章。用 chapters_list 看现有章节号。");
 
-        var summary = Str(args, "summary").Trim();
+        var summary = StrAny(args, "", "summary", "content", "text").Trim();
         s.Snapshot($"MCP 改写第{n}章梗概前", lightweight: true);
         c.Summary = summary;
         s.Save();
@@ -1118,7 +1193,7 @@ internal static class NovelTools
 
     public static ToolResult SetMemory(Session s, NovelProject p, JsonElement args)
     {
-        var text = Str(args, "text");
+        var text = StrAny(args, "", "text", "content", "value");
         var append = Str(args, "mode", "replace").Equals("append", StringComparison.OrdinalIgnoreCase);
 
         try

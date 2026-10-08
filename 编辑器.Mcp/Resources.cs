@@ -22,6 +22,32 @@ internal static class Resources
 {
     public const string Scheme = "tdx";
 
+    /// <summary>资源 URI 模板：供客户端（如 Antigravity）在未打开项目时也能获知资源命名规范。</summary>
+    public static List<object> Templates() => new()
+    {
+        new Dictionary<string, object?>
+        {
+            ["uriTemplate"] = $"{Scheme}://chapter/{{number}}",
+            ["name"] = "章节正文",
+            ["description"] = "按章号读取指定章节的标题与完整正文（如 tdx://chapter/1）",
+            ["mimeType"] = "text/plain",
+        },
+        new Dictionary<string, object?>
+        {
+            ["uriTemplate"] = $"{Scheme}://settings/{{key}}",
+            ["name"] = "贯穿设定",
+            ["description"] = "读取五项贯穿设定或叙事视角（full_outline / chapter_outline / characters / background / style / viewpoint）",
+            ["mimeType"] = "text/plain",
+        },
+        new Dictionary<string, object?>
+        {
+            ["uriTemplate"] = $"{Scheme}://settings-book/{{key}}",
+            ["name"] = "设定集单章",
+            ["description"] = "按 SourceKey 读取设定集 12 章中的某一章（如 characters / world / foreshadow）",
+            ["mimeType"] = "text/plain",
+        },
+    };
+
     /// <summary>当前项目可列出的资源。没开项目就返回空列表（不是错误）。</summary>
     public static List<object> List(Session s)
     {

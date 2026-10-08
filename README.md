@@ -93,7 +93,7 @@
 - **断线自动重试 / 流空闲超时 / 停止时保住已生成内容 / 截断自动接着写 / 空响应拦截** ——
   一个都不少，详见「请求发出去之后」
 - **接入 prompt caching**：system 按稳定性分段并打缓存断点，长篇小说项目省下可观的输入 token 与首字延迟
-- 内置 **24 家主流服务商的接入参数**（国内 / 国际 / 聚合中转 / 本地部署），
+- 内置 **25 家主流服务商的接入参数**（国内 / 国际 / 聚合中转 / 本地部署），
   选一家就自动填好地址、协议、认证头 —— 见下一节
 - **模型名向服务商现拉**：「拉取列表」直接查询当前真实可用的模型并缓存，
   不依赖会过期的写死清单
@@ -315,11 +315,11 @@ system 提示词按**会不会跨请求复用**分段发送：
 
 ![AI 设置 · 表单编辑](docs/screenshots/api-settings.png)
 
-内置 24 家，按下拉分组排列：
+内置 25 家，按下拉分组排列：
 
 | 分组 | 服务商 |
 |---|---|
-| **国内主流** | DeepSeek、月之暗面 Kimi、智谱 GLM、阿里通义千问、火山方舟·豆包、腾讯混元、百度文心、MiniMax、阶跃星辰、零一万物 Yi、硅基流动、小米 Mimo |
+| **国内主流** | DeepSeek、月之暗面 Kimi、智谱 GLM、阿里通义千问、火山方舟·豆包、火山方舟（Agent Plan）、腾讯混元、百度文心、MiniMax、阶跃星辰、零一万物 Yi、硅基流动、小米 Mimo |
 | **国际主流** | OpenAI、Claude（Anthropic）、Google Gemini、xAI Grok、Mistral、Groq |
 | **聚合中转** | OpenRouter、自建中转（One API / New API 等） |
 | **本地部署** | Ollama、LM Studio、vLLM / 自建推理服务 |
@@ -648,10 +648,10 @@ MCP 服务器是独立工程，**不重写任何业务逻辑**，全部 ProjectR
 ```
 编辑器.Mcp/
 ├─ Program.cs       入口（--selftest 跑协议自检）
-├─ McpServer.cs     JSON-RPC 2.0 + stdio 主循环 + 16 个工具的 schema
+├─ McpServer.cs     JSON-RPC 2.0 + stdio 主循环 + 28 个工具的 schema
 ├─ NovelTools.cs    读写 / 检索 / 导出 + Session（含写前冲突检测）
 ├─ AiTools.cs       ai_write：复用 AiPrompts 与两个 Service，与界面同源
-└─ SelfTest.cs      内置自检（59 项断言）
+└─ SelfTest.cs      内置自检（61 项断言）
 ```
 
 ---

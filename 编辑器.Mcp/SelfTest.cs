@@ -17,6 +17,7 @@ internal static class SelfTest
 
     public static async Task<int> RunAsync()
     {
+        McpLiveBridge.Suppressed = true;
         var dir = Path.Combine(Path.GetTempPath(), "mcp_selftest_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var projPath = Path.Combine(dir, "测试项目.tdxproj");
@@ -85,6 +86,12 @@ internal static class SelfTest
                 init.GetProperty("result").TryGetProperty("protocolVersion", out var pv) && pv.GetString() == "2024-11-05", "");
             Assert("initialize 返回 serverInfo.name",
                 init.GetProperty("result").GetProperty("serverInfo").GetProperty("name").GetString() == "TdxClaw 写作助手", "");
+            Assert("initialize 返回 instructions（供 Antigravity 生成 instructions.md）",
+                init.GetProperty("result").TryGetProperty("instructions", out var inst) && (inst.GetString()?.Length ?? 0) > 50, "");
+
+            var rawToolsLine = lines[1].RootElement.GetRawText();
+            Assert("tools/list 不含非法的 \"required\":null（严格 JSON Schema 兼容）",
+                !rawToolsLine.Contains("\"required\":null"), "");
 
             var tools = lines[1].RootElement.GetProperty("result").GetProperty("tools").EnumerateArray()
                               .Select(t => t.GetProperty("name").GetString()!).ToList();
@@ -363,6 +370,44 @@ internal static class SelfTest
                     ? "(没有通知)"
                     : progress[0].RootElement.GetProperty("params")
                                  .GetProperty("progressToken").ToString());
+        }
+
+        // ==================================================================
+        // L. 实测改进回归：批量 settings_set / 人物卡字符串年龄与扩展字段 /
+        //    project_create 完整路径容错 / 人物卡与前情梗概+上章末尾注入
+        // ==================================================================
+        {
+            var fullPathBook = Path.Combine(dir, "路径直建之书.tdxproj");
+            var lLines = await CallAsync(new List<string>
+            {
+                Req(1, "tools/call", new { name = "project_create", arguments = new { path = fullPathBook, full_outline = "初始大纲A", narrative_viewpoint = "第一人称" } }),
+                Req(2, "tools/call", new { name = "settings_set", arguments = new { background = "雾港蒸汽朋克", writing_style = "冷峻克制" } }),
+                Req(3, "tools/call", new { name = "character_upsert", arguments = new { name = "沈砚", role = "主角", age = "27岁", abilities = "精密擒纵机构修复", relationships = "苏怀音的搭档", notes = "随身带黄铜目镜" } }),
+                Req(4, "tools/call", new { name = "chapter_create", arguments = new { title = "停摆", content = "第一章开头……中间过程……末尾悬念：钟声在第十二响戛然而止。", summary = "沈砚接下市政厅停摆大钟的委托。" } }),
+                Req(5, "tools/call", new { name = "chapter_create", arguments = new { title = "齿轮", content = "第二章起点。" } }),
+                Req(6, "tools/call", new { name = "settings_get", arguments = new { } }),
+            });
+
+            Assert("L1 project_create 支持直接传完整 .tdxproj 路径并顺带填初始设定",
+                File.Exists(fullPathBook) && Text(lLines[0]).Contains("路径直建之书"), Cut(Text(lLines[0]), 60));
+            Assert("L2 settings_set 支持批量写入多项设定",
+                Text(lLines[1]).Contains("批量更新 2 项设定"), Cut(Text(lLines[1]), 60));
+
+            var lp = NovelProject.Load(fullPathBook);
+            var shen = lp.Characters.FirstOrDefault(c => c.Name == "沈砚");
+            Assert("L3 character_upsert 容忍 \"27岁\" 字符串年龄并保存 abilities/relationships/notes",
+                shen != null && shen.Age == 27 && shen.Abilities.Contains("擒纵") && shen.Relationships.Contains("苏怀音") && shen.Notes.Contains("目镜"),
+                shen == null ? "(未找到人物卡)" : $"age={shen.Age}, abilities={shen.Abilities}");
+
+            var effectiveChar = lp.BuildEffectiveCharacterSettings();
+            Assert("L4 BuildEffectiveCharacterSettings 自动汇总结构化人物卡供 AI 续写使用",
+                effectiveChar.Contains("沈砚") && effectiveChar.Contains("27岁") && effectiveChar.Contains("精密擒纵机构修复"),
+                Cut(effectiveChar, 60));
+
+            var priorBrief = lp.BuildPriorChapterBrief(2, includePrevTail: true);
+            Assert("L5 BuildPriorChapterBrief 同时包含前章 Summary 与紧邻上章末尾原文",
+                priorBrief.Contains("沈砚接下市政厅停摆大钟的委托") && priorBrief.Contains("钟声在第十二响戛然而止"),
+                Cut(priorBrief, 80));
         }
         }
 

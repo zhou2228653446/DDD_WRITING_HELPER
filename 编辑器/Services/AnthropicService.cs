@@ -166,7 +166,8 @@ namespace 编辑器.Services
             // 思考块（extended thinking）：与正文分开累计，绝不写进正文。
             // 不解析它的话，开着 thinking 的模型会先静默几秒到几十秒，界面像卡死。
             if (delta.TryGetProperty("type", out var dt) && dt.ValueKind == JsonValueKind.String &&
-                string.Equals(dt.GetString(), "thinking", StringComparison.OrdinalIgnoreCase))
+                (string.Equals(dt.GetString(), "thinking", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(dt.GetString(), "thinking_delta", StringComparison.OrdinalIgnoreCase)))
             {
                 if (TryString(delta, "thinking", out var thinking))
                 {
@@ -179,6 +180,7 @@ namespace 编辑器.Services
             if (TryString(delta, "text", out var token))
             {
                 state.Text.Append(token);
+                options.OnStreamText?.Invoke(state.Text.ToString());
 
                 // 估算输出 token（中文约 1.5 字 / token），把进度推起来
                 int estimated = (int)(state.Text.Length / 1.5);

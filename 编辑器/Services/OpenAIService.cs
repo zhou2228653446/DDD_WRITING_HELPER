@@ -120,6 +120,7 @@ namespace 编辑器.Services
             if (TryString(delta, "content", out var token) && token.Length > 0)
             {
                 state.Text.Append(token);
+                options.OnStreamText?.Invoke(state.Text.ToString());
 
                 // 流里还没报用量时先用估算值把进度推起来（中文约 1.5 字 / token）
                 int estimated = (int)(state.Text.Length / 1.5);

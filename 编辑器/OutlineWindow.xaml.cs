@@ -56,8 +56,9 @@ namespace 编辑器
             public Brush StateBrush { get; init; } = Brushes.Transparent;
         }
 
-        private void Refresh()
+        public void Refresh()
         {
+            TitleText.Text = $"大纲 · {_project.ProjectName}";
             var ordered = _project.Chapters.OrderBy(c => c.ChapterNumber).ToList();
 
             var muted = BrushOf("Brush.TextMuted");

@@ -148,6 +148,11 @@ namespace 编辑器.Services
             "anthropic" => new[] { "Claude", "claude" },
             "openai" => new[] { "Open AI", "GPT" },
             "siliconflow" => new[] { "Silicon Flow", "硅基流动" },
+            "volces-plan" => new[]
+            {
+                "火山方舟 Agent Plan", "火山方舟·Agent Plan", "火山方舟（Coding Plan）",
+                "volces-agent-plan", "volces-coding", "ark-plan",
+            },
             _ => Array.Empty<string>(),
         };
 
@@ -166,36 +171,155 @@ namespace 编辑器.Services
 
         // ---------------------------------------------------------------
         // 协议与认证的解析
-        //   - 协议：已知服务商以预设声明为准；只有「自定义 / 未识别」才按地址形状猜
-        //     （/messages → Anthropic，/completions → OpenAI 兼容）。
+        //   - 协议：已知服务商以预设声明为准；火山方舟（Agent Plan / Coding Plan）官方同时提供
+        //     OpenAI（/api/plan/v3）与 Anthropic（/api/plan）双协议端点，按地址自动适配；
+        //     「自定义 / 未识别」按地址形状猜（/messages 或 /api/plan → Anthropic，其余 → OpenAI 兼容）。
         //   - 认证优先听用户在设置页显式选的（AuthOverride），否则用预设声明；
-        //     自定义服务商没有声明可依据，按协议推断（Anthropic 格式默认 x-api-key）。
+        //     自定义服务商没有声明可依据，按协议推断（火山方舟域名统一走 Bearer）。
         // ---------------------------------------------------------------
 
-        public static bool LooksAnthropic(string? url) =>
-            !string.IsNullOrWhiteSpace(url) &&
-            url.Contains("/messages", StringComparison.OrdinalIgnoreCase);
+        private static readonly string[] AnthropicBaseSuffixes =
+        {
+            "/api/plan/v1",
+            "/api/plan",
+            "/api/coding/v1",
+            "/api/coding",
+            "/anthropic/v1",
+            "/anthropic",
+        };
 
-        public static bool LooksOpenAi(string? url) =>
+        public static bool LooksAnthropic(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return false;
+            if (url.Contains("/messages", StringComparison.OrdinalIgnoreCase)) return true;
+
+            var path = StripQueryAndTrailingSlash(url);
+            foreach (var suffix in AnthropicBaseSuffixes)
+                if (path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return true;
+
+            return false;
+        }
+
+        public static bool LooksOpenAi(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return false;
+            if (url.Contains("/completions", StringComparison.OrdinalIgnoreCase)) return true;
+
+            var path = StripQueryAndTrailingSlash(url);
+            return path.EndsWith("/api/plan/v3", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith("/api/coding/v3", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith("/api/v3", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsVolcesPreset(string? id) =>
+            string.Equals(id, "volces", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(id, "volces-plan", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsVolcesUrl(string? url) =>
             !string.IsNullOrWhiteSpace(url) &&
-            url.Contains("/completions", StringComparison.OrdinalIgnoreCase);
+            url.Contains(".volces.com", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// 判定协议。
         ///
-        /// 规则：**选了已知服务商就听它的**，只有「自定义 / 未识别」才按地址形状猜。
-        /// 反过来（让地址盖过服务商）会制造一个更隐蔽的坑：用户选了 DeepSeek、
-        /// 顺手把地址换成某个 Anthropic 中转，协议被悄悄改掉，用户毫无察觉。
-        /// 宁可规则简单可预测，矛盾时用 <see cref="WireWarning"/> 显式提醒。
+        /// 规则：**选了已知服务商就听它的**（火山方舟双协议端点除外：用户在方舟预设下填
+        /// <c>/api/plan</c> 或 <c>/api/plan/v1/messages</c> 时自动切换为 Anthropic 协议）；
+        /// 「自定义 / 未识别」按地址形状猜。
         /// </summary>
         public static ApiWire ResolveWire(ApiConfig? config)
         {
             var preset = Find(config?.Provider);
-            if (preset != null && !preset.IsCustom) return preset.Wire;
+            if (preset != null && !preset.IsCustom)
+            {
+                if (IsVolcesPreset(preset.Id) && LooksAnthropic(config?.ApiUrl))
+                    return ApiWire.AnthropicMessages;
+                return preset.Wire;
+            }
 
             if (LooksAnthropic(config?.ApiUrl)) return ApiWire.AnthropicMessages;
             if (LooksOpenAi(config?.ApiUrl)) return ApiWire.OpenAiChat;
             return ApiWire.OpenAiChat;
+        }
+
+        /// <summary>
+        /// 把用户填在 <see cref="ApiConfig.ApiUrl"/> 里的地址规范化为可直接 POST 的完整对话端点。
+        ///
+        /// 为什么必须有这一步：火山方舟 Agent Plan / Coding Plan 等控制台「复制 Base URL」给的是
+        /// <c>https://ark.cn-beijing.volces.com/api/plan/v3</c> 或 <c>.../api/plan</c>（不带尾部路径）。
+        /// 直接往 Base URL 发 POST 会 401/404，这里按协议补齐为完整的 <c>/chat/completions</c> 或 <c>/v1/messages</c>。
+        /// </summary>
+        public static string ResolveEndpoint(ApiConfig? config) =>
+            NormalizeEndpoint(config?.ApiUrl, ResolveWire(config));
+
+        public static string NormalizeEndpoint(string? url, ApiWire wire)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return "";
+
+            var raw = url.Trim();
+            var query = "";
+            var q = raw.IndexOf('?');
+            if (q >= 0)
+            {
+                query = raw[q..];
+                raw = raw[..q];
+            }
+            raw = raw.TrimEnd('/');
+
+            if (raw.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase) ||
+                raw.EndsWith("/text/chatcompletion_v2", StringComparison.OrdinalIgnoreCase) ||
+                raw.EndsWith("/completions", StringComparison.OrdinalIgnoreCase) ||
+                raw.EndsWith("/messages", StringComparison.OrdinalIgnoreCase) ||
+                raw.EndsWith("/responses", StringComparison.OrdinalIgnoreCase))
+            {
+                return raw + query;
+            }
+
+            if (raw.EndsWith("/api/plan", StringComparison.OrdinalIgnoreCase) ||
+                raw.EndsWith("/api/coding", StringComparison.OrdinalIgnoreCase) ||
+                raw.EndsWith("/anthropic", StringComparison.OrdinalIgnoreCase))
+            {
+                return raw + "/v1/messages" + query;
+            }
+
+            if (raw.EndsWith("/api/plan/v1", StringComparison.OrdinalIgnoreCase) ||
+                raw.EndsWith("/api/coding/v1", StringComparison.OrdinalIgnoreCase) ||
+                raw.EndsWith("/anthropic/v1", StringComparison.OrdinalIgnoreCase))
+            {
+                return raw + "/messages" + query;
+            }
+
+            if (EndsWithVersionSegment(raw))
+            {
+                var tail = wire == ApiWire.AnthropicMessages ? "/messages" : "/chat/completions";
+                return raw + tail + query;
+            }
+
+            return url.Trim();
+        }
+
+        private static string StripQueryAndTrailingSlash(string url)
+        {
+            var raw = url.Trim();
+            var q = raw.IndexOf('?');
+            if (q >= 0) raw = raw[..q];
+            return raw.TrimEnd('/');
+        }
+
+        private static bool EndsWithVersionSegment(string rawUrlWithoutQuery)
+        {
+            var schemeEnd = rawUrlWithoutQuery.IndexOf("://", StringComparison.Ordinal);
+            var searchFrom = schemeEnd < 0 ? 0 : schemeEnd + 3;
+            var slash = rawUrlWithoutQuery.IndexOf('/', searchFrom);
+            if (slash < 0) return false;
+
+            var last = rawUrlWithoutQuery[(rawUrlWithoutQuery.LastIndexOf('/') + 1)..];
+            if (last.Length < 2 || (last[0] != 'v' && last[0] != 'V')) return false;
+
+            var i = 1;
+            while (i < last.Length && char.IsDigit(last[i])) i++;
+            if (i == 1) return false;
+            while (i < last.Length && char.IsLetter(last[i])) i++;
+            return i == last.Length;
         }
 
         /// <summary>
@@ -209,6 +333,21 @@ namespace 编辑器.Services
 
             var url = config?.ApiUrl;
             if (string.IsNullOrWhiteSpace(url)) return null;
+
+            if (string.Equals(preset.Id, "volces-plan", StringComparison.OrdinalIgnoreCase) &&
+                url.Contains("/api/v3", StringComparison.OrdinalIgnoreCase))
+            {
+                return "⚠ 当前地址是火山方舟普通按量端点（/api/v3），Agent Plan 专属 Key 需使用 /api/plan/v3/chat/completions（或 /api/plan/v1/messages）。";
+            }
+
+            if (string.Equals(preset.Id, "volces", StringComparison.OrdinalIgnoreCase) &&
+                (url.Contains("/api/plan", StringComparison.OrdinalIgnoreCase) ||
+                 url.Contains("/api/coding", StringComparison.OrdinalIgnoreCase)))
+            {
+                return "⚠ 当前地址是火山方舟 Agent/Coding Plan 端点，建议将服务商切换为「火山方舟（Agent Plan）」以匹配专属模型列表。";
+            }
+
+            if (IsVolcesPreset(preset.Id)) return null;
 
             if (preset.Wire == ApiWire.AnthropicMessages && LooksOpenAi(url))
                 return "⚠ 地址看起来是 OpenAI 兼容端点，与所选服务商不符。"
@@ -229,6 +368,10 @@ namespace 编辑器.Services
             // 自定义服务商没有可依据的声明，按协议推断
             var preset = Find(config?.Provider);
             if (preset != null && !preset.IsCustom) return preset.Auth;
+
+            // 火山方舟（含 /api/plan/v1/messages 与 /api/plan/v1/models）网关统一认 Authorization: Bearer，
+            // 若对 /api/plan/v1/models 只发 x-api-key 会被网关 401 拒绝。
+            if (IsVolcesUrl(config?.ApiUrl)) return ApiAuth.Bearer;
 
             return ResolveWire(config) == ApiWire.AnthropicMessages
                 ? ApiAuth.XApiKey
@@ -377,10 +520,40 @@ namespace 编辑器.Services
 
             Preset("volces", "火山方舟 · 豆包", GroupDomestic, Oa, Bearer,
                 "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-                "doubao-seed-1-6-250615",
-                new[] { "doubao-seed-1-6-250615", "doubao-1-5-pro-32k-250115" },
+                "doubao-seed-2.1-pro",
+                new[]
+                {
+                    "doubao-seed-2.1-pro",
+                    "doubao-seed-2.1-lite",
+                    "doubao-seed-1-6-250615",
+                    "doubao-1-5-pro-32k-250115",
+                },
                 "https://console.volcengine.com/ark",
-                "模型名可填模型 ID，也可填你在方舟创建的推理接入点 ID（ep- 开头）。"),
+                "按量计费端点（/api/v3），模型名可填模型 ID 或推理接入点 ID（ep- 开头）。若使用 Agent Plan 套餐，请改选「火山方舟（Agent Plan）」。"),
+
+            Preset("volces-plan", "火山方舟（Agent Plan）", GroupDomestic, Oa, Bearer,
+                "https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions",
+                "ark-code-latest",
+                new[]
+                {
+                    "ark-code-latest",
+                    "doubao-seed-2.1-pro",
+                    "doubao-seed-2.1-lite",
+                    "doubao-seed-evolving",
+                    "doubao-seed-2.0-mini",
+                    "deepseek-v4-pro",
+                    "deepseek-v4.1-flash",
+                    "deepseek-v4-flash",
+                    "glm-5.3",
+                    "glm-5.3-flash",
+                    "glm-latest",
+                    "kimi-k3",
+                    "kimi-k2.8-preview",
+                    "kimi-k2.7-code",
+                    "minimax-m3",
+                },
+                "https://console.volcengine.com/ark",
+                "需用 Agent Plan 专属 API Key（勿与方舟普通 Key 混用）。支持直接填 Base URL（…/api/plan/v3 或 Anthropic 协议 …/api/plan），也兼容 Coding Plan（…/api/coding/v3）。"),
 
             Preset("hunyuan", "腾讯混元", GroupDomestic, Oa, Bearer,
                 "https://api.hunyuan.cloud.tencent.com/v1/chat/completions",

@@ -133,9 +133,17 @@ internal static class AiTools
             Console.Error.WriteLine($"[mcp] 读取 AI 记忆失败（本次不带记忆）：{ex.Message}");
         }
 
+        var effectiveCharacters = p.BuildEffectiveCharacterSettings();
         var stable = AiPrompts.BuildContextBlock(
-            p.FullOutline, p.ChapterOutline, p.CharacterSettings,
+            p.FullOutline, p.ChapterOutline, effectiveCharacters,
             p.BackgroundSettings, p.WritingStyle, memory, p.NarrativeViewpoint);
+
+        // 设定集：已勾选导出的设定集章节（世界观、年表、专有名词、伏笔等）自动拼进稳定前缀，
+        // 避免 agent 写设定集后在常规续写/扩写时完全看不见。（审稿与设定集生成任务本身已单独处理，不重复拼）
+        var sbBlock = task is "review" or "setting_book" ? "" : p.BuildSettingsBookContextBlock();
+        if (!string.IsNullOrWhiteSpace(sbBlock))
+            stable = (stable.Length > 0 ? stable + "\n\n" : "") +
+                     AiPrompts.Section("设定集（已确认设定）", sbBlock).TrimEnd();
 
         // 参考文献库：界面在 BuildSystemPrompt 这个唯一收口点追加，论文方案下
         // AI 引用 [n] 只能出自库内、禁止编造。MCP 不追加的话，agent 让 AI 写的
@@ -165,21 +173,14 @@ internal static class AiTools
                 $"第{chapter.ChapterNumber}章「{chapter.Title}」\n{chapter.Content}"));
         }
 
-        // 续写要给前情，否则容易接不上；审稿要给前情链，否则看不见跨章矛盾。
+        // 续写与审稿：注入之前章节的梗概（Chapter.Summary 优先）+ 紧邻上一章末尾 800 字，
+        // 解决此前只截上章开头 800 字导致丢失上章结尾悬念、前情梗概字段形同虚设的问题。
         if (chapter != null && (task == "continue" || task == "review"))
         {
-            var take = task == "review" ? 3 : 1;
-            var prev = p.Chapters
-                .Where(c => c.ChapterNumber < chapter.ChapterNumber && !string.IsNullOrWhiteSpace(c.Content))
-                .OrderByDescending(c => c.ChapterNumber)
-                .Take(take).OrderBy(c => c.ChapterNumber).ToList();
-            if (prev.Count > 0)
+            var priorBrief = p.BuildPriorChapterBrief(chapter.ChapterNumber, includePrevTail: true);
+            if (!string.IsNullOrWhiteSpace(priorBrief))
             {
-                var brief = new StringBuilder();
-                foreach (var c in prev)
-                    brief.AppendLine($"第{c.ChapterNumber}章「{c.Title}」：" +
-                                     Session.Truncate(c.Content, 800));
-                user.AppendLine(AiPrompts.Section("前情梗概（供衔接与跨章比对）", brief.ToString()));
+                user.AppendLine(AiPrompts.Section("前情梗概与上章末尾（供衔接与跨章比对）", priorBrief));
             }
         }
 
@@ -210,20 +211,54 @@ internal static class AiTools
             user.AppendLine(instruction);
 
         // ---- 4. 调模型 ----
-        // 输出预算：续写/扩写给足，润色按原文字数动态算（与界面 BudgetForRewrite 同思路）
+        // 输出预算：续写/扩写/对话/设定集默认给足 16384（适配推理模型思维链 + 3000~5000 字长章直出），
+        // 润色/审稿按原文字数动态算（8192 ~ 16384），其余设定任务默认 8192。
         if (maxTokens <= 0)
         {
             maxTokens = task switch
             {
-                "continue" or "expand" => 4000,
-                "polish" or "review" => Math.Clamp((chapter?.WordCount ?? 1000) * 2, 1200, 8000),
-                _ => 2000,
+                "continue" or "expand" or "chat" or "setting_book" => 16384,
+                "polish" or "review" => Math.Clamp((chapter?.WordCount ?? 2000) * 3, 8192, 16384),
+                _ => 8192,
             };
         }
 
         IApiService service = IsAnthropic(config)
             ? new AnthropicService(config)
             : new OpenAIService(config);
+
+        var taskLabel = TaskDisplayLabel(task);
+        var defaultWriteMode = task == "polish" ? "replace" : "append";
+        var effectiveWriteMode = NovelTools.Str(args, "writeMode", defaultWriteMode).ToLowerInvariant();
+        int latestInTokens = 0;
+        int latestOutTokens = 0;
+        string latestStreamText = "";
+        long lastStreamPublishTick = 0;
+
+        void PublishStream(string statusMsg, bool force = false)
+        {
+            var now = Environment.TickCount64;
+            if (!force && now - lastStreamPublishTick < 180) return;
+            lastStreamPublishTick = now;
+
+            McpLiveBridge.Publish(new McpLiveEvent
+            {
+                EventType = "stream",
+                ToolName = "ai_write",
+                TaskName = task,
+                ProjectPath = s.Path,
+                ChapterNumber = number > 0 ? number : 0,
+                SettingField = SettingTargetFor(task),
+                WriteBack = writeBack,
+                WriteMode = effectiveWriteMode,
+                InputTokens = latestInTokens,
+                OutputTokens = latestOutTokens,
+                PreviewText = latestStreamText,
+                Summary = statusMsg,
+            });
+        }
+
+        PublishStream($"🤖 MCP AI 正在{taskLabel}{(number > 0 ? $"（第 {number} 章）" : "")}…", force: true);
 
         AiResult result;
         try
@@ -236,10 +271,25 @@ internal static class AiTools
                     MaxTokens = maxTokens,
                     Temperature = task == "review" ? 0.3 : 0.7,
                     Model = config.Model,
-                    // 阶段性提示（"连接不稳定，正在重试（1/4）"、"正在思考…"）直接推给客户端
-                    OnNotice = msg => Report(0, 100, msg),
+                    // 阶段性提示（"连接不稳定，正在重试（1/4）"、"正在思考…"）直接推给客户端与桌面界面
+                    OnNotice = msg =>
+                    {
+                        Report(0, 100, msg);
+                        PublishStream($"🤖 MCP AI {taskLabel}：{msg}");
+                    },
                     // 流式生成中：已产出的 token 数就是最自然的进度
-                    OnProgress = (inTok, outTok) => Report(outTok, maxTokens, $"已生成 {outTok} token"),
+                    OnProgress = (inTok, outTok) =>
+                    {
+                        latestInTokens = inTok;
+                        latestOutTokens = outTok;
+                        Report(outTok, maxTokens, $"已生成 {outTok} token");
+                        PublishStream($"🤖 MCP AI 正在{taskLabel}{(number > 0 ? $"第 {number} 章" : "")}（已生成 {outTok} token · {latestStreamText.Length} 字）");
+                    },
+                    OnStreamText = text =>
+                    {
+                        latestStreamText = text;
+                        PublishStream($"🤖 MCP AI 正在{taskLabel}{(number > 0 ? $"第 {number} 章" : "")}（已生成 {latestOutTokens} token · {text.Length} 字）");
+                    },
                 });
         }
         catch (Exception ex)
@@ -258,10 +308,12 @@ internal static class AiTools
                 "可在软件「AI 设置」里点测试连接确认（MCP 与界面共用同一份配置）。");
         }
 
-        // 头部把"这次到底带了什么"摊开给 agent：技能/记忆/文献有没有生效，一眼能看出来，
+        // 头部把"这次到底带了什么"摊开给 agent：技能/记忆/人物卡/设定集/文献有没有生效，一眼能看出来，
         // 不用猜——尤其是技能静默不生效这类问题，不显示就永远发现不了。
         var head = $"[task={task} · model={config.Model}" +
                    $" · 技能={(skill == null ? "无" : skill.Name)}" +
+                   $" · 人物卡={(p.Characters?.Count ?? 0)}张" +
+                   $" · 设定集={(string.IsNullOrWhiteSpace(sbBlock) ? "无" : "已注入")}" +
                    $" · 记忆={(string.IsNullOrWhiteSpace(memory) ? "无" : "有")}" +
                    $" · 文献库={(p.LiteratureLibrary?.Count > 0 ? p.LiteratureLibrary.Count + " 篇" : "无")}" +
                    $" · 输入 {result.InputTokens} / 输出 {result.OutputTokens} token" +
@@ -396,7 +448,7 @@ internal static class AiTools
     };
 
     /// <summary>生成任务 → 要写回的设定字段（与 settings_set 同一套名字，走同一条写入路径）。</summary>
-    private static string? SettingTargetFor(string task) => task switch
+    internal static string? SettingTargetFor(string task) => task switch
     {
         "outline" => "full_outline",
         "chapter_outline" => "chapter_outline",
@@ -404,6 +456,23 @@ internal static class AiTools
         "background" => "background",
         "write_style" => "writing_style",
         _ => null,
+    };
+
+    internal static string TaskDisplayLabel(string task) => task switch
+    {
+        "continue" => "续写",
+        "polish" => "润色",
+        "expand" => "扩写",
+        "review" => "审稿",
+        "setting_book" => "生成设定集",
+        "name" => "生成角色名",
+        "chat" => "写作问答",
+        "outline" => "生成全文大纲",
+        "chapter_outline" => "生成章节大纲",
+        "character" => "生成人物设定",
+        "background" => "生成背景设定",
+        "write_style" => "生成文风设定",
+        _ => task,
     };
 
     /// <summary>
@@ -464,7 +533,7 @@ internal static class AiTools
                 var r = await service.CompleteTextAsync(
                     "回复一个字：好",
                     "你是连通性测试。只回复一个字。",
-                    new CompletionOptions { MaxTokens = 16, Temperature = 0, Model = cfg.Model ?? "" });
+                    new CompletionOptions { MaxTokens = 256, Temperature = 0, Model = cfg.Model ?? "" });
 
                 if (r.IsUsable)
                 {
@@ -503,9 +572,6 @@ internal static class AiTools
         return mgr;
     }
 
-    private static bool IsAnthropic(ApiConfig c)
-    {
-        var s = (c.Provider ?? "") + " " + (c.ApiUrl ?? "");
-        return s.Contains("anthropic", StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool IsAnthropic(ApiConfig c) =>
+        ApiProviders.ResolveWire(c) == ApiWire.AnthropicMessages;
 }

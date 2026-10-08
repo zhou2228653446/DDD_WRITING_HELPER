@@ -36,11 +36,14 @@
 
 ## 装完怎么确认通了
 
-1. 客户端重启后在 MCP/工具列表里应该看到 `tdxclaw-writing`，展开有 16 个工具
-   （`project_list` / `project_open` / `project_create` / `chapters_list` / `chapter_read` /
-   `chapter_search` / `chapter_write` / `chapter_create` / `settings_get` / `settings_set` /
-   `settings_book_get` / `settings_book_set` / `characters_stats` / `project_export` /
-   `ai_write` / `ai_config_check`）。
+1. 客户端重启后在 MCP/工具列表里应该看到 `tdxclaw-writing`，展开有 28 个工具
+   （`project_list` / `project_open` / `project_create` / `project_status` /
+   `chapters_list` / `chapter_read` / `chapter_search` / `chapter_write` / `chapter_create` /
+   `chapter_rename` / `chapter_delete` / `chapter_reorder` / `chapter_summary_set` /
+   `settings_get` / `settings_set` / `settings_book_get` / `settings_book_set` /
+   `characters_list` / `character_upsert` / `character_delete` / `characters_stats` /
+   `memory_get` / `memory_set` / `snapshot_list` / `snapshot_restore` /
+   `project_export` / `ai_write` / `ai_config_check`）。
 2. 直接问它一句：**「帮我找找本机有哪些 .tdxproj 项目」** —— 它应当去调 `project_list`。
 3. 想写稿时说：**「打开 D:\xx\yy.tdxproj，给第 3 章续写 800 字，写完追加进去」**。
 

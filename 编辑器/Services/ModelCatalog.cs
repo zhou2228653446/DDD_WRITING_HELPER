@@ -71,6 +71,7 @@ namespace 编辑器.Services
             "embed", "rerank", "whisper", "tts", "speech", "transcribe",
             "dall-e", "dalle", "moderation", "stable-diffusion", "sdxl",
             "flux", "bge-", "gte-", "ocr", "audio", "realtime", "sora",
+            "seedream", "seedance",
         };
 
         /// <summary>把容器键都认一遍，不同服务商的壳不一样。</summary>
@@ -124,7 +125,15 @@ namespace 编辑器.Services
                 if (path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
                     return origin + path[..^suffix.Length] + "/models" + query;
 
-            // 用户填的是 base 地址（.../v1、.../v1beta）—— 补上 /models
+            // 用户填的是火山方舟 Anthropic 兼容 Base URL（.../api/plan 或 .../api/coding）—— 补上 /v1/models
+            if (path.EndsWith("/api/plan", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith("/api/coding", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith("/anthropic", StringComparison.OrdinalIgnoreCase))
+            {
+                return origin + path + "/v1/models" + query;
+            }
+
+            // 用户填的是 base 地址（.../v1、.../v1beta、.../api/plan/v3）—— 补上 /models
             if (IsVersionSegment(path))
                 return origin + path + "/models" + query;
 

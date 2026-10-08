@@ -172,6 +172,7 @@ namespace 编辑器
             ApplyActiveProfile();
 
             InitAutoSave();
+            InitMcpLiveSync();
 
             UpdateStatus("就绪");
         }
@@ -287,14 +288,7 @@ namespace 编辑器
             var dialog = new WelcomeDialog(this);
             if (dialog.ShowDialog() == true && dialog.SkipWelcome)
             {
-                try
-                {
-                    var dir = Path.GetDirectoryName(_settingsFile);
-                    if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-                    File.WriteAllText(_settingsFile,
-                        JsonSerializer.Serialize(new { SkipWelcome = true }, _jsonOptions));
-                }
-                catch { }
+                McpLiveBridge.SaveBoolSetting("SkipWelcome", true, CurrentSettingsFilePath);
             }
         }
 
@@ -567,7 +561,10 @@ namespace 编辑器
         {
             if (e.PropertyName is nameof(Chapter.Content) or nameof(Chapter.Title))
             {
-                _isDirty = true;
+                if (!_suppressDirtyTracking)
+                {
+                    _isDirty = true;
+                }
 
                 // 让字数真的跟着敲字走。原来只在切章 / AI 写回时才刷，
                 // 界面上标着"实时字数统计"，实际一动不动。
@@ -870,6 +867,8 @@ namespace 编辑器
             {
                 // 确认窗口打不开（极端情况）时放行关闭，不把用户锁在软件里
             }
+
+            try { _mcpServerCts?.Cancel(); } catch { }
         }
 
         // 菜单快捷入口（委托给 AiPanelControl 回调）
@@ -899,6 +898,12 @@ namespace 编辑器
             var requirement = _aiPanel.InputTextBox.Text.Trim();
 
             var userPrompt = AiPrompts.Section($"待续写的正文（第{chapter.ChapterNumber}章 {chapter.Title}）", chapter.Content);
+            if (_currentProject != null)
+            {
+                var prior = _currentProject.BuildPriorChapterBrief(chapter.ChapterNumber, includePrevTail: true);
+                if (!string.IsNullOrWhiteSpace(prior))
+                    userPrompt += "\n" + AiPrompts.Section("前情梗概与上章末尾（供衔接）", prior);
+            }
             if (!string.IsNullOrEmpty(requirement))
                 userPrompt += $"\n{requirement}";
 
@@ -906,7 +911,7 @@ namespace 编辑器
                 await apiService.CompleteTextAsync(userPrompt, systemPrompt,
                     new CompletionOptions
                     {
-                        MaxTokens = 2000,
+                        MaxTokens = 16384,
                         CancellationToken = _aiCts!.Token,
                         OnNotice = _aiNotice,
                         OnProgress = _tokenProgress
@@ -1086,7 +1091,7 @@ namespace 编辑器
                 var systemPrompt = AppendChatSummaryBlock(baseSystemPrompt);
 
                 return await apiService.CompleteTextAsync(userPrompt, systemPrompt,
-                    new CompletionOptions { CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress },
+                    new CompletionOptions { MaxTokens = 16384, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress },
                     history);
             });
             if (IsUsable(result))
@@ -1157,7 +1162,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 8192, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.FullOutline, result.Text);
@@ -1193,7 +1198,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 8192, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.CharacterSettings, result.Text);
@@ -1229,7 +1234,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.4, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 8192, Temperature = 0.4, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.BackgroundSettings, result.Text);
@@ -1269,7 +1274,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 2000, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 8192, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.ChapterOutline, result.Text);
@@ -1313,7 +1318,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 1500, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 8192, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.WritingStyle, result.Text);
@@ -1363,7 +1368,7 @@ namespace 编辑器
             var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(
                 userPrompt, systemPrompt, new CompletionOptions
                 {
-                    MaxTokens = 600,
+                    MaxTokens = 4096,
                     Temperature = 0.4,
                     CancellationToken = _aiCts!.Token,
                     OnNotice = _aiNotice,
@@ -1620,11 +1625,15 @@ namespace 编辑器
         private void AppearanceSettings_Click(object sender, RoutedEventArgs e)
         {
             var current = _appearanceManager.Load();
-            var dialog = new AppearanceSettingsWindow(this, _appearanceManager, current);
+            var dialog = new AppearanceSettingsWindow(this, _appearanceManager, current, ApplyAppearance);
             if (dialog.ShowDialog() == true)
             {
                 ApplyAppearance(dialog.Result);
                 _appearanceManager.Save(dialog.Result);
+            }
+            else
+            {
+                ApplyAppearance(current);
             }
         }
 
@@ -1776,6 +1785,7 @@ namespace 编辑器
 
             // 配置目录变了，提示词覆写也要从新目录重读
             InitPromptStore();
+            RefreshMcpLiveSyncSetting();
         }
 
         private void ShowApiSettings()
@@ -1785,6 +1795,7 @@ namespace 编辑器
             {
                 RefreshProfileSwitcher();
                 RefreshPresetIndicator();   // 提示词方案可能被切换/改名/删除了
+                RefreshMcpLiveSyncSetting();
             }
             RefreshSkills();    // 技能保存即落盘，关闭后重载（含用户可能只点了右上角 X）
         }
@@ -2385,8 +2396,9 @@ namespace 编辑器
             }
             if (!string.IsNullOrWhiteSpace(_currentProject.BackgroundSettings))
                 facts.AppendLine("### 背景设定").AppendLine(_currentProject.BackgroundSettings.Trim());
-            if (!string.IsNullOrWhiteSpace(_currentProject.CharacterSettings))
-                facts.AppendLine("### 人物设定").AppendLine(_currentProject.CharacterSettings.Trim());
+            var effectiveCharSettings = _currentProject.BuildEffectiveCharacterSettings();
+            if (!string.IsNullOrWhiteSpace(effectiveCharSettings))
+                facts.AppendLine("### 人物设定").AppendLine(effectiveCharSettings);
 
             var hasFacts = facts.Length > 0;
             var userPrompt = AiPrompts.Section("待审章节", $"第{chapter.ChapterNumber}章 {chapter.Title}\n{chapter.Content}");
@@ -2395,30 +2407,11 @@ namespace 编辑器
                 : AiPrompts.Section("设定集与项目设定（比对基准）",
                     "（作者还没有维护设定集。只做前后文与常识层面的检查，涉及设定一致性的结论一律标「存疑」。）"));
 
-            // 前情链：前面最近 3 章的梗概（每章取开头压缩），帮 AI 看见「隔两章的矛盾」。
-            // 每章截 800 字：够覆盖人名/事件/时间指涉，又不会把 user 消息撑爆。
-            const int RecallChapters = 3;
-            const int BriefCharsPerChapter = 800;
-            var previous = _currentProject.Chapters
-                .Where(c => c.ChapterNumber < chapter.ChapterNumber && !string.IsNullOrWhiteSpace(c.Content))
-                .OrderByDescending(c => c.ChapterNumber)
-                .Take(RecallChapters)
-                .OrderBy(c => c.ChapterNumber)
-                .ToList();
-            if (previous.Count > 0)
+            // 前情链：优先使用章节梗概 + 紧邻上章末尾，帮 AI 看见跨章矛盾与上下文承接。
+            var priorBrief = _currentProject.BuildPriorChapterBrief(chapter.ChapterNumber, includePrevTail: true);
+            if (!string.IsNullOrWhiteSpace(priorBrief))
             {
-                var briefs = new StringBuilder();
-                foreach (var p in previous)
-                {
-                    var brief = p.Content.Length > BriefCharsPerChapter
-                        ? p.Content[..BriefCharsPerChapter] + "…"
-                        : p.Content;
-                    briefs.AppendLine($"第{p.ChapterNumber}章 {p.Title}：");
-                    briefs.AppendLine(brief.Trim());
-                    briefs.AppendLine();
-                }
-                userPrompt += "\n" + AiPrompts.Section($"前情梗概（之前 {previous.Count} 章，供跨章比对）",
-                    briefs.ToString().TrimEnd());
+                userPrompt += "\n" + AiPrompts.Section("前情梗概与上章末尾（供跨章比对）", priorBrief);
             }
 
             UpdateStatus("正在审稿…");
@@ -2426,10 +2419,11 @@ namespace 编辑器
                 userPrompt,
                 BuildSystemPrompt(
                     ResolveTaskText(AiPrompts.Keys.Review, AiPrompts.Task.Review),
-                    ResolveContractText(AiPrompts.Keys.Review, AiPrompts.StructuredOutput)),
+                    ResolveContractText(AiPrompts.Keys.Review, AiPrompts.StructuredOutput),
+                    includeSettingsBook: false),
                 new CompletionOptions
                 {
-                    MaxTokens = 3000,
+                    MaxTokens = 16384,
                     Temperature = 0.3,          // 审稿要稳定，不给发挥空间
                     CancellationToken = _aiCts!.Token,
                     OnNotice = _aiNotice,
@@ -2624,10 +2618,11 @@ namespace 编辑器
                 userPrompt,
                 BuildSystemPrompt(
                     ResolveTaskText(AiPrompts.Keys.SettingBook, AiPrompts.Task.SettingBook),
-                    ResolveContractText(AiPrompts.Keys.SettingBook, AiPrompts.StructuredOutput)),
+                    ResolveContractText(AiPrompts.Keys.SettingBook, AiPrompts.StructuredOutput),
+                    includeSettingsBook: false),
                 new CompletionOptions
                 {
-                    MaxTokens = 3000,
+                    MaxTokens = 16384,
                     Temperature = 0.5,
                     CancellationToken = _aiCts!.Token,
                     OnNotice = _aiNotice,
@@ -2779,7 +2774,7 @@ namespace 编辑器
             return AiPrompts.BuildContextBlock(
                 _currentProject.FullOutline,
                 _currentProject.ChapterOutline,
-                _currentProject.CharacterSettings,
+                _currentProject.BuildEffectiveCharacterSettings(),
                 _currentProject.BackgroundSettings,
                 _currentProject.WritingStyle,
                 _memoryManager?.GetRawMemory(),
@@ -2802,14 +2797,21 @@ namespace 编辑器
         }
 
         /// <summary>
-        /// 组装完整的 system 提示词：身份 + 项目设定 + 参考章节 + 本次任务 + 输出契约。
+        /// 组装完整的 system 提示词：身份 + 项目设定 + 设定集 + 参考章节 + 本次任务 + 输出契约。
         ///
         /// 返回**分段**结果而不是拼好的字符串：设定段跨请求基本不变（可打缓存断点），
         /// 勾选章节段随时可能变（不能打）。分段的意义与代价见 <see cref="AiPrompts.BuildSections"/>。
         /// </summary>
-        private SystemPrompt BuildSystemPrompt(string task, string? outputContract = null)
+        private SystemPrompt BuildSystemPrompt(string task, string? outputContract = null, bool includeSettingsBook = true)
         {
             var stable = BuildProjectContext();
+
+            if (includeSettingsBook && _currentProject != null)
+            {
+                var sbBlock = _currentProject.BuildSettingsBookContextBlock();
+                if (!string.IsNullOrWhiteSpace(sbBlock))
+                    stable = (stable.Length > 0 ? stable + "\n\n" : "") + AiPrompts.Section("设定集（已确认设定）", sbBlock).TrimEnd();
+            }
 
             // 参考文献库非空时追加引用块：正文引 [n]、只能引列表内文献（防编造）。
             // 挂在这个单一收口点上，全部生成功能（含万能聊天）自动生效。
@@ -2837,7 +2839,7 @@ namespace 编辑器
                 UpdateStatus("正在更新 AI 记忆...");
                 var prompt = _memoryManager.BuildMemoryUpdatePrompt();
                 var aiResult = await _apiService.CompleteTextAsync(prompt, null,
-                    new CompletionOptions { MaxTokens = 1500 });
+                    new CompletionOptions { MaxTokens = 8192 });
                 if (!string.IsNullOrWhiteSpace(aiResult.Text) && !aiResult.Text.StartsWith("API调用失败") && !aiResult.Text.StartsWith("API错误"))
                 {
                     _memoryManager.SaveMemory(aiResult.Text);

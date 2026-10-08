@@ -12,16 +12,36 @@ namespace 编辑器
     public partial class AppearanceSettingsWindow : HandyControl.Controls.Window
     {
         private readonly AppearanceManager _manager;
+        private readonly AppearanceConfig _originalConfig;
+        private readonly Action<AppearanceConfig>? _onPreview;
+        private readonly bool _initializing;
+        private bool _suppressPreview;
+        private bool _confirmed;
+
         private ColorScheme? _selectedScheme;
         private Material? _selectedMaterial;
 
         public AppearanceConfig Result { get; private set; } = null!;
 
-        public AppearanceSettingsWindow(Window owner, AppearanceManager manager, AppearanceConfig current)
+        public AppearanceSettingsWindow(
+            Window owner,
+            AppearanceManager manager,
+            AppearanceConfig current,
+            Action<AppearanceConfig>? onPreview = null)
         {
+            _initializing = true;
             InitializeComponent();
             Owner = owner;
             _manager = manager;
+            _onPreview = onPreview;
+            _originalConfig = new AppearanceConfig
+            {
+                PresetName = current.PresetName,
+                MaterialName = current.MaterialName,
+                MaterialIntensity = current.MaterialIntensity,
+                BackgroundImagePath = current.BackgroundImagePath
+            };
+            Result = _originalConfig;
 
             // 配色列表
             PresetListBox.ItemsSource = AppearanceManager.ColorSchemes;
@@ -58,6 +78,8 @@ namespace 编辑器
                 RemoveBgBtn.IsEnabled = false;
                 BrowseBgBtn.IsEnabled = false;
             }
+
+            _initializing = false;
         }
 
         /// <summary>材质预览项：把材质 + 当前配色底色合成出一小块预览画刷。</summary>
@@ -67,6 +89,28 @@ namespace 编辑器
             public string DisplayName => Material.DisplayName;
             public string Description => Material.Description;
             public Brush Preview { get; init; } = Brushes.Transparent;
+        }
+
+        private AppearanceConfig BuildCurrentConfig()
+        {
+            var scheme = _selectedScheme ?? AppearanceManager.ColorSchemes[0];
+            var material = _selectedMaterial ?? AppearanceManager.BuiltInMaterials[0];
+
+            return new AppearanceConfig
+            {
+                PresetName = scheme.Name,
+                MaterialName = material.Name,
+                MaterialIntensity = Math.Round(IntensitySlider.Value, 2),
+                BackgroundImagePath = EnableBgCheckBox.IsChecked == true && !string.IsNullOrWhiteSpace(BgPathTextBox.Text)
+                    ? BgPathTextBox.Text
+                    : null
+            };
+        }
+
+        private void NotifyPreview()
+        {
+            if (_initializing || _suppressPreview) return;
+            _onPreview?.Invoke(BuildCurrentConfig());
         }
 
         private void RefreshMaterialItems()
@@ -88,22 +132,39 @@ namespace 编辑器
 
             // 换配色后材质预览要重新渲染（预览块是用配色底色画的）
             var keep = MaterialListBox.SelectedIndex;
-            RefreshMaterialItems();
-            if (keep >= 0 && keep < MaterialListBox.Items.Count)
-                MaterialListBox.SelectedIndex = keep;
+            _suppressPreview = true;
+            try
+            {
+                RefreshMaterialItems();
+                if (keep >= 0 && keep < MaterialListBox.Items.Count)
+                    MaterialListBox.SelectedIndex = keep;
+            }
+            finally
+            {
+                _suppressPreview = false;
+            }
+
+            NotifyPreview();
         }
 
         private void MaterialListBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
         {
             if (MaterialListBox.SelectedItem is MaterialOption opt)
+            {
                 _selectedMaterial = opt.Material;
+                NotifyPreview();
+            }
         }
 
         private void IntensitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-            => RefreshIntensityText();
+        {
+            RefreshIntensityText();
+            NotifyPreview();
+        }
 
         private void RefreshIntensityText()
         {
+            if (IntensityText == null) return;
             var v = IntensitySlider.Value;
             IntensityText.Text = v <= 0 ? "关" : v.ToString("0.0");
         }
@@ -111,12 +172,14 @@ namespace 编辑器
         private void EnableBg_Changed(object sender, RoutedEventArgs e)
         {
             var enabled = EnableBgCheckBox.IsChecked == true;
-            BrowseBgBtn.IsEnabled = enabled;
+            if (BrowseBgBtn != null)
+                BrowseBgBtn.IsEnabled = enabled;
             if (!enabled)
             {
-                BgPathTextBox.Text = "";
-                RemoveBgBtn.IsEnabled = false;
+                if (BgPathTextBox != null) BgPathTextBox.Text = "";
+                if (RemoveBgBtn != null) RemoveBgBtn.IsEnabled = false;
             }
+            NotifyPreview();
         }
 
         private void BrowseBg_Click(object sender, RoutedEventArgs e)
@@ -131,6 +194,7 @@ namespace 编辑器
             {
                 BgPathTextBox.Text = dialog.FileName;
                 RemoveBgBtn.IsEnabled = true;
+                NotifyPreview();
             }
         }
 
@@ -138,31 +202,33 @@ namespace 编辑器
         {
             BgPathTextBox.Text = "";
             RemoveBgBtn.IsEnabled = false;
+            NotifyPreview();
         }
 
         private void OkButton_Click(object sender, RoutedEventArgs e)
         {
-            var scheme = _selectedScheme ?? AppearanceManager.ColorSchemes[0];
-            var material = _selectedMaterial ?? AppearanceManager.BuiltInMaterials[0];
-
-            Result = new AppearanceConfig
-            {
-                PresetName = scheme.Name,
-                MaterialName = material.Name,
-                MaterialIntensity = Math.Round(IntensitySlider.Value, 2),
-                BackgroundImagePath = EnableBgCheckBox.IsChecked == true && !string.IsNullOrWhiteSpace(BgPathTextBox.Text)
-                    ? BgPathTextBox.Text
-                    : null
-            };
-
+            _confirmed = true;
+            Result = BuildCurrentConfig();
             DialogResult = true;
             Close();
         }
 
         private void CancelButton_Click(object sender, RoutedEventArgs e)
         {
+            _confirmed = false;
+            _onPreview?.Invoke(_originalConfig);
             DialogResult = false;
             Close();
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            // 无论是点击「取消」、按 Esc 还是点右上角 X 关闭，只要未点「确定」就还原修改前的外观
+            if (!_confirmed)
+            {
+                _onPreview?.Invoke(_originalConfig);
+            }
+            base.OnClosed(e);
         }
     }
 }

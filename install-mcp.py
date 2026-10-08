@@ -27,6 +27,12 @@ import sys
 import time
 from pathlib import Path
 
+# Windows PowerShell 默认控制台编码常为 GBK (cp936)，直接 print emoji（✅/❌/⏭）会抛 UnicodeEncodeError 中断循环
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).resolve().parent
 EXE = ROOT / "dist" / "mcp" / "TdxClaw.Mcp.exe"
 NAME = "tdxclaw-writing"

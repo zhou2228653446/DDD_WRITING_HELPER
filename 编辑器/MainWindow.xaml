@@ -104,6 +104,8 @@
             <MenuItem Header="视图(_V)" Foreground="{DynamicResource Brush.Text}" Padding="10,6">
                 <MenuItem x:Name="ProjectManagerMenuItem" Header="项目管理器(_P)" IsCheckable="True" IsChecked="True"/>
                 <MenuItem x:Name="AiPanelMenuItem" Header="AI助手面板(_A)" IsCheckable="True" IsChecked="True"/>
+                <MenuItem x:Name="McpLiveSyncMenuItem" Header="实时跟随 MCP 操作(_M)" IsCheckable="True" IsChecked="True"
+                          ToolTip="开启后，外部 AI（如 Antigravity / Claude）通过 MCP 操作项目时，界面将实时同步显示章节、设定与流式生成进度"/>
                 <Separator/>
                 <MenuItem Header="设定窗口(_W)..." Click="SettingsWindow_Click"/>
                 <MenuItem Header="设定集(_B)..." Click="SettingsBookWindow_Click"/>
@@ -346,6 +348,14 @@
                 BorderBrush="{DynamicResource Brush.Divider}" BorderThickness="0,1,0,0">
             <Grid>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
+                    <Border x:Name="McpLiveBadge" Background="{DynamicResource Brush.Accent}"
+                            CornerRadius="4" Padding="6,1" Margin="0,0,8,0"
+                            VerticalAlignment="Center" Visibility="Collapsed"
+                            ToolTip="外部 AI 正在通过 MCP 实时操作当前项目">
+                        <TextBlock x:Name="McpLiveBadgeText" Text="MCP 同步"
+                                   FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource Brush.TextOnAccent}"/>
+                    </Border>
                     <TextBlock x:Name="StatusTextBlock" Text="就绪" VerticalAlignment="Center"
                                FontSize="{StaticResource FontSize.Small}"
                                Foreground="{DynamicResource Brush.TextMuted}"/>

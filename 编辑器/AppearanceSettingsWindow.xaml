@@ -154,7 +154,7 @@
         <Border Grid.Row="3" Background="{DynamicResource Brush.SubtleBg}"
                 CornerRadius="{StaticResource Radius.Md}" Padding="10" Margin="0,0,0,12"
                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
-            <TextBlock Text="配色与材质是两个独立维度，可任意组合。背景图片仅作为窗口氛围装饰，不会影响编辑区可读性。"
+            <TextBlock Text="配色、材质与背景图改动均会实时生效预览；若点击「取消」或关闭窗口，所有修改将还原。"
                        TextWrapping="Wrap" FontSize="{StaticResource FontSize.Small}"/>
         </Border>
 

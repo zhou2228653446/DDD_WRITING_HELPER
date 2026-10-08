@@ -1,5 +1,7 @@
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using 编辑器.Services;
 
 namespace 编辑器.Mcp;
@@ -22,6 +24,10 @@ internal sealed class ToolSchema
 {
     public string type { get; set; } = "object";
     public Dictionary<string, ToolProp> properties { get; set; } = new();
+
+    // ⚠ 无必填参数时必须省略 required 字段，不能序列化成 "required": null，
+    // 否则严格遵循 JSON Schema 的客户端（如 Antigravity / Gemini）会报 Schema 校验错误。
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? required { get; set; } = null;
 }
 
@@ -39,6 +45,7 @@ internal static class McpServer
     {
         PropertyNamingPolicy = null,   // 字段名就是 JSON 名（上面刻意都用小写）
         WriteIndented = false,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
     /// <summary>
@@ -144,6 +151,7 @@ internal static class McpServer
     /// </summary>
     private static Action<object>? _notify;
     private static readonly object _writeLock = new();
+    private static readonly SemaphoreSlim _dispatchLock = new(1, 1);
 
     internal static void NotifyProgress(JsonElement? token, int progress, int total, string message)
     {
@@ -165,6 +173,19 @@ internal static class McpServer
 
     private static async Task<object> DispatchAsync(string method, JsonElement parameters, JsonElement id)
     {
+        await _dispatchLock.WaitAsync();
+        try
+        {
+            return await DispatchCoreAsync(method, parameters, id);
+        }
+        finally
+        {
+            _dispatchLock.Release();
+        }
+    }
+
+    private static async Task<object> DispatchCoreAsync(string method, JsonElement parameters, JsonElement id)
+    {
         switch (method)
         {
             case "initialize":
@@ -183,6 +204,9 @@ internal static class McpServer
                         ["name"] = "TdxClaw 写作助手",
                         ["version"] = "1.0.0",
                     },
+                    // ★ Antigravity 等支持懒加载的客户端会把 instructions 保存为 instructions.md 注入系统提示词，
+                    // 让 Agent 不用逐个翻 28 个工具的 JSON schema 就能掌握完整工作流。
+                    ["instructions"] = ServerInstructions,
                 });
 
             case "ping":
@@ -209,7 +233,7 @@ internal static class McpServer
             }
 
             case "resources/templates/list":
-                return RpcOk(id, new Dictionary<string, object?> { ["resourceTemplates"] = Array.Empty<object>() });
+                return RpcOk(id, new Dictionary<string, object?> { ["resourceTemplates"] = Resources.Templates() });
 
             case "prompts/list":
                 return RpcOk(id, new Dictionary<string, object?> { ["prompts"] = Array.Empty<object>() });
@@ -218,6 +242,17 @@ internal static class McpServer
                 return RpcError(id, -32601, $"不支持的方法：{method}");
         }
     }
+
+    private const string ServerInstructions =
+        "TdxClaw 写作助手 MCP 服务器：直接读写 .tdxproj 长篇写作项目（小说 / 学术论文 / 公文 / 通用写作），并与桌面端共享同一套 AI 提示词方案、设定集、结构化人物卡、记忆与文献库。\n\n" +
+        "推荐工作流：\n" +
+        "1. 找书与打开：先用 project_list 查找 .tdxproj，调用 project_open(path) 打开，或用 project_create(name, directory/path, description, ...) 新建（支持直接传完整 .tdxproj 路径并顺带填初始设定）；打开后优先调 project_status 获取全书进度画像与下一步建议。\n" +
+        "2. 读稿与检索：chapters_list 看目录，chapter_read 读单章，chapter_search 全书搜词查伏笔/矛盾，settings_get 读五项贯穿设定（含结构化人物卡汇总），settings_book_get 读 12 章设定集，characters_list / characters_stats 看人物卡与出场统计，memory_get 读 AI 写作记忆。\n" +
+        "3. 写稿与管章：chapter_create(title, content, summary) 新建章，chapter_write(number, content, mode=replace/append) 写正文，chapter_rename 改标题，chapter_reorder 调序，chapter_delete 删章，chapter_summary_set(number, summary) 写章节梗概（每章写完建议顺手更新梗概，续写/审稿会自动注入全部前情梗概 + 紧邻上章末尾 800 字）。\n" +
+        "4. 改设定与记忆：settings_set 支持单项 (field, text) 或批量同时传多个字段 (full_outline / chapter_outline / characters / background / writing_style / narrative_viewpoint / description)；settings_book_set(key, content, mode) 改设定集；character_upsert(name, role, age, gender, occupation, appearance, personality, background, abilities, relationships, notes) 管理结构化人物卡；memory_set 沉淀作者长期偏好。\n" +
+        "5. 调用本软件 AI（ai_write）：自动注入五项设定 + 结构化人物卡 + 设定集 + 章节梗概链 + 上章末尾 + 记忆 + 文献库。task 支持 continue（续写，默认 maxTokens=16384）/ polish（润色）/ expand（扩写，默认 16384）/ review（一致性审稿）/ name（起名）/ chat（自由问答，默认 16384）/ outline / chapter_outline / character / background / write_style / setting_book。默认 writeBack=false 只返回文本；显式传 writeBack=true 才落盘。报失败时先调 ai_config_check 诊断。\n" +
+        "6. 安全与回滚：所有写操作均串行加锁、写前自动存快照（高频轻量设定/人物卡修改自动合并防刷屏）并检查文件冲突；改错可随时用 snapshot_list + snapshot_restore 回滚；完稿用 project_export 导出 docx / pdf / txt。\n" +
+        "7. 资源（tdx://）：打开项目后可通过 list_resources / read_resource 直接读取 tdx://chapter/{number}、tdx://settings/{key}、tdx://settings-book/{key}。";
 
     // ==================================================================
     // 工具清单
@@ -286,7 +321,7 @@ internal static class McpServer
         new ToolDef
         {
             name = "settings_get",
-            description = "读五项贯穿设定（大纲/章节大纲/人物/背景/文风）+ 叙事视角 + 作品简介。",
+            description = "读五项贯穿设定（大纲/章节大纲/人物（含人物卡汇总）/背景/文风）+ 叙事视角 + 作品简介。",
         },
         new ToolDef
         {
@@ -330,6 +365,7 @@ internal static class McpServer
                 {
                     ["title"] = new() { description = "章节标题" },
                     ["content"] = new() { description = "初始正文，可留空" },
+                    ["summary"] = new() { description = "章节梗概，可留空" },
                 },
                 required = new List<string> { "title" },
             },
@@ -337,15 +373,21 @@ internal static class McpServer
         new ToolDef
         {
             name = "settings_set",
-            description = "改写贯穿设定某一项。",
+            description = "改写贯穿设定。既可传 field + text 改单项，也可直接传一个或多个字段名（full_outline / chapter_outline / characters / background / writing_style / narrative_viewpoint / description）一次性批量写入多项。",
             inputSchema = new ToolSchema
             {
                 properties = new Dictionary<string, ToolProp>
                 {
-                    ["field"] = new() { description = "full_outline / chapter_outline / characters / background / writing_style / narrative_viewpoint / description" },
-                    ["text"] = new() { description = "新内容" },
+                    ["field"] = new() { description = "单项修改时的字段名：full_outline / chapter_outline / characters / background / writing_style / narrative_viewpoint / description" },
+                    ["text"] = new() { description = "单项修改时的新内容" },
+                    ["full_outline"] = new() { description = "全文大纲（批量模式直接传）" },
+                    ["chapter_outline"] = new() { description = "章节大纲（批量模式直接传）" },
+                    ["characters"] = new() { description = "人物设定自由文本（批量模式直接传）" },
+                    ["background"] = new() { description = "背景设定（批量模式直接传）" },
+                    ["writing_style"] = new() { description = "文风设定（批量模式直接传）" },
+                    ["narrative_viewpoint"] = new() { description = "叙事视角硬约束（批量模式直接传）" },
+                    ["description"] = new() { description = "作品简介（批量模式直接传）" },
                 },
-                required = new List<string> { "field", "text" },
             },
         },
         new ToolDef
@@ -421,7 +463,7 @@ internal static class McpServer
             name = "chapter_summary_set",
             description =
                 "写/改某一章的梗概。★ 长篇务必每章写完顺手存一句：" +
-                "AI 生成时带的前情只取前几章正文，写到三四十章时全靠梗概链才知道前面发生了什么。",
+                "ai_write 续写/审稿时会自动注入前序章节梗概链 + 紧邻上章末尾 800 字，靠梗概链保持跨章连贯。",
             inputSchema = new ToolSchema
             {
                 properties = new Dictionary<string, ToolProp>
@@ -457,14 +499,14 @@ internal static class McpServer
         new ToolDef
         {
             name = "characters_list",
-            description = "列出结构化人物卡（带 id / 角色 / 年龄 / 性格摘要）。与 settings_get 里的「人物设定」自由文本是两回事。",
+            description = "列出结构化人物卡（带 id / 角色 / 年龄 / 性格 / 能力 / 关系 / 背景 / 备注）。人物卡会自动并入 AI 写作上下文。",
         },
         new ToolDef
         {
             name = "character_upsert",
             description =
                 "新建或更新一张人物卡。给 id 就是改；不给 id 按 name 匹配，都没有就新建。" +
-                "★ 只改本次传入的字段，没传的保持原样（不会清空）。",
+                "★ 只改本次传入的字段，没传的保持原样（不会清空）。人物卡会自动注入 ai_write 上下文。",
             inputSchema = new ToolSchema
             {
                 properties = new Dictionary<string, ToolProp>
@@ -472,12 +514,15 @@ internal static class McpServer
                     ["name"] = new() { description = "姓名（必填）" },
                     ["id"] = new() { description = "要修改的人物卡 id，前缀匹配即可；不给则按姓名匹配" },
                     ["role"] = new() { description = "主角 / 配角 / 反派 等" },
-                    ["age"] = new() { type = "integer", description = "年龄" },
+                    ["age"] = new() { type = "integer", description = "年龄（整数，如 27）" },
                     ["gender"] = new() { description = "性别" },
                     ["occupation"] = new() { description = "身份职业" },
                     ["appearance"] = new() { description = "外貌" },
                     ["personality"] = new() { description = "性格" },
                     ["background"] = new() { description = "背景经历" },
+                    ["abilities"] = new() { description = "能力 / 技能 / 专长" },
+                    ["relationships"] = new() { description = "人际关系" },
+                    ["notes"] = new() { description = "备注 / 口头禅 / 补充设定" },
                 },
                 required = new List<string> { "name" },
             },
@@ -536,7 +581,7 @@ internal static class McpServer
             name = "ai_write",
             description =
                 "调用本软件配好的 AI 写作（与界面里点按钮完全同源：当前提示词方案 + 五项贯穿设定 + " +
-                "设定集 + 叙事视角硬约束 + AI 写作记忆 + 参考文献库 + 技能）。" +
+                "结构化人物卡 + 设定集 + 章节梗概链与上章末尾 + 叙事视角硬约束 + AI 写作记忆 + 参考文献库 + 技能）。" +
                 "task 可选 continue（续写）/ polish（润色）/ expand（扩写）/ " +
                 "review（一致性审稿）/ name（起名）/ chat（自由问答）/ " +
                 "outline（全文大纲）/ chapter_outline（章节大纲）/ character（人物设定）/ " +
@@ -552,8 +597,8 @@ internal static class McpServer
                     ["task"] = new() { description = "continue / polish / expand / review / name / chat / outline / chapter_outline / character / background / write_style / setting_book" },
                     ["number"] = new() { type = "integer", description = "针对哪一章（续写/润色/审稿必填）" },
                     ["instruction"] = new() { description = "对本次生成的具体要求" },
-                    ["maxTokens"] = new() { type = "integer", description = "输出上限，0 表示按任务自动给" },
-                    ["writeBack"] = new() { type = "boolean", description = "true 时把结果写回该章正文（默认 false，只返回文本由你决定）" },
+                    ["maxTokens"] = new() { type = "integer", description = "输出上限，0 表示按任务自动给（续写/扩写/对话/设定集默认 16384，润色/审稿 8192~16384，设定生成默认 8192）" },
+                    ["writeBack"] = new() { type = "boolean", description = "true 时把结果写回该章正文或对应设定（默认 false，只返回文本由你决定）" },
                     ["writeMode"] = new() { description = "写回方式：append 追加 / replace 覆盖；默认续写·扩写为 append、润色为 replace" },
                     ["profile"] = new() { description = "用哪套 API 配置（如论文走 GPT、小说走 DeepSeek）；留空用当前启用的" },
                     ["skill"] = new() { description = "技能名或 id（如「黄金三章」）；留空用当前方案记住的那个，传 none 表示不用技能" },
@@ -582,16 +627,23 @@ internal static class McpServer
             name = "project_create",
             description =
                 "新建一个 .tdxproj 项目并立刻打开（自动补设定集 12 章骨架）。" +
+                "支持传 directory 或 path（可直接传完整 .tdxproj 文件路径），并可在建书时顺带写入初始贯穿设定。" +
                 "同名文件已存在时报错而不是覆盖——直接覆盖别人的稿子是灾难。",
             inputSchema = new ToolSchema
             {
                 properties = new Dictionary<string, ToolProp>
                 {
-                    ["name"] = new() { description = "项目名（也是文件名）" },
+                    ["name"] = new() { description = "项目名（也是文件名；若 path 已含 .tdxproj 文件名可省略）" },
                     ["directory"] = new() { description = "放到哪个目录；留空放「文档」" },
+                    ["path"] = new() { description = "directory 的别名，支持传目录路径或完整 .tdxproj 文件路径" },
                     ["description"] = new() { description = "作品简介，可留空" },
+                    ["full_outline"] = new() { description = "初始全文大纲，可留空" },
+                    ["chapter_outline"] = new() { description = "初始章节大纲，可留空" },
+                    ["characters"] = new() { description = "初始人物设定，可留空" },
+                    ["background"] = new() { description = "初始背景设定，可留空" },
+                    ["writing_style"] = new() { description = "初始文风设定，可留空" },
+                    ["narrative_viewpoint"] = new() { description = "初始叙事视角，可留空" },
                 },
-                required = new List<string> { "name" },
             },
         },
     };
@@ -617,6 +669,7 @@ internal static class McpServer
 
         try
         {
+            PublishToolStart(name, args);
             ToolResult r;
 
             // 不需要项目的工具（只调一次——Open 有副作用，重复调用会白白刷新文件指纹）
@@ -625,21 +678,25 @@ internal static class McpServer
                 case "project_list":
                 {
                     var r0 = NovelTools.ListProjects(args);
+                    PublishToolDone(name, args, r0, projectModified: false);
                     return ToolText(r0.Text, r0.IsError);
                 }
                 case "project_open":
                 {
                     var r0 = _session.Open(NovelTools.Str(args, "path"));
+                    PublishToolDone(name, args, r0, projectModified: !r0.IsError);
                     return ToolText(r0.Text, r0.IsError);
                 }
                 case "project_create":
                 {
                     var r0 = NovelTools.CreateProject(_session, args);
+                    PublishToolDone(name, args, r0, projectModified: !r0.IsError);
                     return ToolText(r0.Text, r0.IsError);
                 }
                 case "ai_config_check":
                 {
                     var r0 = await AiTools.ConfigCheckAsync(args);
+                    PublishToolDone(name, args, r0, projectModified: false);
                     return ToolText(r0.Text, r0.IsError);
                 }
             }
@@ -648,6 +705,7 @@ internal static class McpServer
             if (!_session.TryGet(out var p, out var err))
                 return ToolText(err.Text, true);
 
+            bool mutatesProject = false;
             switch (name)
             {
                 case "project_status": r = NovelTools.ProjectStatus(_session, p); break;
@@ -658,42 +716,175 @@ internal static class McpServer
                 case "settings_book_get": r = NovelTools.GetSettingsBook(p, args); break;
                 case "characters_stats": r = NovelTools.CharacterStats(p); break;
 
-                case "chapter_write": r = NovelTools.WriteChapter(_session, p, args); break;
-                case "chapter_create": r = NovelTools.CreateChapter(_session, p, args); break;
-                case "chapter_rename": r = NovelTools.RenameChapter(_session, p, args); break;
-                case "chapter_delete": r = NovelTools.DeleteChapter(_session, p, args); break;
-                case "chapter_reorder": r = NovelTools.ReorderChapter(_session, p, args); break;
-                case "chapter_summary_set": r = NovelTools.SetChapterSummary(_session, p, args); break;
+                case "chapter_write": r = NovelTools.WriteChapter(_session, p, args); mutatesProject = true; break;
+                case "chapter_create": r = NovelTools.CreateChapter(_session, p, args); mutatesProject = true; break;
+                case "chapter_rename": r = NovelTools.RenameChapter(_session, p, args); mutatesProject = true; break;
+                case "chapter_delete": r = NovelTools.DeleteChapter(_session, p, args); mutatesProject = true; break;
+                case "chapter_reorder": r = NovelTools.ReorderChapter(_session, p, args); mutatesProject = true; break;
+                case "chapter_summary_set": r = NovelTools.SetChapterSummary(_session, p, args); mutatesProject = true; break;
 
-                case "settings_set": r = NovelTools.SetSetting(_session, p, args); break;
-                case "settings_book_set": r = NovelTools.SetSettingsBook(_session, p, args); break;
+                case "settings_set": r = NovelTools.SetSetting(_session, p, args); mutatesProject = true; break;
+                case "settings_book_set": r = NovelTools.SetSettingsBook(_session, p, args); mutatesProject = true; break;
 
                 case "snapshot_list": r = NovelTools.ListSnapshots(_session); break;
-                case "snapshot_restore": r = NovelTools.RestoreSnapshot(_session, args); break;
+                case "snapshot_restore": r = NovelTools.RestoreSnapshot(_session, args); mutatesProject = true; break;
 
                 case "characters_list": r = NovelTools.ListCharacters(p); break;
-                case "character_upsert": r = NovelTools.UpsertCharacter(_session, p, args); break;
-                case "character_delete": r = NovelTools.DeleteCharacter(_session, p, args); break;
+                case "character_upsert": r = NovelTools.UpsertCharacter(_session, p, args); mutatesProject = true; break;
+                case "character_delete": r = NovelTools.DeleteCharacter(_session, p, args); mutatesProject = true; break;
 
                 case "memory_get": r = NovelTools.GetMemory(p); break;
-                case "memory_set": r = NovelTools.SetMemory(_session, p, args); break;
+                case "memory_set": r = NovelTools.SetMemory(_session, p, args); mutatesProject = true; break;
 
                 case "project_export": r = NovelTools.Export(p, args); break;
 
-                case "ai_write": r = await AiTools.WriteAsync(_session, p, args, progressToken); break;
+                case "ai_write":
+                    r = await AiTools.WriteAsync(_session, p, args, progressToken);
+                    mutatesProject = NovelTools.Bool(args, "writeBack", false);
+                    break;
 
                 default:
                     return ToolText($"未知工具「{name}」。用 tools/list 看有哪些工具。", true);
             }
 
+            PublishToolDone(name, args, r, projectModified: mutatesProject && !r.IsError);
             return ToolText(r.Text, r.IsError);
         }
         catch (Exception ex)
         {
             Log($"工具 {name} 抛异常：{ex}");
+            McpLiveBridge.Publish(new McpLiveEvent
+            {
+                EventType = "error",
+                ToolName = name,
+                ProjectPath = _session.Path,
+                Summary = $"🤖 MCP 工具 {name} 出错：{ex.Message}",
+            });
             return ToolText($"工具执行出错：{ex.Message}", true);
         }
     }
+
+    private static void PublishToolStart(string name, JsonElement args)
+    {
+        int chNum = ResolveTargetChapterNumber(name, args, beforeExec: true);
+        var task = name == "ai_write" ? NovelTools.Str(args, "task", "continue").Trim().ToLowerInvariant() : null;
+        var summary = name switch
+        {
+            "project_create" => $"🤖 MCP 正在新建项目「{NovelTools.Str(args, "name", "新项目")}」…",
+            "project_open" => "🤖 MCP 正在打开项目…",
+            "chapter_create" => $"🤖 MCP 正在新建章节「{NovelTools.Str(args, "title")}」…",
+            "chapter_write" => $"🤖 MCP 正在写入第 {chNum} 章…",
+            "chapter_rename" => $"🤖 MCP 正在重命名第 {chNum} 章…",
+            "chapter_delete" => $"🤖 MCP 正在删除第 {chNum} 章…",
+            "chapter_reorder" => "🤖 MCP 正在调整章节顺序…",
+            "chapter_summary_set" => $"🤖 MCP 正在写入第 {chNum} 章梗概…",
+            "settings_set" => "🤖 MCP 正在更新作品设定…",
+            "settings_book_set" => $"🤖 MCP 正在写入设定集（{NovelTools.Str(args, "key")}）…",
+            "character_upsert" => $"🤖 MCP 正在更新人物卡「{NovelTools.Str(args, "name")}」…",
+            "character_delete" => $"🤖 MCP 正在删除人物卡「{NovelTools.Str(args, "name")}」…",
+            "memory_set" => "🤖 MCP 正在更新 AI 写作记忆…",
+            "snapshot_restore" => "🤖 MCP 正在恢复历史快照…",
+            "project_export" => $"🤖 MCP 正在导出项目（{NovelTools.Str(args, "format", "txt").ToUpperInvariant()}）…",
+            "ai_write" => $"🤖 MCP AI 正在{AiTools.TaskDisplayLabel(task ?? "continue")}{(chNum > 0 ? $"（第 {chNum} 章）" : "")}…",
+            "chapter_read" => $"🤖 MCP 正在阅读第 {chNum} 章…",
+            _ => $"🤖 MCP 正在执行 {name}…",
+        };
+
+        McpLiveBridge.Publish(new McpLiveEvent
+        {
+            EventType = "start",
+            ToolName = name,
+            TaskName = task,
+            ProjectPath = _session.Path,
+            ChapterNumber = chNum,
+            SettingField = ResolveSettingField(name, args, task),
+            WriteBack = name == "ai_write" && NovelTools.Bool(args, "writeBack", false),
+            Summary = summary,
+        });
+    }
+
+    private static void PublishToolDone(string name, JsonElement args, ToolResult result, bool projectModified)
+    {
+        int chNum = ResolveTargetChapterNumber(name, args, beforeExec: false);
+        var task = name == "ai_write" ? NovelTools.Str(args, "task", "continue").Trim().ToLowerInvariant() : null;
+        var p = _session.Project;
+        var ch = chNum > 0 && p != null ? p.Chapters.FirstOrDefault(c => c.ChapterNumber == chNum) : null;
+
+        string summary;
+        if (result.IsError)
+        {
+            summary = $"🤖 MCP {name} 未成功：{Session.Truncate(result.Text, 60)}";
+        }
+        else
+        {
+            summary = name switch
+            {
+                "project_create" => $"🤖 MCP 已新建项目《{p?.ProjectName ?? ""}》",
+                "project_open" => $"🤖 MCP 已打开项目《{p?.ProjectName ?? ""}》",
+                "chapter_create" => ch != null
+                    ? $"🤖 MCP 已新建第 {ch.ChapterNumber} 章「{ch.Title}」"
+                    : "🤖 MCP 已新建章节",
+                "chapter_write" => ch != null
+                    ? $"🤖 MCP 已写入第 {ch.ChapterNumber} 章「{ch.Title}」（共 {ch.WordCount} 字）"
+                    : $"🤖 MCP 已写入第 {chNum} 章",
+                "chapter_rename" => ch != null
+                    ? $"🤖 MCP 已重命名第 {ch.ChapterNumber} 章为「{ch.Title}」"
+                    : "🤖 MCP 已重命名章节",
+                "chapter_delete" => $"🤖 MCP 已删除第 {chNum} 章",
+                "chapter_reorder" => "🤖 MCP 已调整章节顺序",
+                "chapter_summary_set" => $"🤖 MCP 已更新第 {chNum} 章梗概",
+                "settings_set" => "🤖 MCP 已更新作品设定",
+                "settings_book_set" => $"🤖 MCP 已更新设定集（{NovelTools.Str(args, "key")}）",
+                "character_upsert" => $"🤖 MCP 已更新人物卡「{NovelTools.Str(args, "name")}」",
+                "character_delete" => $"🤖 MCP 已删除人物卡「{NovelTools.Str(args, "name")}」",
+                "memory_set" => "🤖 MCP 已更新 AI 写作记忆",
+                "snapshot_restore" => "🤖 MCP 已恢复历史版本快照",
+                "project_export" => $"🤖 MCP 已导出项目（{NovelTools.Str(args, "format", "txt").ToUpperInvariant()}）",
+                "ai_write" => $"🤖 MCP AI 已完成{AiTools.TaskDisplayLabel(task ?? "continue")}{(ch != null ? $" · 第 {ch.ChapterNumber} 章「{ch.Title}」（{ch.WordCount} 字）" : "")}",
+                "chapter_read" => ch != null
+                    ? $"🤖 MCP 已读取第 {ch.ChapterNumber} 章「{ch.Title}」"
+                    : $"🤖 MCP 已读取第 {chNum} 章",
+                _ => $"🤖 MCP 已完成 {name}",
+            };
+        }
+
+        McpLiveBridge.Publish(new McpLiveEvent
+        {
+            EventType = result.IsError ? "error" : "done",
+            ToolName = name,
+            TaskName = task,
+            ProjectPath = _session.Path,
+            ChapterNumber = chNum,
+            SettingField = ResolveSettingField(name, args, task),
+            ProjectModified = projectModified,
+            WriteBack = name == "ai_write" && NovelTools.Bool(args, "writeBack", false),
+            PreviewText = name == "ai_write" ? result.Text : null,
+            Summary = summary,
+        });
+    }
+
+    private static int ResolveTargetChapterNumber(string name, JsonElement args, bool beforeExec)
+    {
+        if (name == "chapter_reorder")
+            return NovelTools.Int(args, "toNumber", NovelTools.Int(args, "fromNumber", 0));
+
+        var n = NovelTools.Int(args, "number", 0);
+        if (n > 0) return n;
+
+        if (name == "chapter_create" && !beforeExec && _session.Project != null && _session.Project.Chapters.Count > 0)
+            return _session.Project.Chapters.Max(c => c.ChapterNumber);
+
+        return 0;
+    }
+
+    private static string? ResolveSettingField(string name, JsonElement args, string? task) => name switch
+    {
+        "settings_set" => NovelTools.Str(args, "field"),
+        "settings_book_set" => NovelTools.Str(args, "key"),
+        "character_upsert" or "character_delete" => "characters",
+        "ai_write" when task != null => AiTools.SettingTargetFor(task),
+        _ => null,
+    };
 
     private static object ToolText(string text, bool isError) =>
         new Dictionary<string, object?>

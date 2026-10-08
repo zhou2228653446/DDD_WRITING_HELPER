@@ -132,6 +132,120 @@ namespace 编辑器
             project.FilePath = path;
             return project;
         }
+
+        /// <summary>
+        /// 汇总「人物设定」自由文本与结构化人物卡（<see cref="Characters"/>）。
+        /// 解决 agent 或作者只维护了人物卡、未手写自由文本时 AI 续写看不见角色设定的断层。
+        /// </summary>
+        public string BuildEffectiveCharacterSettings()
+        {
+            var freeText = CharacterSettings?.Trim() ?? "";
+            if (Characters == null || Characters.Count == 0)
+                return freeText;
+
+            var sb = new System.Text.StringBuilder();
+            if (freeText.Length > 0)
+            {
+                sb.AppendLine(freeText);
+                sb.AppendLine();
+                sb.AppendLine("【结构化人物卡】");
+            }
+
+            foreach (var c in Characters)
+            {
+                if (string.IsNullOrWhiteSpace(c.Name)) continue;
+                var tags = new List<string>();
+                if (!string.IsNullOrWhiteSpace(c.Role)) tags.Add(c.Role.Trim());
+                if (!string.IsNullOrWhiteSpace(c.Gender)) tags.Add(c.Gender.Trim());
+                if (c.Age > 0) tags.Add($"{c.Age}岁");
+                if (!string.IsNullOrWhiteSpace(c.Occupation)) tags.Add(c.Occupation.Trim());
+
+                sb.AppendLine($"· {c.Name.Trim()}{(tags.Count > 0 ? $"（{string.Join(" / ", tags)}）" : "")}");
+                if (!string.IsNullOrWhiteSpace(c.Appearance)) sb.AppendLine($"  外貌：{c.Appearance.Trim()}");
+                if (!string.IsNullOrWhiteSpace(c.Personality)) sb.AppendLine($"  性格：{c.Personality.Trim()}");
+                if (!string.IsNullOrWhiteSpace(c.Abilities)) sb.AppendLine($"  能力：{c.Abilities.Trim()}");
+                if (!string.IsNullOrWhiteSpace(c.Relationships)) sb.AppendLine($"  关系：{c.Relationships.Trim()}");
+                if (!string.IsNullOrWhiteSpace(c.Background)) sb.AppendLine($"  背景：{c.Background.Trim()}");
+                if (!string.IsNullOrWhiteSpace(c.Notes)) sb.AppendLine($"  备注：{c.Notes.Trim()}");
+            }
+
+            return sb.ToString().Trim();
+        }
+
+        /// <summary>
+        /// 提取设定集中已勾选导出且非空的章节，供常规写作（续写/扩写/润色/聊天）注入稳定前缀。
+        /// </summary>
+        public string BuildSettingsBookContextBlock()
+        {
+            if (SettingsBook?.Chapters == null || SettingsBook.Chapters.Count == 0)
+                return "";
+
+            var sb = new System.Text.StringBuilder();
+            foreach (var ch in SettingsBook.Chapters)
+            {
+                if (!ch.IncludeInExport || string.IsNullOrWhiteSpace(ch.Content)) continue;
+                sb.AppendLine($"### 设定集·{ch.Title}");
+                sb.AppendLine(ch.Content.Trim());
+                sb.AppendLine();
+            }
+
+            return sb.ToString().Trim();
+        }
+
+        /// <summary>
+        /// 组装 <paramref name="beforeChapterNumber"/> 之前章节的「前情梗概 + 上一章末尾」块：
+        /// <list type="bullet">
+        /// <item>优先使用作者/大纲卡片维护的 <see cref="Chapter.Summary"/>；若无梗概且正文非空，退化为截取正文开头。</item>
+        /// <item>当 <paramref name="includePrevTail"/> 为 true（用于续写衔接）且紧邻上一章有正文时，附带上一章末尾 <paramref name="tailChars"/> 字，避免续写与上章结尾脱节（改变前只截章节开头 800 字，导致丢失上章结尾悬念）。</item>
+        /// </list>
+        /// </summary>
+        public string BuildPriorChapterBrief(int beforeChapterNumber, bool includePrevTail = true, int maxSummaryChapters = 15, int tailChars = 800)
+        {
+            if (Chapters == null || Chapters.Count == 0)
+                return "";
+
+            var earlier = Chapters
+                .Where(c => c.ChapterNumber < beforeChapterNumber
+                            && (!string.IsNullOrWhiteSpace(c.Summary) || !string.IsNullOrWhiteSpace(c.Content)))
+                .OrderByDescending(c => c.ChapterNumber)
+                .Take(maxSummaryChapters)
+                .OrderBy(c => c.ChapterNumber)
+                .ToList();
+
+            if (earlier.Count == 0)
+                return "";
+
+            var sb = new System.Text.StringBuilder();
+            foreach (var c in earlier)
+            {
+                var summary = c.Summary?.Trim() ?? "";
+                if (summary.Length > 0)
+                {
+                    sb.AppendLine($"· 第{c.ChapterNumber}章《{c.Title}》梗概：{summary}");
+                }
+                else if (!string.IsNullOrWhiteSpace(c.Content))
+                {
+                    var text = c.Content.Trim();
+                    var snippet = text.Length > 300 ? text[..300] + "…" : text;
+                    sb.AppendLine($"· 第{c.ChapterNumber}章《{c.Title}》（摘要片段）：{snippet}");
+                }
+            }
+
+            if (includePrevTail)
+            {
+                var prev = earlier.LastOrDefault(c => !string.IsNullOrWhiteSpace(c.Content));
+                if (prev != null)
+                {
+                    var content = prev.Content.Trim();
+                    var tail = content.Length > tailChars ? "…" + content[^tailChars..] : content;
+                    sb.AppendLine();
+                    sb.AppendLine($"【紧邻上一章（第{prev.ChapterNumber}章《{prev.Title}》）末尾原文，供语气与悬念衔接】");
+                    sb.AppendLine(tail);
+                }
+            }
+
+            return sb.ToString().Trim();
+        }
     }
 
     public class WorldSetting
@@ -155,6 +269,9 @@ namespace 编辑器
         public string Personality { get; set; } = "";
         public string Background { get; set; } = "";
         public string Role { get; set; } = ""; // 主角、配角、反派等
+        public string Abilities { get; set; } = "";
+        public string Relationships { get; set; } = "";
+        public string Notes { get; set; } = "";
     }
 
     public class Chapter : INotifyPropertyChanged

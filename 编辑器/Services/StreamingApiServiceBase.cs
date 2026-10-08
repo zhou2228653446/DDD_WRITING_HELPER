@@ -273,7 +273,7 @@ namespace 编辑器.Services
             try
             {
                 using var content = new StringContent(json, Encoding.UTF8, "application/json");
-                using var httpRequest = new HttpRequestMessage(HttpMethod.Post, Config.ApiUrl) { Content = content };
+                using var httpRequest = new HttpRequestMessage(HttpMethod.Post, ApiProviders.ResolveEndpoint(Config)) { Content = content };
 
                 using var response = await Http
                     .SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, idleCts.Token)
@@ -467,6 +467,9 @@ namespace 编辑器.Services
             var reason = state.FinishReason?.ToLowerInvariant();
             if (reason is "content_filter" or "refusal" or "content_filtered")
                 return "服务端没有返回内容（请求被内容安全策略拦截）";
+
+            if (state.Truncated && state.Reasoning.Length > 0)
+                return "思考过程已耗尽本次输出上限（max_tokens），尚未进入正文输出。";
 
             return "服务端返回了空内容：本次没有生成任何正文，原文未做改动。"
                  + "可以重试一次；若反复出现，换一个模型或检查该条请求是否触发了服务端的过滤。";

@@ -49,11 +49,15 @@ internal sealed class Session
         var filled = new List<string>();
         if (!string.IsNullOrWhiteSpace(project.FullOutline)) filled.Add("全文大纲");
         if (!string.IsNullOrWhiteSpace(project.ChapterOutline)) filled.Add("章节大纲");
-        if (!string.IsNullOrWhiteSpace(project.CharacterSettings)) filled.Add("人物设定");
+        if (!string.IsNullOrWhiteSpace(project.CharacterSettings) || project.Characters.Count > 0)
+            filled.Add(project.Characters.Count > 0 ? $"人物设定（含 {project.Characters.Count} 张人物卡）" : "人物设定");
         if (!string.IsNullOrWhiteSpace(project.BackgroundSettings)) filled.Add("背景设定");
         if (!string.IsNullOrWhiteSpace(project.WritingStyle)) filled.Add("文风设定");
         if (!string.IsNullOrWhiteSpace(project.NarrativeViewpoint)) filled.Add("叙事视角");
         if (project.SettingsBook?.Chapters.Count > 0) filled.Add($"设定集（{project.SettingsBook.Chapters.Count} 章）");
+
+        _lastLightweightSnapshotUtc = DateTime.MinValue;
+        _lastLightweightPath = "";
 
         var words = project.Chapters.Sum(c => c.WordCount);
         return ToolResult.Ok(
@@ -114,8 +118,13 @@ internal sealed class Session
     public void Replace(NovelProject project)
     {
         Project = project;
+        _lastLightweightSnapshotUtc = DateTime.MinValue;
+        _lastLightweightPath = "";
         Save();
     }
+
+    private DateTime _lastLightweightSnapshotUtc = DateTime.MinValue;
+    private string _lastLightweightPath = "";
 
     /// <summary>
     /// 改稿前存一份快照——这是 MCP 侧唯一能撤销的手段。
@@ -124,14 +133,28 @@ internal sealed class Session
     /// 而 MCP 恰恰是 agent **自动**改稿的场景：一次 chapter_write 覆盖错章就是几千字
     /// 直接没了，比界面里手点更容易出事。所以写盘前一律先存一份。
     ///
-    /// 快照落在 .snapshots/ 子目录，不动项目文件本身，因此不会触发 IsStale 误判
-    /// （IsStale 只比对项目文件的修改时间与长度）。
+    /// 当 <paramref name="lightweight"/> 为 true（设定、人物卡、章节梗概等高频轻量小改）时，
+    /// 30 秒内的连续轻量修改合并共用批次前的第一份快照，避免 agent 连续建 5 张人物卡 + 6 项设定
+    /// 瞬间刷满几十个快照；而章节正文/建删章节等重量级操作始终每次必存。
     /// </summary>
-    public void Snapshot(string description)
+    public void Snapshot(string description, bool lightweight = false)
     {
         try
         {
             if (Project == null) return;
+            var now = DateTime.UtcNow;
+            if (lightweight)
+            {
+                if (_lastLightweightPath == Path && (now - _lastLightweightSnapshotUtc).TotalSeconds < 30)
+                    return;
+                _lastLightweightSnapshotUtc = now;
+                _lastLightweightPath = Path;
+            }
+            else
+            {
+                _lastLightweightSnapshotUtc = DateTime.MinValue;
+                _lastLightweightPath = "";
+            }
             new ProjectSnapshotManager(Path).SaveSnapshot(Project, description);
         }
         catch (Exception ex)
@@ -173,9 +196,21 @@ internal static class NovelTools
 
     internal static int Int(JsonElement a, string key, int def)
     {
-        if (a.ValueKind == JsonValueKind.Object && a.TryGetProperty(key, out var v)
-            && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var i))
-            return i;
+        if (a.ValueKind == JsonValueKind.Object && a.TryGetProperty(key, out var v))
+        {
+            if (v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var i))
+                return i;
+            if (v.ValueKind == JsonValueKind.String)
+            {
+                var s = v.GetString()?.Trim() ?? "";
+                if (int.TryParse(s, out var parsed))
+                    return parsed;
+                // 兼容 agent 传入 "27岁"、"第3章" 等带单位的字符串数字
+                var m = System.Text.RegularExpressions.Regex.Match(s, @"-?\d+");
+                if (m.Success && int.TryParse(m.Value, out var extracted))
+                    return extracted;
+            }
+        }
         return def;
     }
 
@@ -185,6 +220,13 @@ internal static class NovelTools
         {
             if (v.ValueKind == JsonValueKind.True) return true;
             if (v.ValueKind == JsonValueKind.False) return false;
+            if (v.ValueKind == JsonValueKind.String)
+            {
+                var s = v.GetString()?.Trim() ?? "";
+                if (bool.TryParse(s, out var b)) return b;
+                if (s == "1") return true;
+                if (s == "0") return false;
+            }
         }
         return def;
     }
@@ -198,10 +240,15 @@ internal static class NovelTools
         var dir = Str(args, "directory");
         if (string.IsNullOrWhiteSpace(dir))
         {
-            // 没给目录就扫几个常见位置：工作目录 + 我的文档 + 桌面
+            // 没给目录就扫几个常见位置：工作目录 + 仓库目录（由 exe 位置上推） + 我的文档 + 桌面
+            var repoRoot = "";
+            try { repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..")); }
+            catch { }
+
             var candidates = new[]
             {
                 Directory.GetCurrentDirectory(),
+                repoRoot,
                 Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
                 Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
             };
@@ -319,7 +366,8 @@ internal static class NovelTools
         sb.AppendLine($"【叙事视角】{Show(p.NarrativeViewpoint)}");
         sb.AppendLine($"【全文大纲】{Show(p.FullOutline)}");
         sb.AppendLine($"【章节大纲】{Show(p.ChapterOutline)}");
-        sb.AppendLine($"【人物设定】{Show(p.CharacterSettings)}");
+        var charEffective = p.BuildEffectiveCharacterSettings();
+        sb.AppendLine($"【人物设定】{Show(charEffective)}");
         sb.AppendLine($"【背景设定】{Show(p.BackgroundSettings)}");
         sb.AppendLine($"【文风设定】{Show(p.WritingStyle)}");
         sb.AppendLine($"【作品简介】{Show(p.Description)}");
@@ -374,15 +422,40 @@ internal static class NovelTools
     /// <summary>
     /// project_create：agent 自己开一本新书。
     /// 建好立刻 open（省一轮往返），并像界面新建项目那样把设定集 12 章骨架补上。
+    /// 兼容 path 别名以及直接传完整 .tdxproj 文件路径，并支持建书时顺带传入初始贯穿设定。
     /// </summary>
     public static ToolResult CreateProject(Session s, JsonElement args)
     {
-        var dir = Str(args, "directory");
+        var dir = Str(args, "directory").Trim();
+        if (string.IsNullOrWhiteSpace(dir))
+            dir = Str(args, "path").Trim();
+
+        var name = Str(args, "name").Trim();
+
+        // 若 dir 或 name 传入了完整 .tdxproj 文件路径，自动拆分出父目录与书名
+        if (dir.EndsWith(".tdxproj", StringComparison.OrdinalIgnoreCase))
+        {
+            var fileNameWithoutExt = Path.GetFileNameWithoutExtension(dir);
+            var parentDir = Path.GetDirectoryName(dir);
+            if (string.IsNullOrWhiteSpace(name))
+                name = fileNameWithoutExt;
+            dir = string.IsNullOrWhiteSpace(parentDir) ? Directory.GetCurrentDirectory() : parentDir;
+        }
+        if (name.EndsWith(".tdxproj", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(dir))
+            {
+                var parentDir = Path.GetDirectoryName(name);
+                if (!string.IsNullOrWhiteSpace(parentDir))
+                    dir = parentDir;
+            }
+            name = Path.GetFileNameWithoutExtension(name);
+        }
+
         if (string.IsNullOrWhiteSpace(dir))
             dir = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-
-        var name = Str(args, "name");
-        if (string.IsNullOrWhiteSpace(name)) name = "新建小说";
+        if (string.IsNullOrWhiteSpace(name))
+            name = "新建小说";
 
         if (!Directory.Exists(dir))
             return ToolResult.Fail($"目录不存在：{dir}");
@@ -401,6 +474,13 @@ internal static class NovelTools
             ModifiedDate = DateTime.Now,
             Chapters = new List<Chapter>(),
         };
+
+        // 支持建项目时顺手传入初始贯穿设定
+        foreach (var key in BatchSettingKeys)
+        {
+            if (Has(args, key))
+                ApplySettingField(p, key, Str(args, key));
+        }
 
         try
         {
@@ -491,40 +571,76 @@ internal static class NovelTools
         int next = p.Chapters.Count == 0 ? 1 : p.Chapters.Max(c => c.ChapterNumber) + 1;
         var content = Str(args, "content");
 
-        s.Snapshot("MCP 新建章节前");   // 加进列表之前存，理由同 WriteChapter
+        s.Snapshot("MCP 新建章节前");   // 只在加进列表之前存一次，避免新建后重复存一份覆盖态快照
         p.Chapters.Add(new Chapter
         {
             ChapterNumber = next,
             Title = title,
             Content = content,
+            Summary = Str(args, "summary").Trim(),
             CreatedDate = DateTime.Now,
             ModifiedDate = DateTime.Now,
             LastModified = DateTime.Now,
         });
-        s.Snapshot("MCP 新建章节前");
         s.Save();
 
         return ToolResult.Ok($"已新建第{next}章「{title}」（{content.Length} 字）。");
     }
 
+    private static readonly string[] BatchSettingKeys =
+    {
+        "full_outline", "outline",
+        "chapter_outline",
+        "characters", "character",
+        "background",
+        "writing_style", "style",
+        "narrative_viewpoint", "viewpoint",
+        "description",
+    };
+
     public static ToolResult SetSetting(Session s, NovelProject p, JsonElement args)
     {
         if (s.IsStale(out var stale)) return stale;
 
+        var updates = new List<(string Field, string Text)>();
+
         var field = Str(args, "field").Trim().ToLowerInvariant();
-        var text = Str(args, "text");
+        if (!string.IsNullOrWhiteSpace(field))
+        {
+            if (!IsKnownSettingField(field))
+                return ToolResult.Fail(
+                    $"未知字段「{field}」。可选：full_outline / chapter_outline / characters / " +
+                    "background / writing_style / narrative_viewpoint / description");
+            updates.Add((field, Str(args, "text")));
+        }
 
-        // 先校验字段再存快照：快照必须早于赋值，否则存的是改完的状态
-        if (!IsKnownSettingField(field))
+        // 支持批量一次性写入多项设定（例如同时传 full_outline、writing_style、narrative_viewpoint）
+        foreach (var key in BatchSettingKeys)
+        {
+            if (Has(args, key))
+            {
+                updates.Add((key, Str(args, key)));
+            }
+        }
+
+        if (updates.Count == 0)
+        {
             return ToolResult.Fail(
-                $"未知字段「{field}」。可选：full_outline / chapter_outline / characters / " +
-                "background / writing_style / narrative_viewpoint / description");
+                "未指定要修改的设定。可传 field + text，或直接传属性名（full_outline / chapter_outline / " +
+                "characters / background / writing_style / narrative_viewpoint / description）。");
+        }
 
-        s.Snapshot($"MCP 改写设定「{field}」前");
-        ApplySettingField(p, field, text);
+        var label = updates.Count == 1 ? updates[0].Field : $"{updates.Count}项设定";
+        s.Snapshot($"MCP 改写设定「{label}」前", lightweight: true);
+        foreach (var (k, v) in updates)
+            ApplySettingField(p, k, v);
         s.Save();
 
-        return ToolResult.Ok($"已更新「{field}」（{text.Length} 字）。");
+        if (updates.Count == 1)
+            return ToolResult.Ok($"已更新「{updates[0].Field}」（{updates[0].Text.Length} 字）。");
+
+        var summary = string.Join("、", updates.Select(u => $"{u.Field}({u.Text.Length}字)"));
+        return ToolResult.Ok($"已批量更新 {updates.Count} 项设定：{summary}。");
     }
 
     private static bool IsKnownSettingField(string field) => field switch
@@ -575,7 +691,7 @@ internal static class NovelTools
 
         var content = Str(args, "content");
         var append = Str(args, "mode", "replace").Equals("append", StringComparison.OrdinalIgnoreCase);
-        s.Snapshot($"MCP 改写设定集「{ch.Title}」前");   // 赋值之前存
+        s.Snapshot($"MCP 改写设定集「{ch.Title}」前", lightweight: true);   // 赋值之前存
         ch.Content = append && !string.IsNullOrWhiteSpace(ch.Content)
             ? ch.Content.TrimEnd() + "\n" + content
             : content;
@@ -694,13 +810,13 @@ internal static class NovelTools
         var c = p.Chapters.FirstOrDefault(x => x.ChapterNumber == from);
         if (c == null) return ToolResult.Fail($"没有第 {from} 章。用 chapters_list 看现有章节号。");
 
+        s.Snapshot($"MCP 调整第{from}章顺序前");
         var ordered = p.Chapters.OrderBy(x => x.ChapterNumber).ToList();
         ordered.Remove(c);
         ordered.Insert(Math.Clamp(to - 1, 0, ordered.Count), c);
         p.Chapters = ordered;
         Renumber(p);
 
-        s.Snapshot($"MCP 调整第{from}章顺序前");
         s.Save();
 
         return ToolResult.Ok($"「{c.Title}」已从 {from} 移到第 {c.ChapterNumber} 章，其余章节已重排。");
@@ -734,7 +850,7 @@ internal static class NovelTools
         if (c == null) return ToolResult.Fail($"没有第 {n} 章。用 chapters_list 看现有章节号。");
 
         var summary = Str(args, "summary").Trim();
-        s.Snapshot($"MCP 改写第{n}章梗概前");
+        s.Snapshot($"MCP 改写第{n}章梗概前", lightweight: true);
         c.Summary = summary;
         s.Save();
 
@@ -816,11 +932,20 @@ internal static class NovelTools
             if (c.Age > 0) bits.Add($"{c.Age}岁");
             if (!string.IsNullOrWhiteSpace(c.Gender)) bits.Add(c.Gender);
             if (!string.IsNullOrWhiteSpace(c.Role)) bits.Add(c.Role);
+            if (!string.IsNullOrWhiteSpace(c.Occupation)) bits.Add(c.Occupation);
             sb.AppendLine($"  · {c.Name}{(bits.Count > 0 ? "（" + string.Join(" · ", bits) + "）" : "")}   id={ShortId(c.CharacterId)}");
+            if (!string.IsNullOrWhiteSpace(c.Appearance))
+                sb.AppendLine($"      外貌：{Session.Truncate(c.Appearance, 60)}");
             if (!string.IsNullOrWhiteSpace(c.Personality))
                 sb.AppendLine($"      性格：{Session.Truncate(c.Personality, 60)}");
+            if (!string.IsNullOrWhiteSpace(c.Abilities))
+                sb.AppendLine($"      能力：{Session.Truncate(c.Abilities, 60)}");
+            if (!string.IsNullOrWhiteSpace(c.Relationships))
+                sb.AppendLine($"      关系：{Session.Truncate(c.Relationships, 60)}");
             if (!string.IsNullOrWhiteSpace(c.Background))
                 sb.AppendLine($"      背景：{Session.Truncate(c.Background, 60)}");
+            if (!string.IsNullOrWhiteSpace(c.Notes))
+                sb.AppendLine($"      备注：{Session.Truncate(c.Notes, 60)}");
         }
         sb.AppendLine("\ncharacter_upsert 给 id 就是改，不给则按姓名匹配，都没有就新建。");
         return ToolResult.Ok(sb.ToString());
@@ -840,6 +965,8 @@ internal static class NovelTools
         c ??= p.Characters.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase));
 
         var isNew = c == null;
+        s.Snapshot($"MCP {(isNew ? "新建" : "修改")}人物「{name}」前", lightweight: true);
+
         c ??= new Character { Name = name };
         if (isNew)
             p.Characters.Add(c);
@@ -855,8 +982,12 @@ internal static class NovelTools
         if (Has(args, "appearance")) c.Appearance = Str(args, "appearance");
         if (Has(args, "personality")) c.Personality = Str(args, "personality");
         if (Has(args, "background")) c.Background = Str(args, "background");
+        if (Has(args, "abilities")) c.Abilities = Str(args, "abilities");
+        if (Has(args, "relationships")) c.Relationships = Str(args, "relationships");
+        else if (Has(args, "relations")) c.Relationships = Str(args, "relations");
+        if (Has(args, "notes")) c.Notes = Str(args, "notes");
+        else if (Has(args, "note")) c.Notes = Str(args, "note");
 
-        s.Snapshot($"MCP {(isNew ? "新建" : "修改")}人物「{name}」前");
         s.Save();
 
         return ToolResult.Ok($"已{(isNew ? "新建" : "更新")}人物卡「{c.Name}」 id={ShortId(c.CharacterId)}" +
@@ -923,7 +1054,10 @@ internal static class NovelTools
         var filled = new List<string>();
         if (!string.IsNullOrWhiteSpace(p.FullOutline)) filled.Add("全文大纲");
         if (!string.IsNullOrWhiteSpace(p.ChapterOutline)) filled.Add("章节大纲");
-        if (!string.IsNullOrWhiteSpace(p.CharacterSettings)) filled.Add("人物设定");
+        if (!string.IsNullOrWhiteSpace(p.CharacterSettings) || p.Characters.Count > 0)
+            filled.Add(p.Characters.Count > 0 && string.IsNullOrWhiteSpace(p.CharacterSettings)
+                ? $"人物设定（人物卡 {p.Characters.Count} 张）"
+                : "人物设定");
         if (!string.IsNullOrWhiteSpace(p.BackgroundSettings)) filled.Add("背景设定");
         if (!string.IsNullOrWhiteSpace(p.WritingStyle)) filled.Add("文风设定");
         if (!string.IsNullOrWhiteSpace(p.NarrativeViewpoint)) filled.Add("叙事视角");

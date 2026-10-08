@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
@@ -78,6 +78,7 @@ namespace 编辑器
 
             _modelCache = new ModelCacheStore(ResolveConfigDir(promptStore));
             _skillDir = ResolveConfigDir(promptStore);
+            McpLiveSyncCheckBox.IsChecked = McpLiveBridge.LoadLiveSyncEnabled(Path.Combine(_skillDir, "settings.json"));
 
             RefreshProfileList();
             LoadProfileToUI(_profileManager.ActiveProfile);
@@ -455,6 +456,12 @@ namespace 编辑器
             var typed = ModelTextBox.Text.Trim();
             if (typed.Length == 0) return false;
 
+            // 火山方舟的推理接入点 ID（ep-...）与 Agent Plan 自动路由别名（ark-code-latest）
+            // 未必出现在 /models 基础模型列表里，不误判为错名
+            if (typed.StartsWith("ep-", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(typed, "ark-code-latest", StringComparison.OrdinalIgnoreCase))
+                return false;
+
             return !_allModels.Any(m => string.Equals(m.Id, typed, StringComparison.OrdinalIgnoreCase));
         }
 
@@ -635,7 +642,7 @@ namespace 编辑器
                 }
 
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
-                var response = await client.PostAsync(config.ApiUrl, content);
+                var response = await client.PostAsync(ApiProviders.ResolveEndpoint(config), content);
 
                 if (response.IsSuccessStatusCode)
                 {
@@ -1526,6 +1533,10 @@ namespace 编辑器
 
             // 提示词编辑也要落盘（失败则不关闭，让用户能看到错误）
             if (!TrySavePrompts(out _)) return;
+
+            McpLiveBridge.SaveLiveSyncEnabled(
+                McpLiveSyncCheckBox.IsChecked == true,
+                Path.Combine(_skillDir, "settings.json"));
 
             DialogResult = true;
             Close();

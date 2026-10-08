@@ -274,7 +274,7 @@ namespace 编辑器.Services
 
     public class CompletionOptions
     {
-        public int MaxTokens { get; set; } = 1000;
+        public int MaxTokens { get; set; } = 8192;
         public double Temperature { get; set; } = 0.7;
         public string Model { get; set; } = "";
         public CancellationToken CancellationToken { get; set; } = default;
@@ -302,18 +302,20 @@ namespace 编辑器.Services
         /// <summary>给用户看的阶段性提示（重试中、思考中等）。</summary>
         public Action<string>? OnNotice { get; set; }
 
+        /// <summary>流式生成过程中每次收到正文增量后的累积文本回调（供实时预览）。</summary>
+        public Action<string>? OnStreamText { get; set; }
+
         /// <summary>
         /// 改写类任务（原文进、同量文本出）的输出预算。
         ///
         /// 不能写死小数值：中文约 1 字 ≈ 1 token，一份 3000 字的章节要 3000 左右输出，
-        /// 而"润色"是**整章覆盖**，给 1000 就会被截断后覆盖掉原文。
-        /// 这里按原文长度留 2 倍余量（润色后可能变长），并夹在 [floor, 8000]
-        /// —— 多数服务商单次输出硬上限就在 4k~8k，要更多也没用。
+        /// 再加上思考模型（GLM / DeepSeek-R1 / Kimi 等）动辄 2000~4000 token 的思考链，
+        /// 这里按原文长度留 3 倍余量，并夹在 [floor, 16384]。
         /// </summary>
-        public static int BudgetForRewrite(string? source, int floor = 1200)
+        public static int BudgetForRewrite(string? source, int floor = 8192)
         {
-            long estimate = (long)Math.Ceiling((source?.Length ?? 0) * 2.0);
-            return (int)Math.Clamp(estimate, floor, 8000);
+            long estimate = (long)Math.Ceiling((source?.Length ?? 0) * 3.0);
+            return (int)Math.Clamp(estimate, floor, 16384);
         }
     }
 

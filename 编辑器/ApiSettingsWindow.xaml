@@ -134,6 +134,13 @@
                         <hc:PasswordBox x:Name="ApiKeyPasswordBox" Grid.Column="1" FontSize="13"/>
                     </Grid>
 
+                    <!-- MCP 实时同步选项 -->
+                    <CheckBox x:Name="McpLiveSyncCheckBox" Grid.Row="11" VerticalAlignment="Top" Margin="2,4,0,0"
+                              Content="通过 MCP 操作时，在界面实时显示并跟随操作（自动切章 / 同步设定 / 展示流式生成）"
+                              Foreground="{DynamicResource Brush.Text}" FontSize="12"
+                              IsChecked="True"
+                              ToolTip="开启后，当外部 AI（如 Antigravity / Claude）通过 MCP 创建或读写项目时，主窗口会自动打开对应项目与章节并实时展示生成过程"/>
+
                     <!-- 按钮 -->
                     <StackPanel Grid.Row="12" Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button Name="TestButton" Content="测试连接" Width="100" Height="32" Margin="0,0,10,0"

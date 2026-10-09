@@ -837,6 +837,250 @@ $('#aiCopyBtn').onclick = async () => {
   if (t) { await navigator.clipboard.writeText(t); log('AI 结果已复制'); }
 };
 
+// ---------- 提示词方案（SystemPromptStore 同源） ----------
+
+let promptData = null;
+
+async function loadPresetSelect() {
+  try {
+    const d = await api('/api/prompts');
+    promptData = d;
+    const sel = $('#aiPreset');
+    sel.innerHTML = '';
+    (d.presets || []).forEach(p => {
+      const o = document.createElement('option');
+      o.value = p.id;
+      o.textContent = p.isBuiltIn ? p.name : `${p.name}（自定义）`;
+      sel.appendChild(o);
+    });
+    sel.value = d.active;
+  } catch { /* 静默 */ }
+}
+
+$('#aiPreset').onchange = async () => {
+  await post('/api/prompts/active', { presetId: $('#aiPreset').value });
+  log(`提示词方案已切换：${$('#aiPreset option:checked').textContent}（桌面端同步生效）`);
+  // 方案记住的技能跟着切（与桌面版 OnPresetChanged 同款）
+  const remembered = promptData?.skillByPreset?.[$('#aiPreset').value];
+  await loadSkills();
+  if (remembered) $('#aiSkill').value = remembered;
+};
+
+async function openPromptDlg() {
+  await loadPresetSelect();
+  renderPromptDlg();
+  $('#promptDlg').showModal();
+}
+
+function renderPromptDlg() {
+  const d = promptData;
+  if (!d) return;
+  const sel = $('#pPresetSel');
+  sel.innerHTML = '';
+  d.presets.forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.id;
+    o.textContent = p.isBuiltIn ? p.name : `${p.name}（自定义）`;
+    sel.appendChild(o);
+  });
+  sel.value = $('#pPresetSel').dataset.cur || d.active;
+  renderPromptEntries();
+}
+
+async function renderPromptEntries() {
+  const d = promptData;
+  if (!d) return;
+  const presetId = $('#pPresetSel').value;
+  $('#pPresetSel').dataset.cur = presetId;
+  const preset = d.presets.find(p => p.id === presetId);
+  $('#pBasedOn').value = preset?.isBuiltIn ? '内置方案' : '自定义（跟随依据方案的内置改进）';
+  $('#pDelete').disabled = !!preset?.isBuiltIn;
+  $('#pRename').disabled = !!preset?.isBuiltIn;
+
+  const texts = d.texts[presetId] || {};
+  const box = $('#pEntries');
+  box.innerHTML = '';
+  let lastGroup = null;
+  for (const e of d.entries) {
+    if (e.group !== lastGroup) {
+      lastGroup = e.group;
+      const h = document.createElement('div');
+      h.className = 'p-group';
+      h.textContent = e.group;
+      box.appendChild(h);
+    }
+    const info = texts[e.key] || { text: '', overridden: false };
+    const det = document.createElement('details');
+    det.className = 'p-entry' + (info.overridden ? ' overridden' : '');
+    det.innerHTML =
+      `<summary>${escapeHtml(e.title)}${info.overridden ? ' <span class="tag">已覆写</span>' : ''}</summary>` +
+      `<div class="muted" style="margin:4px 0">${escapeHtml(e.description)}</div>` +
+      `<textarea rows="5">${escapeHtml(info.text)}</textarea>` +
+      `<div class="dlg-btns" style="margin:4px 0">` +
+      `<button type="button" class="mini-btn p-save">保存修改</button>` +
+      `<button type="button" class="mini-btn p-reset" ${info.overridden ? '' : 'disabled'}>恢复默认</button></div>`;
+    det.querySelector('.p-save').onclick = async ev => {
+      const r = await post('/api/prompts/set', { presetId, key: e.key, value: det.querySelector('textarea').value });
+      await reloadPromptData();
+      renderPromptEntries();
+      ev.target.closest('details').querySelector('summary').click();
+      log(`提示词已更新：${e.title}（${r.text === det.querySelector('textarea').value ? '已生效' : '等同默认，已视为恢复默认'}）`);
+    };
+    det.querySelector('.p-reset').onclick = async () => {
+      await post('/api/prompts/reset', { presetId, key: e.key });
+      await reloadPromptData();
+      renderPromptEntries();
+    };
+    box.appendChild(det);
+  }
+}
+
+async function reloadPromptData() { promptData = await api('/api/prompts'); }
+
+$('#pPresetSel').onchange = renderPromptEntries;
+$('#pActivate').onclick = async () => {
+  const id = $('#pPresetSel').value;
+  await post('/api/prompts/active', { presetId: id });
+  await loadPresetSelect();
+  log(`提示词方案已启用：${$('#aiPreset option:checked').textContent}`);
+};
+$('#pNewCustom').onclick = async () => {
+  const name = prompt('新方案名称？', '我的方案');
+  if (!name) return;
+  await post('/api/prompts/custom', { basedOn: $('#pPresetSel').value, name });
+  await reloadPromptData();
+  const created = promptData.presets.find(p => !p.isBuiltIn && p.name === name.trim());
+  if (created) $('#pPresetSel').dataset.cur = created.id;
+  renderPromptDlg();
+  log(`已新建自定义方案「${name}」（继承当前方案的覆写语义，未改条目跟随内置改进）`);
+};
+$('#pRename').onclick = async () => {
+  const id = $('#pPresetSel').value;
+  const cur = promptData.presets.find(p => p.id === id);
+  const name = prompt('新名称？', cur?.name || '');
+  if (!name) return;
+  await post('/api/prompts/custom', { id, renameTo: name });
+  await reloadPromptData();
+  $('#pPresetSel').dataset.cur = id;
+  renderPromptDlg();
+};
+$('#pDelete').onclick = async () => {
+  const id = $('#pPresetSel').value;
+  const cur = promptData.presets.find(p => p.id === id);
+  if (!confirm(`删除自定义方案「${cur?.name}」？`)) return;
+  await post('/api/prompts/custom', { id, delete: true });
+  await reloadPromptData();
+  delete $('#pPresetSel').dataset.cur;
+  renderPromptDlg();
+};
+$('#pResetAll').onclick = async () => {
+  if (!confirm('把这个方案的全部条目恢复默认？')) return;
+  await post('/api/prompts/reset', { presetId: $('#pPresetSel').value, all: true });
+  await reloadPromptData();
+  renderPromptEntries();
+};
+$('#pClose').onclick = () => $('#promptDlg').close();
+$('#promptBtn').onclick = openPromptDlg;
+
+// ---------- 技能管理 ----------
+
+let skillsCache = [], editingSkillId = null;
+
+async function openSkillDlg() {
+  const d = await api('/api/skills');
+  skillsCache = d.skills || [];
+  renderSkillList();
+  if (skillsCache.length) fillSkillForm(skillsCache[0]);
+  $('#skillDlg').showModal();
+}
+
+function renderSkillList() {
+  const ul = $('#skillList');
+  ul.innerHTML = '';
+  skillsCache.forEach(s => {
+    const li = document.createElement('li');
+    if (s.id === editingSkillId) li.className = 'active';
+    li.innerHTML = `<span>${escapeHtml(s.name)}</span><span class="w">${s.isBuiltIn ? '内置' : '自定义'}</span>`;
+    li.onclick = () => fillSkillForm(s);
+    ul.appendChild(li);
+  });
+}
+
+function fillSkillForm(s) {
+  editingSkillId = s.id;
+  renderSkillList();
+  $('#sName').value = s.name || '';
+  $('#sDesc').value = s.description || '';
+  $('#sApplies').value = (s.appliesTo || []).join(', ');
+  $('#sPresets').value = (s.presets || []).join(', ');
+  $('#sHint').value = s.inputHint || '';
+  $('#sTask').value = s.taskPrompt || '';
+  $('#sContract').value = s.outputContract || '';
+  $('#sName').disabled = $('#sDesc').disabled = $('#sApplies').disabled =
+  $('#sPresets').disabled = $('#sHint').disabled = $('#sTask').disabled =
+  $('#sContract').disabled = $('#sSave').disabled = $('#sDelete').disabled = s.isBuiltIn;
+}
+
+function skillFromForm() {
+  return {
+    id: editingSkillId,
+    name: $('#sName').value.trim(),
+    description: $('#sDesc').value.trim(),
+    appliesTo: $('#sApplies').value.split(/[,，]/).map(x => x.trim()).filter(Boolean),
+    presets: $('#sPresets').value.split(/[,，]/).map(x => x.trim()).filter(Boolean),
+    inputHint: $('#sHint').value,
+    taskPrompt: $('#sTask').value,
+    outputContract: $('#sContract').value || null,
+  };
+}
+
+$('#sNew').onclick = () => {
+  fillSkillForm({ id: '', name: '', description: '', appliesTo: [], presets: [], inputHint: '', taskPrompt: '', outputContract: null });
+  $('#sName').disabled = $('#sDesc').disabled = $('#sApplies').disabled =
+  $('#sPresets').disabled = $('#sHint').disabled = $('#sTask').disabled =
+  $('#sContract').disabled = $('#sSave').disabled = $('#sDelete').disabled = false;
+  editingSkillId = '';
+  $('#sName').focus();
+};
+$('#sSave').onclick = async () => {
+  const r = await post('/api/skills/save', skillFromForm());
+  if (r.error) return alert(r.error);
+  log('技能已保存：' + $('#sName').value);
+  const d = await api('/api/skills');
+  skillsCache = d.skills || [];
+  editingSkillId = r.id;
+  fillSkillForm(skillsCache.find(s => s.id === r.id) || skillsCache[0]);
+  await loadSkills();
+};
+$('#sDelete').onclick = async () => {
+  if (!editingSkillId || !confirm('删除这个技能？')) return;
+  const r = await post(`/api/skills/${editingSkillId}/delete`, {});
+  if (r.error) return alert(r.error);
+  log('技能已删除');
+  skillsCache = (await api('/api/skills')).skills || [];
+  editingSkillId = skillsCache[0]?.id || null;
+  if (editingSkillId) fillSkillForm(skillsCache[0]); else renderSkillList();
+  await loadSkills();
+};
+$('#sExport').onclick = async () => {
+  if (!editingSkillId) return;
+  const json = await api(`/api/skills/${editingSkillId}/export`);
+  await navigator.clipboard.writeText(JSON.stringify(json, null, 2));
+  log('技能 JSON 已复制到剪贴板');
+};
+$('#sImport').onclick = async () => {
+  const json = prompt('粘贴技能 JSON（单个或数组）：');
+  if (!json) return;
+  const r = await post('/api/skills/import', { json });
+  if (r.error) return alert(r.error);
+  log(`已导入 ${r.imported} 个技能`);
+  skillsCache = (await api('/api/skills')).skills || [];
+  await loadSkills();
+  renderSkillList();
+};
+$('#skillClose').onclick = () => $('#skillDlg').close();
+$('#skillBtn').onclick = openSkillDlg;
+
 // ---------- 实时：agent 的动作出现在这里 ----------
 
 function log(text, isAgent) {
@@ -865,6 +1109,12 @@ function connect() {
 
   conn.on('memory-changed', () => { log('AI 记忆已更新'); loadMemory(); });
 
+  conn.on('live', e => {   // 第二个 live 处理器：SignalR 允许同一事件多次注册
+    if (e.kind === 'settingsbook-changed' && !$('#view-sbook').classList.contains('hidden')) {
+      loadSettingsBook();
+    }
+  });
+
   conn.on('mcpProgress', o => {
     const p = o?.params || {};
     log(p.message || JSON.stringify(o), true);
@@ -877,12 +1127,13 @@ function connect() {
 
 function switchView(v) {
   $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === v));
-  ['write', 'outline', 'characters', 'literature', 'snapshots', 'settings'].forEach(n => {
+  ['write', 'outline', 'characters', 'literature', 'sbook', 'snapshots', 'settings'].forEach(n => {
     $('#view-' + n).classList.toggle('hidden', n !== v);
   });
   if (v === 'characters') loadCharacters();
   if (v === 'literature') loadLiterature();
   if (v === 'snapshots') loadSnapshots();
+  if (v === 'sbook') loadSettingsBook();
 }
 $$('.tab').forEach(t => t.onclick = () => switchView(t.dataset.view));
 
@@ -916,6 +1167,115 @@ $('#saveSetBtn').onclick = async () => {
 
 const escapeHtml = s => (s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
+// ---------- 设定集（与桌面版同一本 SettingsBook） ----------
+
+let sbChapters = [], sbCurrentId = null;
+
+async function loadSettingsBook() {
+  const d = await api('/api/settingsbook');
+  if (!d || d.open === false) { $('#sbChapters').innerHTML = '<li class="muted">先打开一本书</li>'; return; }
+  sbChapters = d.chapters || [];
+  $('#sbBookTitle').textContent = `${d.title || '设定集'}${d.subtitle ? ' · ' + d.subtitle : ''}`;
+  const ul = $('#sbChapters');
+  ul.innerHTML = '';
+  sbChapters.forEach(c => {
+    const li = document.createElement('li');
+    if (c.chapterId === sbCurrentId) li.className = 'active';
+    li.innerHTML = `<span>${escapeHtml(c.title)}</span>` +
+      `<span class="w">${c.isAiGenerated ? 'AI' : ''}${c.includeInExport ? '' : ' 🚫'}</span>`;
+    li.onclick = () => selectSbChapter(c.chapterId);
+    ul.appendChild(li);
+  });
+  if (!sbCurrentId || !sbChapters.some(c => c.chapterId === sbCurrentId)) {
+    if (sbChapters.length) selectSbChapter(sbChapters[0].chapterId);
+  } else selectSbChapter(sbCurrentId);   // 重新载入当前章内容（可能被 agent 改过）
+}
+
+function selectSbChapter(id) {
+  sbCurrentId = id;
+  const c = sbChapters.find(x => x.chapterId === id);
+  if (!c) return;
+  $$('#sbChapters li').forEach(li => {
+    li.classList.toggle('active', li.querySelector('span').textContent === c.title);
+  });
+  $('#sbChTitle').value = c.title + `（来源：${c.sourceLabel || c.sourceKey}）`;
+  $('#sbContent').value = c.content || '';
+  $('#sbInclude').checked = c.includeInExport !== false;
+  $('#sbState').textContent = c.modified ? '改于 ' + new Date(c.modified).toLocaleString() : '';
+}
+
+let sbSaveTimer = null;
+$('#sbContent').addEventListener('input', () => {
+  $('#sbState').textContent = '未保存';
+  clearTimeout(sbSaveTimer);
+  sbSaveTimer = setTimeout(saveSbContent, 1200);
+});
+$('#sbInclude').addEventListener('change', async () => {
+  await saveSbContent(true);
+});
+
+async function saveSbContent(includeOnly) {
+  if (!sbCurrentId) return;
+  const body = { chapterId: sbCurrentId, includeInExport: $('#sbInclude').checked };
+  if (!includeOnly) body.content = $('#sbContent').value;
+  await post('/api/settingsbook/chapter', body);
+  $('#sbState').textContent = '已保存 ' + new Date().toLocaleTimeString();
+  const c = sbChapters.find(x => x.chapterId === sbCurrentId);
+  if (c && !includeOnly) { c.content = body.content; c.modified = new Date().toISOString(); }
+}
+
+$('#sbAiBtn').onclick = async () => {
+  if (!sbCurrentId) return;
+  const btn = $('#sbAiBtn'), out = $('#sbState');
+  btn.disabled = true;
+  out.textContent = 'AI 生成中…';
+  try {
+    const res = await fetch('/api/settingsbook/generate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chapterId: sbCurrentId }),
+    });
+    if (!res.ok) { out.textContent = await res.text(); return; }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', text = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+      for (const p of parts) {
+        if (!p.startsWith('data: ')) continue;
+        const ev = JSON.parse(p.slice(6));
+        if (ev.type === 'text') { text = ev.payload; $('#sbContent').value = text; out.textContent = '生成中… ' + text.length + ' 字'; }
+        else if (ev.type === 'error') out.textContent = '出错：' + ev.payload;
+        else if (ev.type === 'done') {
+          if (ev.payload.saved) { out.textContent = '已生成并保存 ' + new Date().toLocaleTimeString(); log(`设定集「${$('#sbChTitle').value}」已由 AI 生成`, true); }
+          else out.textContent = '生成结果不可用';
+        }
+      }
+    }
+  } catch (e) { out.textContent = '出错：' + e.message; }
+  finally { btn.disabled = false; }
+};
+
+const sbExport = fmt => async () => {
+  try {
+    const res = await fetch('/api/settingsbook/export?format=' + fmt);
+    if (!res.ok) { alert(await res.text()); return; }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = decodeURIComponent((res.headers.get('Content-Disposition') || '').match(/filename\*?=(?:UTF-8''|")?([^";]+)/)?.[1] || `设定集.${fmt}`);
+    a.click();
+    URL.revokeObjectURL(a.href);
+    log('设定集已导出：' + fmt.toUpperCase());
+  } catch (e) { alert('导出失败：' + e.message); }
+};
+$('#sbExportDocx').onclick = sbExport('docx');
+$('#sbExportPdf').onclick = sbExport('pdf');
+$('#sbExportTxt').onclick = sbExport('txt');
+
 // 键盘：Ctrl+S 保存，Ctrl+F 查找，Ctrl+Enter 生成
 document.addEventListener('keydown', e => {
   if (e.ctrlKey && e.key === 's') { e.preventDefault(); flushSave(); }
@@ -927,4 +1287,5 @@ document.addEventListener('keydown', e => {
 
 loadBooks().catch(e => console.error(e));
 loadSkills();
+loadPresetSelect();
 connect();

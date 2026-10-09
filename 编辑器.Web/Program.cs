@@ -12,9 +12,15 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSignalR();
 builder.Services.AddSingleton<WorkspaceService>();
 
-// 提示词方案/技能配置与界面共用同一份文件，进程启动时先载入，
-// 否则 AiPrompts.Task.* 取不到用户改过的覆写文本（与 MCP 侧同样的处理）。
-try { AiPrompts.Store?.Load(); }
+// 提示词方案/技能配置与界面共用同一份文件。⚠ Store 必须在这里赋值——
+// 之前只调了 Load，Store 本身是 null，用户在桌面版改过的提示词覆写
+// 在网页版从来没生效过（AiPrompts.Resolve 全部回落到内置默认）。
+var promptStore = new SystemPromptStore(ConfigDir());
+try
+{
+    promptStore.Load();
+    AiPrompts.Store = promptStore;
+}
 catch (Exception ex) { Console.Error.WriteLine($"[web] 载入提示词配置失败（将用内置默认）：{ex.Message}"); }
 
 var app = builder.Build();
@@ -521,6 +527,7 @@ app.MapGet("/api/skills", () =>
             {
                 id = s.Id, name = s.Name, description = s.Description,
                 isBuiltIn = s.IsBuiltIn, appliesTo = s.AppliesTo, inputHint = s.InputHint,
+                presets = s.Presets, taskPrompt = s.TaskPrompt, outputContract = s.OutputContract,
             }),
         });
     }
@@ -528,6 +535,173 @@ app.MapGet("/api/skills", () =>
     {
         return Results.Ok(new { skills = Array.Empty<object>(), error = ex.Message });
     }
+});
+
+// 保存自定义技能。内置 id 一律拒绝（与桌面版 AddOrUpdate 同一语义）。
+app.MapPost("/api/skills/save", (SkillSaveReq req) =>
+{
+    try
+    {
+        var all = NovelSkillStore.Load(ConfigDir());
+        var skill = new NovelSkill
+        {
+            Id = string.IsNullOrWhiteSpace(req.Id) ? "skill-" + Guid.NewGuid().ToString("N")[..8] : req.Id!,
+            Name = req.Name ?? "",
+            Description = req.Description ?? "",
+            AppliesTo = req.AppliesTo ?? new List<string>(),
+            Presets = req.Presets ?? new List<string>(),
+            TaskPrompt = req.TaskPrompt ?? "",
+            OutputContract = req.OutputContract,
+            InputHint = req.InputHint ?? "",
+        };
+        if (string.IsNullOrWhiteSpace(skill.Name))
+            return Results.BadRequest(new { error = "技能名不能为空" });
+
+        if (!NovelSkillStore.AddOrUpdate(all, skill))
+            return Results.BadRequest(new { error = "内置技能不允许修改" });
+
+        NovelSkillStore.Save(ConfigDir(), all);
+        return Results.Ok(new { ok = true, id = skill.Id });
+    }
+    catch (Exception ex) { return Results.BadRequest(new { error = ex.Message }); }
+});
+
+app.MapPost("/api/skills/{id}/delete", (string id) =>
+{
+    try
+    {
+        var all = NovelSkillStore.Load(ConfigDir());
+        if (!NovelSkillStore.Delete(all, id))
+            return Results.BadRequest(new { error = "删除失败（不存在或为内置技能）" });
+        NovelSkillStore.Save(ConfigDir(), all);
+        return Results.Ok(new { ok = true });
+    }
+    catch (Exception ex) { return Results.BadRequest(new { error = ex.Message }); }
+});
+
+// 导入：JSON 文本（单技能或数组），内置 id 拒绝导入
+app.MapPost("/api/skills/import", (SkillImportReq req) =>
+{
+    try
+    {
+        var incoming = NovelSkillStore.ParseImport(req.Json ?? "");
+        if (incoming.Count == 0) return Results.BadRequest(new { error = "没有可导入的技能" });
+
+        var all = NovelSkillStore.Load(ConfigDir());
+        int added = 0;
+        foreach (var s in incoming)
+            if (NovelSkillStore.AddOrUpdate(all, s)) added++;
+
+        NovelSkillStore.Save(ConfigDir(), all);
+        return Results.Ok(new { ok = true, imported = added });
+    }
+    catch (Exception ex) { return Results.BadRequest(new { error = ex.Message }); }
+});
+
+app.MapGet("/api/skills/{id}/export", (string id) =>
+{
+    var all = NovelSkillStore.Load(ConfigDir());
+    var skill = all.FirstOrDefault(s => s.Id == id);
+    if (skill == null) return Results.NotFound(new { error = "技能不存在" });
+    return Results.Text(NovelSkillStore.ExportJson(skill), "application/json");
+});
+
+// ══════════════════════════════════════════════════════════════════
+// 提示词方案与覆写（SystemPromptStore，与桌面版共用 system_prompts.json）
+// ══════════════════════════════════════════════════════════════════
+
+app.MapGet("/api/prompts", () =>
+{
+    var store = AiPrompts.Store;
+    if (store == null) return Results.StatusCode(503);
+
+    var presets = AiPrompts.PresetOptions(store)
+        .Select(o => new { id = o.Id, name = o.Name, isBuiltIn = o.IsBuiltIn, description = o.Description })
+        .ToList();
+
+    // 每方案 × 每槽位：生效文本 + 是否被覆写。前端据此渲染编辑列表。
+    var texts = new Dictionary<string, object>();
+    foreach (var p in presets)
+    {
+        texts[p.id] = AiPrompts.Entries.ToDictionary(
+            e => e.Key,
+            e => new
+            {
+                text = AiPrompts.TextFor(p.id, e.Key),
+                overridden = store.IsOverridden(p.id, e.Key),
+            });
+    }
+
+    return Results.Ok(new
+    {
+        active = store.ActivePresetId,
+        presets,
+        entries = AiPrompts.Entries.Select(e => new
+            { key = e.Key, group = e.Group, title = e.Title, description = e.Description }),
+        texts,
+        skillByPreset = store.Capture().SkillByPreset,
+    });
+});
+
+// 写一条覆写。value 为空或与默认相同 → 视为恢复默认（与桌面版 Set 同语义）
+app.MapPost("/api/prompts/set", (PromptSlotReq req) =>
+{
+    var store = AiPrompts.Store;
+    if (store == null) return Results.StatusCode(503);
+    if (!store.Exists(req.PresetId) || string.IsNullOrEmpty(req.Key))
+        return Results.BadRequest(new { error = "方案或槽位不存在" });
+
+    store.Set(req.PresetId!, req.Key!, req.Value, AiPrompts.DefaultFor(req.PresetId, req.Key));
+    store.Save();
+    return Results.Ok(new { ok = true, text = AiPrompts.TextFor(req.PresetId, req.Key) });
+});
+
+// 恢复默认：单条（key）或整个方案（all = true）
+app.MapPost("/api/prompts/reset", (PromptResetReq req) =>
+{
+    var store = AiPrompts.Store;
+    if (store == null) return Results.StatusCode(503);
+    if (req.All == true) store.ResetAll(req.PresetId ?? store.ActivePresetId);
+    else if (!string.IsNullOrEmpty(req.Key)) store.Reset(req.PresetId ?? store.ActivePresetId, req.Key);
+    store.Save();
+    return Results.Ok(new { ok = true });
+});
+
+app.MapPost("/api/prompts/active", (PromptActiveReq req) =>
+{
+    var store = AiPrompts.Store;
+    if (store == null) return Results.StatusCode(503);
+    if (!store.Exists(req.PresetId)) return Results.BadRequest(new { error = "方案不存在" });
+
+    store.ActivePresetId = req.PresetId!;
+    store.Save();
+    return Results.Ok(new { ok = true, active = store.ActivePresetId });
+});
+
+app.MapPost("/api/prompts/custom", (PromptCustomReq req) =>
+{
+    var store = AiPrompts.Store;
+    if (store == null) return Results.StatusCode(503);
+
+    string id;
+    if (req.RenameTo != null)
+    {
+        if (!store.RenameCustom(req.Id ?? "", req.RenameTo))
+            return Results.BadRequest(new { error = "重命名失败（自定义方案不存在）" });
+        id = req.Id ?? "";
+    }
+    else if (req.Delete == true)
+    {
+        if (!store.DeleteCustom(req.Id ?? ""))
+            return Results.BadRequest(new { error = "删除失败（自定义方案不存在）" });
+        id = "";
+    }
+    else
+    {
+        id = store.CreateCustom(req.BasedOn ?? PromptPresets.IdGeneral, req.Name ?? "");
+    }
+    store.Save();
+    return Results.Ok(new { ok = true, id });
 });
 
 // ══════════════════════════════════════════════════════════════════
@@ -608,6 +782,126 @@ app.MapPost("/api/world", async (WorkspaceService ws, JsonElement req) =>
 app.MapGet("/api/character-appearances", (WorkspaceService ws) =>
     Results.Ok(new { stats = ws.CharacterAppearances() }));
 
+// ══════════════════════════════════════════════════════════════════
+// 设定集（SettingsBook：把各类设定统合成一本可编辑、可导出的资料书）
+// ══════════════════════════════════════════════════════════════════
+
+app.MapGet("/api/settingsbook", (WorkspaceService ws) =>
+{
+    var book = ws.SettingsBook();
+    return book == null ? Results.Ok(new { open = false }) : Results.Ok(book);
+});
+
+app.MapPost("/api/settingsbook/chapter", async (WorkspaceService ws, SbChapterReq req) =>
+{
+    if (!ws.UpdateSettingsBookChapter(req.ChapterId ?? "", req.Content, req.IncludeInExport))
+        return Results.BadRequest(new { error = "章节不存在" });
+    await ws.BroadcastAsync("settingsbook-changed", new { chapterId = req.ChapterId });
+    return Results.Ok(new { ok = true });
+});
+
+// AI 生成/完善某章（与桌面版 GenerateSettingsBookChapterAsync 同源：
+// 素材 = 项目设定块 + 作品简介 + 该章已有内容；系统提示词不带设定集本身）
+app.MapPost("/api/settingsbook/generate", async (HttpContext ctx, WorkspaceService ws) =>
+{
+    var req = await ctx.Request.ReadFromJsonAsync<SbGenerateReq>()
+              ?? new SbGenerateReq(null);
+    var p = ws.Current;
+    if (p?.SettingsBook == null) { ctx.Response.StatusCode = 400; await ctx.Response.WriteAsync("先打开一本书"); return; }
+
+    var chapter = p.SettingsBook.Chapters.FirstOrDefault(c => c.ChapterId == req.ChapterId);
+    if (chapter == null) { ctx.Response.StatusCode = 404; await ctx.Response.WriteAsync("章节不存在"); return; }
+
+    var cfg = LoadApiConfig();
+    if (cfg == null) { ctx.Response.StatusCode = 400; await ctx.Response.WriteAsync("还没配置 AI 服务商。"); return; }
+
+    var tpl = SettingsBookTemplates.Find(chapter.SourceKey);
+    string taskText = tpl?.AiTask ?? "把与本章主题相关的已有设定整理成条目式内容，忠于已有事实，"
+        + "需要补全而素材未明说的内容标注【推断】。";
+
+    string userPrompt = AiPrompts.Section("目标章节", $"{chapter.Title}\n{taskText}");
+    userPrompt += "\n" + AiPrompts.Section("作品简介", p.Description);
+    userPrompt += "\n" + PromptContextBuilder.ProjectContext(p, ws.Memory());
+    if (!string.IsNullOrWhiteSpace(chapter.Content))
+        userPrompt += "\n" + AiPrompts.Section("本章已有内容（在此基础上完善，不要推翻）", chapter.Content);
+    userPrompt += "\n请直接输出这一章的成稿内容。";
+
+    var system = PromptContextBuilder.BuildSystemPrompt(
+        p,
+        NovelSkillStore.ResolveTaskPrompt(null, AiPrompts.Keys.SettingBook, AiPrompts.Task.SettingBook),
+        null, null,
+        NovelSkillStore.ResolveContract(null, AiPrompts.Keys.SettingBook, AiPrompts.StructuredOutput),
+        includeSettingsBook: false);
+
+    ctx.Response.ContentType = "text/event-stream; charset=utf-8";
+    ctx.Response.Headers.CacheControl = "no-cache";
+
+    async Task Send(string type, object payload)
+    {
+        await ctx.Response.WriteAsync($"data: {JsonSerializer.Serialize(new { type, payload })}\n\n");
+        await ctx.Response.Body.FlushAsync();
+    }
+
+    try
+    {
+        var service = ApiProviders.CreateService(cfg);
+        var result = await service.CompleteTextAsync(userPrompt, system, new CompletionOptions
+        {
+            MaxTokens = 16384,
+            Temperature = 0.5,
+            Model = cfg.Model,
+            OnNotice = msg => { _ = Send("notice", msg); },
+            OnProgress = (inTok, outTok) => { _ = Send("progress", new { inTok, outTok }); },
+            OnStreamText = text => { _ = Send("text", text); },
+        });
+
+        if (result.IsUsable)
+        {
+            ws.SaveSettingsBookChapterContent(chapter.ChapterId, result.Text);
+            await ws.BroadcastAsync("settingsbook-changed", new { chapterId = chapter.ChapterId });
+        }
+        await Send("done", new { text = result.Text, ok = result.IsUsable, saved = result.IsUsable });
+    }
+    catch (Exception ex)
+    {
+        await Send("error", ex.Message);
+    }
+});
+
+// 导出整本设定集（与桌面版同一个导出服务，排版规则一份）
+app.MapGet("/api/settingsbook/export", (WorkspaceService ws, string? format) =>
+{
+    var p = ws.Current;
+    if (p == null) return Results.BadRequest(new { error = "先打开一本书" });
+
+    SettingsBookTemplates.EnsureBook(p);
+    var ext = (format ?? "docx").ToLowerInvariant() switch
+    {
+        "pdf" => ".pdf", "txt" => ".txt", _ => ".docx",
+    };
+    var path = Path.Combine(Path.GetTempPath(), $"设定集-{DateTime.Now:yyyyMMdd-HHmmss}{ext}");
+    try
+    {
+        switch (ext)
+        {
+            case ".pdf": SettingsBookExportService.ExportPdf(path, p); break;
+            case ".txt": SettingsBookExportService.ExportTxt(path, p); break;
+            default: SettingsBookExportService.ExportWord(path, p); break;
+        }
+        var bytes = File.ReadAllBytes(path);
+        var mime = ext switch
+        {
+            ".pdf" => "application/pdf",
+            ".txt" => "text/plain; charset=utf-8",
+            _ => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        };
+        return Results.File(bytes, mime,
+            fileDownloadName: $"{SettingsBookExportService.BookTitle(p.SettingsBook!, p)}{ext}");
+    }
+    catch (Exception ex) { return Results.BadRequest(new { error = ex.Message }); }
+    finally { try { if (File.Exists(path)) File.Delete(path); } catch { } }
+});
+
 app.Run();
 
 // ══════════════════════════════════════════════════════════════════
@@ -666,3 +960,41 @@ public record SettingsReq(
     [property: JsonPropertyName("background")] string? Background,
     [property: JsonPropertyName("style")] string? Style,
     [property: JsonPropertyName("viewpoint")] string? Viewpoint);
+
+public record SkillSaveReq(
+    [property: JsonPropertyName("id")] string? Id,
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("description")] string? Description,
+    [property: JsonPropertyName("appliesTo")] List<string>? AppliesTo,
+    [property: JsonPropertyName("presets")] List<string>? Presets,
+    [property: JsonPropertyName("taskPrompt")] string? TaskPrompt,
+    [property: JsonPropertyName("outputContract")] string? OutputContract,
+    [property: JsonPropertyName("inputHint")] string? InputHint);
+
+public record SkillImportReq([property: JsonPropertyName("json")] string? Json);
+
+public record PromptSlotReq(
+    [property: JsonPropertyName("presetId")] string? PresetId,
+    [property: JsonPropertyName("key")] string? Key,
+    [property: JsonPropertyName("value")] string? Value);
+
+public record PromptResetReq(
+    [property: JsonPropertyName("presetId")] string? PresetId,
+    [property: JsonPropertyName("key")] string? Key,
+    [property: JsonPropertyName("all")] bool? All);
+
+public record PromptActiveReq([property: JsonPropertyName("presetId")] string? PresetId);
+
+public record PromptCustomReq(
+    [property: JsonPropertyName("id")] string? Id,
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("basedOn")] string? BasedOn,
+    [property: JsonPropertyName("renameTo")] string? RenameTo,
+    [property: JsonPropertyName("delete")] bool? Delete);
+
+public record SbChapterReq(
+    [property: JsonPropertyName("chapterId")] string? ChapterId,
+    [property: JsonPropertyName("content")] string? Content,
+    [property: JsonPropertyName("includeInExport")] bool? IncludeInExport);
+
+public record SbGenerateReq([property: JsonPropertyName("chapterId")] string? ChapterId);

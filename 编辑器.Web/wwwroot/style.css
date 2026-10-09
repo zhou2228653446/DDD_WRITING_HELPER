@@ -279,3 +279,31 @@ dialog .grid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
 .stats-bars .zero{background:var(--line)}
 .stats-bars .d{font-size:10px;color:var(--muted);white-space:nowrap}
 .stats-bars .v{font-size:10px;color:var(--muted)}
+
+/* ---------- 设定集 ---------- */
+.sb-layout{display:flex;gap:12px;height:100%;min-height:0}
+.sb-chapters{list-style:none;margin:0;padding:0;width:230px;flex-shrink:0;overflow:auto;border-right:1px solid var(--line)}
+.sb-chapters li{padding:8px 10px;cursor:pointer;display:flex;justify-content:space-between;gap:6px;border-bottom:1px solid var(--line);font-size:14px}
+.sb-chapters li:hover{background:var(--hover,rgba(0,0,0,.04))}
+.sb-chapters li.active{background:var(--accent);color:#fff}
+.sb-chapters li.active .w{color:#fff}
+.sb-chapters .w{color:var(--muted);font-size:12px;flex-shrink:0}
+.sb-editor{flex:1;display:flex;flex-direction:column;min-width:0}
+.sb-editor textarea{flex:1;resize:none;margin-top:8px}
+.chk{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;font-size:13px;cursor:pointer}
+
+/* ---------- 提示词方案 ---------- */
+.p-entries{max-height:56vh;overflow:auto;padding-right:4px}
+.p-group{font-weight:600;margin:12px 0 4px;color:var(--accent)}
+.p-entry{border:1px solid var(--line);border-radius:6px;margin-bottom:6px;padding:6px 10px}
+.p-entry summary{cursor:pointer;font-weight:500;user-select:none}
+.p-entry.overridden{border-color:var(--accent)}
+.p-entry textarea{width:100%;margin-top:4px}
+.p-entry .tag{font-size:11px;color:var(--accent);border:1px solid var(--accent);border-radius:3px;padding:0 4px;margin-left:4px}
+#promptDlg,#skillDlg{width:min(720px,92vw)}
+#promptDlg textarea,#skillDlg textarea,#skillDlg input{width:100%}
+
+/* ---------- 技能管理 ---------- */
+.skill-layout{display:flex;gap:12px;min-height:0}
+.skill-layout > div{flex:1;min-width:0}
+.skill-layout ul{max-height:52vh}

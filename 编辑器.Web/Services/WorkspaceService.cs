@@ -471,6 +471,69 @@ public sealed class WorkspaceService
     }
 
     // ==================================================================
+    // 设定集（与桌面版同一本 SettingsBook，模板补建逻辑共用）
+    // ==================================================================
+
+    public object? SettingsBook()
+    {
+        lock (_gate)
+        {
+            var p = _project;
+            if (p == null) return null;
+
+            int before = p.SettingsBook?.Chapters.Count ?? -1;
+            SettingsBookTemplates.EnsureBook(p);
+            if (p.SettingsBook!.Chapters.Count != before) p.Save();   // 模板补了章才落盘
+
+            return new
+            {
+                title = p.SettingsBook.Title,
+                subtitle = p.SettingsBook.Subtitle,
+                chapters = p.SettingsBook.Chapters.Select(c => new
+                {
+                    chapterId = c.ChapterId,
+                    sourceKey = c.SourceKey,
+                    sourceLabel = SettingsBookTemplates.SourceLabel(c.SourceKey),
+                    title = c.Title,
+                    content = c.Content,
+                    includeInExport = c.IncludeInExport,
+                    isAiGenerated = c.IsAiGenerated,
+                    modified = c.ModifiedDate,
+                }),
+            };
+        }
+    }
+
+    /// <summary>改设定集某章：内容或"是否入导出"。全 null 时视为没改动。</summary>
+    public bool UpdateSettingsBookChapter(string chapterId, string? content, bool? includeInExport)
+    {
+        lock (_gate)
+        {
+            var c = _project?.SettingsBook?.Chapters.FirstOrDefault(x => x.ChapterId == chapterId);
+            if (c == null) return false;
+
+            if (content != null) { c.Content = content; c.ModifiedDate = DateTime.Now; }
+            if (includeInExport.HasValue) c.IncludeInExport = includeInExport.Value;
+            _project!.Save();
+            return true;
+        }
+    }
+
+    /// <summary>AI 生成设定集某章后的写回（桌面版 GenerateSettingsBookChapterAsync 的收尾同款）。</summary>
+    public void SaveSettingsBookChapterContent(string chapterId, string content)
+    {
+        lock (_gate)
+        {
+            var c = _project?.SettingsBook?.Chapters.FirstOrDefault(x => x.ChapterId == chapterId);
+            if (c == null) return;
+            c.Content = content;
+            c.IsAiGenerated = true;
+            c.ModifiedDate = DateTime.Now;
+            _project!.Save();
+        }
+    }
+
+    // ==================================================================
     // 广播：让网页立刻看到改动（人自己改的，或 agent 改的）
     // ==================================================================
 

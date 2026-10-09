@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <!-- ⚠ 必须是 net10.0-windows：要引用桌面版的 编辑器.csproj（WPF），
+         而 net10.0（跨平台）引用不了更具体的 net10.0-windows。
+         代价是这个 Web 工程被绑定在 Windows 上——部署到 Linux 服务器就不行了。
+         现阶段服务器就跑这台机器，先接受；将来若要跨平台，得把核心逻辑抽成
+         独立的 编辑器.Core 类库（那时桌面版和 Web 版都引用它）。 -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>编辑器.Web</AssemblyName>
+    <RootNamespace>编辑器.Web</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 核心逻辑全部复用桌面版：NovelProject / AiPrompts / ApiProviders / 统计 / 快照 -->
+    <ProjectReference Include="..\编辑器\编辑器.csproj" />
+    <!-- MCP 的 28 个工具与分发逻辑：agent 通过 HTTP 连进来时直接复用，不另写一份 -->
+    <ProjectReference Include="..\编辑器.Mcp\编辑器.Mcp.csproj" />
+  </ItemGroup>
+
+</Project>

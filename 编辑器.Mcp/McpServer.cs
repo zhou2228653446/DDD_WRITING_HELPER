@@ -80,57 +80,88 @@ internal static class McpServer
         string? line;
         while ((line = await reader.ReadLineAsync()) != null)
         {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-
-            JsonDocument doc;
-            try
-            {
-                doc = JsonDocument.Parse(line);
-            }
-            catch (Exception ex)
-            {
-                await SendAsync(writer, RpcError(null, -32700, $"JSON 解析失败：{ex.Message}"));
-                continue;
-            }
-
-            using (doc)
-            {
-                var root = doc.RootElement;
-                if (!root.TryGetProperty("method", out var mEl))
-                {
-                    await SendAsync(writer, RpcError(null, -32600, "缺少 method 字段"));
-                    continue;
-                }
-
-                var method = mEl.GetString() ?? "";
-                var hasId = root.TryGetProperty("id", out var idEl);
-                var parameters = root.TryGetProperty("params", out var pEl) ? pEl : default;
-
-                // 通知（notifications/*）没有 id，按协议不回复
-                if (!hasId)
-                {
-                    Log($"← 通知 {method}");
-                    continue;
-                }
-
-                Log($"← {method}");
-                object response;
-                try
-                {
-                    response = await DispatchAsync(method, parameters, idEl);
-                }
-                catch (Exception ex)
-                {
-                    Log($"处理 {method} 异常：{ex}");
-                    response = RpcError(idEl, -32603, $"内部错误：{ex.Message}");
-                }
-
-                await SendAsync(writer, response);
-            }
+            var response = await HandleRequestAsync(line);
+            if (response != null) await SendAsync(writer, response);
         }
 
         Log("stdin 关闭，退出");
     }
+
+    /// <summary>
+    /// 处理一行 JSON-RPC 请求，返回响应对象；返回 null 表示"不回复"
+    /// （空行，或 notifications/* 这类不带 id 的通知——按协议本来就不该回）。
+    ///
+    /// ★ 抽出来是为了让 **stdio 与 HTTP 两种传输共用同一份分发逻辑**：
+    /// 桌面 agent 客户端走 stdio，Web 版走 HTTP，但工具实现只有一份。
+    /// 否则两边各写一遍分发，改一个工具要改两处，迟早不一致。
+    /// </summary>
+    internal static async Task<object?> HandleRequestAsync(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line)) return null;
+
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(line);
+        }
+        catch (Exception ex)
+        {
+            return RpcError(null, -32700, $"JSON 解析失败：{ex.Message}");
+        }
+
+        using (doc)
+        {
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("method", out var mEl))
+                return RpcError(null, -32600, "缺少 method 字段");
+
+            var method = mEl.GetString() ?? "";
+            var hasId = root.TryGetProperty("id", out var idEl);
+            var parameters = root.TryGetProperty("params", out var pEl) ? pEl : default;
+
+            // 通知（notifications/*）没有 id，按协议不回复
+            if (!hasId)
+            {
+                Log($"← 通知 {method}");
+                return null;
+            }
+
+            Log($"← {method}");
+            try
+            {
+                return await DispatchAsync(method, parameters, idEl);
+            }
+            catch (Exception ex)
+            {
+                Log($"处理 {method} 异常：{ex}");
+                return RpcError(idEl, -32603, $"内部错误：{ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// 确保 MCP 的会话打开的是指定那本书（已经开着就不动）。
+    ///
+    /// Web 版需要它：网页上打开的书和 MCP session 里的书必须是同一本，
+    /// 否则 agent 改的是 A 书、网页显示的却是 B 书——两个入口各有一份状态，
+    /// 这在"人看着 agent 写"的场景下是致命的。
+    /// </summary>
+    internal static ToolResult EnsureOpen(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return ToolResult.Fail("路径为空");
+        if (string.Equals(_session.Path, path, StringComparison.OrdinalIgnoreCase))
+            return ToolResult.Ok("already-open");
+        return _session.Open(path);
+    }
+
+    /// <summary>当前会话打开的项目路径（供 Web 侧核对是否同一本）。</summary>
+    internal static string CurrentPath => _session.Path;
+
+    /// <summary>
+    /// 装通知通道。stdio 模式写 stdout；Web 版改成往 SignalR 广播，
+    /// 这样 agent 的操作能实时出现在用户网页上（人机协同的关键一环）。
+    /// </summary>
+    internal static void SetNotifier(Action<object>? notify) => _notify = notify;
 
     private static async Task SendAsync(TextWriter writer, object response)
     {

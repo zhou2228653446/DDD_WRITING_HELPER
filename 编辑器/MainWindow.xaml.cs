@@ -2769,16 +2769,8 @@ namespace 编辑器
         private string BuildProjectContext()
         {
             SyncAiContextToProject();
-            if (_currentProject == null) return "";
-
-            return AiPrompts.BuildContextBlock(
-                _currentProject.FullOutline,
-                _currentProject.ChapterOutline,
-                _currentProject.BuildEffectiveCharacterSettings(),
-                _currentProject.BackgroundSettings,
-                _currentProject.WritingStyle,
-                _memoryManager?.GetRawMemory(),
-                _currentProject.NarrativeViewpoint);
+            // 实现移到 PromptContextBuilder：Web 版要用同一套上下文规则
+            return PromptContextBuilder.ProjectContext(_currentProject, _memoryManager?.GetRawMemory());
         }
 
         /// <summary>
@@ -2786,14 +2778,7 @@ namespace 编辑器
         /// </summary>
         private string BuildRelatedChaptersContext()
         {
-            if (_currentProject == null) return "";
-            var selectedIds = _aiPanel.GetSelectedChapterIds();
-            if (selectedIds.Count == 0) return "";
-
-            var rows = _currentProject.Chapters
-                .Where(c => selectedIds.Contains(c.ChapterId))
-                .Select(c => (c.ChapterNumber, c.Title, c.Content ?? ""));
-            return AiPrompts.BuildRelatedChapters(rows);
+            return PromptContextBuilder.RelatedChapters(_currentProject, _aiPanel.GetSelectedChapterIds());
         }
 
         /// <summary>

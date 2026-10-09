@@ -1,0 +1,112 @@
+:root{
+  --bg:#f4f2ec; --panel:#fbfaf6; --ink:#33302a; --muted:#7c7468;
+  --line:#ded7c9; --accent:#4a729c; --ok:#5f8f62; --warn:#a0742f;
+  --radius:8px;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#1a1c20; --panel:#22252a; --ink:#cfcac2; --muted:#8b9098;
+    --line:#3f444d; --accent:#7ba3cc; --ok:#5ea97e; --warn:#c2954a;
+  }
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  background:var(--bg); color:var(--ink);
+  font:14px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+  display:flex; flex-direction:column;
+}
+.grow{flex:1}
+.muted{color:var(--muted);font-size:12px}
+.hidden{display:none!important}
+
+header{
+  display:flex;align-items:center;gap:8px;padding:10px 16px;
+  background:var(--panel);border-bottom:1px solid var(--line);flex-shrink:0;
+}
+.brand{font-weight:600;margin-right:8px}
+header select,header button,.editor-bar input,.ai-box select,.ai-box button{
+  font:inherit;color:var(--ink);background:var(--bg);
+  border:1px solid var(--line);border-radius:var(--radius);padding:5px 10px;
+}
+header button{cursor:pointer}
+.tabs{display:flex;gap:4px;margin-left:8px}
+.tab{
+  border:1px solid transparent;background:transparent;cursor:pointer;
+  padding:5px 12px;border-radius:var(--radius);color:var(--muted);
+}
+.tab.active{background:var(--bg);border-color:var(--line);color:var(--ink)}
+
+main{flex:1;display:flex;min-height:0}
+aside,section{overflow:auto}
+#chapters{
+  width:230px;flex-shrink:0;background:var(--panel);
+  border-right:1px solid var(--line);display:flex;flex-direction:column;
+}
+.panel-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:10px 12px;font-size:12px;color:var(--muted);
+  border-bottom:1px solid var(--line);
+}
+#chList{list-style:none;margin:0;padding:4px;overflow:auto;flex:1}
+#chList li{
+  padding:7px 10px;border-radius:var(--radius);cursor:pointer;
+  display:flex;justify-content:space-between;gap:8px;align-items:baseline;
+}
+#chList li:hover{background:var(--bg)}
+#chList li.active{background:var(--bg);font-weight:600}
+#chList .w{font-size:11px;color:var(--muted);flex-shrink:0}
+.mini{
+  border:none;background:transparent;color:var(--muted);cursor:pointer;
+  font-size:16px;line-height:1;padding:0 4px;
+}
+
+#center{flex:1;display:flex;flex-direction:column;min-width:0}
+.view{display:flex;flex-direction:column;height:100%;padding:12px}
+.editor-bar{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.editor-bar input{flex:1;max-width:320px}
+#editor{
+  flex:1;resize:none;font:16px/1.9 "Songti SC","SimSun",serif;
+  color:var(--ink);background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--radius);padding:18px 22px;outline:none;
+}
+
+.cards{display:flex;flex-wrap:wrap;gap:12px;overflow:auto}
+.card{
+  width:250px;background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--radius);padding:12px;cursor:pointer;
+}
+.card:hover{border-color:var(--accent)}
+.card .top{display:flex;align-items:center;gap:7px;margin-bottom:6px}
+.dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.card .t{font-weight:600}
+.card .w{margin-left:auto;font-size:11px;color:var(--muted)}
+.card .s{font-size:12px;color:var(--muted);max-height:44px;overflow:hidden}
+.outline-stats{margin-bottom:10px;font-size:12px;color:var(--muted)}
+
+#view-settings label{display:block;margin-bottom:10px;font-size:12px;color:var(--muted)}
+#view-settings textarea,#view-settings input{
+  width:100%;font:inherit;color:var(--ink);background:var(--panel);
+  border:1px solid var(--line);border-radius:var(--radius);padding:8px;resize:vertical;
+}
+#view-settings .primary,#aiGoBtn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+
+#right{
+  width:320px;flex-shrink:0;background:var(--panel);
+  border-left:1px solid var(--line);display:flex;flex-direction:column;
+}
+.ai-box{padding:12px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--line)}
+.ai-box textarea{
+  font:inherit;color:var(--ink);background:var(--bg);
+  border:1px solid var(--line);border-radius:var(--radius);padding:8px;resize:vertical;
+}
+.ai-box button{cursor:pointer}
+.ai-out{
+  min-height:80px;max-height:280px;overflow:auto;font-size:13px;
+  background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);padding:10px;
+  white-space:pre-wrap;
+}
+.live{flex:1;overflow:auto;padding:8px 12px;font-size:12px}
+.live .row{padding:5px 0;border-bottom:1px solid var(--line);color:var(--muted)}
+.live .row b{color:var(--ink);font-weight:600}
+.live .row.agent b{color:var(--accent)}

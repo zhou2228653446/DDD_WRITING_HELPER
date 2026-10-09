@@ -307,3 +307,112 @@ dialog .grid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
 .skill-layout{display:flex;gap:12px;min-height:0}
 .skill-layout > div{flex:1;min-width:0}
 .skill-layout ul{max-height:52vh}
+
+/* ══════════════ 材质图层（配色 × 材质，变量由 appearance.js 写入） ══════════════
+   与桌面版 ThemeTokens.Surface() 同一个做法：**颗粒与柔光烧进每个表面自己的
+   background-image**，而不是盖一整层。
+   ⚠ 两条铁律：
+     1. 只有随机噪声能进平铺 tile；柔光/高光这类规律性渐变一律 no-repeat 拉伸，
+        否则每个 tile 各画一道，满屏割裂斜纹（桌面版踩过这个坑）。
+     2. 颗粒不能做成"盖在内容之上的一层"——那会糊住文字；也不能只放最底下，
+        会被不透明面板挡住（只有缝隙里看得见）。 */
+
+body{
+  background-color:var(--bg);
+  background-image:var(--grain-window,none);
+  background-repeat:repeat;
+  background-size:256px 256px;
+}
+
+/* 背景图：单独一层、35% 不透明度（桌面端就是 0.35——保留底色的对比度，
+   不至于让正文糊在照片上），面板再按材质的透光率透出它 */
+body::before{
+  content:'';position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:var(--bg-img,none);
+  background-size:cover;background-position:center;background-repeat:no-repeat;
+  opacity:.35;
+}
+
+/* 整窗柔光：再补一道极淡的（拉伸材质层内已有柔光，所以这里只给 0.22） */
+body::after{
+  content:'';position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:var(--sheen-global,none);
+  background-repeat:no-repeat;background-size:100% 100%;
+}
+header,main{position:relative;z-index:1}
+#view-write,#view-outline,#view-characters,#view-literature,#view-sbook,#view-snapshots,#view-settings{z-index:0}
+
+/* 各表面：颗粒（平铺 256px）+ 柔光 + 液态玻璃高光带 */
+header{
+  background-color:var(--menu-bg);
+  background-image:var(--grain-menu,none),var(--sheen-surf,none),var(--gloss,none);
+  background-repeat:repeat,no-repeat,no-repeat;
+  background-size:256px 256px,100% 100%,100% 100%;
+  box-shadow:var(--edge,none);
+  backdrop-filter:blur(var(--glass-blur,0px)) saturate(1.08);
+}
+#chapters,#right{
+  background-color:var(--panel);
+  background-image:var(--grain-panel,none),var(--sheen-surf,none),var(--gloss,none);
+  background-repeat:repeat,no-repeat,no-repeat;
+  background-size:256px 256px,100% 100%,100% 100%;
+  box-shadow:var(--edge,none);
+  backdrop-filter:blur(var(--glass-blur,0px)) saturate(1.08);
+}
+/* 正文区：桌面端这里就是 editorBg（带纸面感），不再是透出窗口底 */
+#center{
+  background-color:var(--editor-bg);
+  background-image:var(--grain-editor,none),var(--sheen-surf,none),var(--gloss,none);
+  background-repeat:repeat,no-repeat,no-repeat;
+  background-size:256px 256px,100% 100%,100% 100%;
+}
+#editor,.editor-bar{background-color:transparent;background-image:none}
+dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
+  background-color:var(--panel);
+  background-image:var(--grain-panel,none),var(--sheen-surf,none);
+  background-repeat:repeat,no-repeat;
+  background-size:256px 256px,100% 100%;
+  box-shadow:var(--edge,none),0 12px 40px rgba(0,0,0,.18);
+  backdrop-filter:blur(var(--glass-blur,0px)) saturate(1.08);
+}
+
+/* ---------- 顶栏配色下拉旁边加了个「外观」按钮 ---------- */
+#appearanceBtn{margin-left:2px}
+
+/* ---------- 外观设置对话框 ---------- */
+#appearanceDlg{width:min(760px,94vw);max-height:88vh}
+.ap-section{font-weight:600;margin:14px 0 6px;color:var(--accent)}
+.ap-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.ap-grid.two{grid-template-columns:repeat(2,1fr)}
+.ap-item{
+  display:flex;flex-direction:column;gap:5px;padding:8px 10px;cursor:pointer;
+  border:1px solid var(--line);border-radius:8px;background:var(--panel);
+}
+.ap-item.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.ap-item input{display:none}
+.ap-name{font-weight:600;font-size:13px}
+.ap-desc{font-size:11px;color:var(--muted);line-height:1.5}
+.ap-chips{display:flex;gap:4px}
+.ap-chips i{width:26px;height:16px;border-radius:3px;border:1px solid rgba(0,0,0,.12)}
+
+/* 材质缩略块：与真实界面同一套合成算法 → 所见即所得 */
+.mat-preview{
+  position:relative;display:block;height:52px;border-radius:6px;overflow:hidden;
+  background:var(--pv-bg);box-shadow:var(--pv-edge,none);
+}
+.mat-preview::before{
+  content:'';position:absolute;inset:0;background-image:var(--pv-grain,none);
+  background-repeat:repeat;background-size:256px 256px;
+}
+.mat-preview::after{
+  content:'';position:absolute;inset:0;background-image:var(--pv-gloss,none),var(--pv-sheen,none);
+  background-size:100% 100%;background-repeat:no-repeat;
+}
+
+.ap-slider{display:flex;align-items:center;gap:10px}
+.ap-slider input[type=range]{flex:1}
+.ap-bg{display:flex;align-items:center;gap:10px;margin:6px 0}
+.ap-bg-preview{
+  width:96px;height:54px;border-radius:6px;border:1px solid var(--line);
+  background:center/cover no-repeat;flex-shrink:0;
+}

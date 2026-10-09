@@ -783,6 +783,99 @@ app.MapGet("/api/character-appearances", (WorkspaceService ws) =>
     Results.Ok(new { stats = ws.CharacterAppearances() }));
 
 // ══════════════════════════════════════════════════════════════════
+// 外观：配色 × 材质（与桌面版共用 appearance.json，48 种组合）
+//
+// 配色与材质的定义**不在这里重复一份**，直接从 AppearanceManager 取——
+// 桌面端加了新配色/新材质，网页端自动就有，不会两边走偏。
+// ══════════════════════════════════════════════════════════════════
+
+app.MapGet("/api/appearance", () =>
+{
+    var cfg = new AppearanceManager(ConfigDir()).Load();
+    var bg = WebBgFile();
+    return Results.Ok(new
+    {
+        scheme = cfg.PresetName,
+        material = cfg.MaterialName,
+        intensity = cfg.MaterialIntensity,
+        bgUrl = bg == null ? null : "/api/appearance/bg?v=" + File.GetLastWriteTimeUtc(bg).Ticks,
+        schemes = AppearanceManager.ColorSchemes.Select(s => new
+        {
+            name = s.Name, displayName = s.DisplayName, description = s.Description,
+            windowBg = s.WindowBg, panelBg = s.PanelBg, editorBg = s.EditorBg,
+            menuBg = s.MenuBg, statusBarBg = s.StatusBarBg,
+            textColor = s.TextColor, borderColor = s.BorderColor, splitterBg = s.SplitterBg,
+            accent = s.Accent, textMuted = s.TextMuted, danger = s.Danger, isDark = s.IsDark,
+        }),
+        materials = AppearanceManager.BuiltInMaterials.Select(m => new
+        {
+            name = m.Name, displayName = m.DisplayName, description = m.Description,
+            kind = m.Kind.ToString().ToLowerInvariant(),
+            texture = m.Texture, sheen = m.Sheen, translucency = m.Translucency,
+            stretched = m.Stretched, highGloss = m.HighGloss, edgeLight = m.EdgeLight,
+        }),
+    });
+});
+
+// 保存：只在点「确定」时调用；「取消」与实时预览全在浏览器侧，不落盘
+app.MapPost("/api/appearance", (AppearanceReq req) =>
+{
+    var mgr = new AppearanceManager(ConfigDir());
+    var cfg = mgr.Load();
+
+    if (AppearanceManager.GetColorScheme(req.Scheme) != null) cfg.PresetName = req.Scheme!;
+    if (AppearanceManager.GetMaterial(req.Material) != null) cfg.MaterialName = req.Material!;
+    cfg.MaterialIntensity = Math.Clamp(req.Intensity ?? cfg.MaterialIntensity, 0.0, 2.0);
+
+    mgr.Save(cfg);
+    return Results.Ok(new { ok = true, scheme = cfg.PresetName, material = cfg.MaterialName, intensity = cfg.MaterialIntensity });
+});
+
+// 自定义背景图：桌面版存本机路径，网页版存服务器上的一个文件（任何设备打开都能看到）
+app.MapGet("/api/appearance/bg", () =>
+{
+    var bg = WebBgFile();
+    if (bg == null) return Results.NotFound();
+    var ext = Path.GetExtension(bg).ToLowerInvariant();
+    var mime = ext switch
+    {
+        ".jpg" or ".jpeg" => "image/jpeg",
+        ".webp" => "image/webp",
+        ".gif" => "image/gif",
+        _ => "image/png",
+    };
+    return Results.File(bg, mime);
+});
+
+app.MapPost("/api/appearance/bg", async (HttpContext ctx) =>
+{
+    var ext = (ctx.Request.Query["ext"].ToString() ?? "").ToLowerInvariant();
+    if (ext.Length is < 2 or > 5 || !ext.All(char.IsLetterOrDigit))
+        return Results.BadRequest(new { error = "扩展名不合法" });
+    if (!new[] { "png", "jpg", "jpeg", "webp", "gif" }.Contains(ext))
+        return Results.BadRequest(new { error = "只支持 PNG / JPG / WEBP / GIF" });
+
+    using var ms = new MemoryStream();
+    await ctx.Request.Body.CopyToAsync(ms);
+    if (ms.Length == 0) return Results.BadRequest(new { error = "空文件" });
+    if (ms.Length > 8 * 1024 * 1024) return Results.BadRequest(new { error = "图片请控制在 8MB 以内" });
+
+    foreach (var old in Directory.GetFiles(ConfigDir(), "web_bg.*")) File.Delete(old);
+    Directory.CreateDirectory(ConfigDir());
+    var path = Path.Combine(ConfigDir(), "web_bg." + ext);
+    await File.WriteAllBytesAsync(path, ms.ToArray());
+
+    return Results.Ok(new { ok = true, bgUrl = "/api/appearance/bg?v=" + File.GetLastWriteTimeUtc(path).Ticks });
+});
+
+app.MapDelete("/api/appearance/bg", () =>
+{
+    if (Directory.Exists(ConfigDir()))
+        foreach (var old in Directory.GetFiles(ConfigDir(), "web_bg.*")) File.Delete(old);
+    return Results.Ok(new { ok = true });
+});
+
+// ══════════════════════════════════════════════════════════════════
 // 设定集（SettingsBook：把各类设定统合成一本可编辑、可导出的资料书）
 // ══════════════════════════════════════════════════════════════════
 
@@ -909,6 +1002,14 @@ app.Run();
 static string ConfigDir() => Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TdxClaw");
 
+/// <summary>网页版上传的背景图（服务器上只留一个）。没有则返回 null。</summary>
+static string? WebBgFile()
+{
+    var dir = ConfigDir();
+    if (!Directory.Exists(dir)) return null;
+    return Directory.GetFiles(dir, "web_bg.*").FirstOrDefault();
+}
+
 static ApiConfig? LoadApiConfig()
 {
     try
@@ -998,3 +1099,8 @@ public record SbChapterReq(
     [property: JsonPropertyName("includeInExport")] bool? IncludeInExport);
 
 public record SbGenerateReq([property: JsonPropertyName("chapterId")] string? ChapterId);
+
+public record AppearanceReq(
+    [property: JsonPropertyName("scheme")] string? Scheme,
+    [property: JsonPropertyName("material")] string? Material,
+    [property: JsonPropertyName("intensity")] double? Intensity);

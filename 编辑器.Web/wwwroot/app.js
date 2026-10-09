@@ -22,29 +22,20 @@ const post = (url, body) => api(url, {
 });
 const del = url => api(url, { method: 'DELETE' });
 
-// ---------- 配色主题（与桌面版 AppearanceManager 同名同色） ----------
+// ---------- 外观（配色 × 材质，见 appearance.js；服务器上的 appearance.json 是唯一权威） ----------
 
-const THEMES = [
-  ['default-white', '温润纸白'], ['night-mode', '墨色玻璃'],
-  ['green-theme', '雾绿纸张'], ['yellow-theme', '暖砂纸卷'],
-  ['ocean-blue', '深海蓝'], ['mist-gray', '晨雾灰'],
-  ['terracotta', '赤陶'], ['ink-pine', '松墨'],
-];
-{
-  const sel = $('#themeSel');
-  for (const [id, name] of THEMES) {
-    const o = document.createElement('option');
-    o.value = id; o.textContent = name;
-    sel.appendChild(o);
-  }
-  const saved = localStorage.getItem('theme') || 'default-white';
-  document.documentElement.dataset.scheme = saved;
-  sel.value = saved;
-  sel.onchange = () => {
-    document.documentElement.dataset.scheme = sel.value;
-    localStorage.setItem('theme', sel.value);
-  };
-}
+// 顶栏的配色快捷下拉：只切配色，材质/强度/背景图保持不动
+$('#themeSel').onchange = async () => {
+  appearance.scheme = $('#themeSel').value;
+  appearanceDraft = pick(appearance);
+  applyAppearance(appearanceDraft);
+  await post('/api/appearance', {
+    scheme: appearance.scheme, material: appearance.material, intensity: appearance.intensity,
+  });
+  localStorage.setItem('appearance', JSON.stringify(appearanceDraft));
+  log(`配色已切换：${schemeName(appearance.scheme)}`);
+};
+$('#appearanceBtn').onclick = openAppearanceDlg;
 
 // ---------- 书目 ----------
 
@@ -1288,4 +1279,5 @@ document.addEventListener('keydown', e => {
 loadBooks().catch(e => console.error(e));
 loadSkills();
 loadPresetSelect();
+loadAppearance().catch(e => console.error(e));
 connect();

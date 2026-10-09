@@ -110,3 +110,86 @@ aside,section{overflow:auto}
 .live .row{padding:5px 0;border-bottom:1px solid var(--line);color:var(--muted)}
 .live .row b{color:var(--ink);font-weight:600}
 .live .row.agent b{color:var(--accent)}
+
+/* ---------- 导出按钮组 ---------- */
+.export{display:flex;align-items:center;gap:5px;margin-right:6px}
+.export button{
+  font:inherit;font-size:12px;color:var(--ink);background:var(--bg);
+  border:1px solid var(--line);border-radius:var(--radius);
+  padding:4px 9px;cursor:pointer;
+}
+.export button:hover{border-color:var(--accent)}
+
+/* ---------- 查找替换条 ---------- */
+#findBar{
+  display:flex;align-items:center;gap:6px;margin-bottom:8px;
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:6px 8px;
+}
+#findBar input{
+  font:inherit;font-size:13px;color:var(--ink);background:var(--bg);
+  border:1px solid var(--line);border-radius:var(--radius);padding:4px 8px;
+}
+#findInput{width:150px}
+#replaceInput{width:150px}
+.mini-btn{
+  font:inherit;font-size:12px;color:var(--ink);background:transparent;
+  border:1px solid var(--line);border-radius:var(--radius);
+  padding:3px 8px;cursor:pointer;
+}
+.mini-btn:hover{border-color:var(--accent)}
+
+/* ---------- 人物卡 ---------- */
+#charCards .card{cursor:default;width:260px}
+#charCards .card .fields{font-size:12px;color:var(--muted);margin-top:4px}
+#charCards .card .fields div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#charCards .card .ops{display:flex;gap:6px;margin-top:8px}
+.char-edit{
+  background:transparent;border:1px solid var(--line);border-radius:var(--radius);
+  color:var(--ink);font-size:12px;padding:2px 10px;cursor:pointer;
+}
+.char-edit:hover{border-color:var(--accent)}
+
+/* ---------- 快照列表 ---------- */
+.snap-list{display:flex;flex-direction:column;gap:8px;overflow:auto}
+.snap-item{
+  display:flex;align-items:center;gap:12px;
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:10px 14px;
+}
+.snap-item .when{font-weight:600;min-width:150px}
+.snap-item .why{color:var(--muted);font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.snap-item .size{color:var(--muted);font-size:12px;flex-shrink:0}
+.snap-restore{
+  font:inherit;font-size:12px;color:var(--ink);background:var(--bg);
+  border:1px solid var(--line);border-radius:var(--radius);
+  padding:4px 12px;cursor:pointer;flex-shrink:0;
+}
+.snap-restore:hover{border-color:var(--warn)}
+
+/* ---------- 人物对话框 ---------- */
+dialog{
+  background:var(--panel);color:var(--ink);border:1px solid var(--line);
+  border-radius:12px;padding:20px 24px;min-width:520px;max-width:640px;
+}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+dialog h3{margin:0 0 14px;font-size:16px}
+dialog label{display:block;font-size:12px;color:var(--muted);margin-bottom:9px}
+dialog input,dialog textarea{
+  width:100%;font:inherit;font-size:13px;color:var(--ink);background:var(--bg);
+  border:1px solid var(--line);border-radius:var(--radius);padding:6px 9px;
+  resize:vertical;outline:none;
+}
+dialog input:focus,dialog textarea:focus{border-color:var(--accent)}
+dialog .grid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+.dlg-btns{display:flex;gap:8px;margin-top:12px;align-items:center}
+.dlg-btns button{
+  font:inherit;font-size:13px;color:var(--ink);background:var(--bg);
+  border:1px solid var(--line);border-radius:var(--radius);
+  padding:6px 16px;cursor:pointer;
+}
+.dlg-btns .primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.dlg-btns .danger{color:#c0564f;border-color:#c0564f}
+
+hr{border:none;border-top:1px solid var(--line);margin:16px 0}
+#view-settings{max-width:760px}

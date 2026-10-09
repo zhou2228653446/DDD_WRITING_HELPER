@@ -226,15 +226,103 @@ public sealed class WorkspaceService
         };
     }
 
+    /// <summary>
+    /// 恢复到某个快照。
+    /// ⚠ 必须把快照里的 FilePath 换成当前的：快照存的是"存快照那一刻"的路径，
+    /// 项目被移动过就是过期值，不覆盖的话后续 Save 会写到别处去
+    /// （桌面版打开副本时踩过同一个坑）。
+    /// </summary>
+    public bool RestoreSnapshot(string id)
+    {
+        lock (_gate)
+        {
+            var path = _project?.FilePath;
+            if (path == null) return false;
+
+            var mgr = new ProjectSnapshotManager(path);
+            var entry = mgr.LoadIndex().FirstOrDefault(e => e.Id == id);
+            if (entry == null) return false;
+
+            var snap = mgr.LoadSnapshot(entry);
+            if (snap == null) return false;
+
+            snap.FilePath = path;
+            snap.Save();
+            _project = snap;
+            return true;
+        }
+    }
+
     public List<object> Snapshots()
     {
         var path = _project?.FilePath;
         if (path == null) return new();
 
         return new ProjectSnapshotManager(path).LoadIndex()
-            .Select(e => new { id = e.Id, text = e.DisplayText })
+            .Select(e => new { id = e.Id, description = e.Description, timestamp = e.Timestamp })
             .Cast<object>()
             .ToList();
+    }
+
+    // ==================================================================
+    // 人物卡
+    // ==================================================================
+
+    public List<Character> Characters()
+    {
+        lock (_gate)
+            return _project?.Characters ?? new List<Character>();
+    }
+
+    public void UpsertCharacter(Character c)
+    {
+        lock (_gate)
+        {
+            if (_project == null) return;
+
+            var exist = _project.Characters.FirstOrDefault(x => x.CharacterId == c.CharacterId);
+            if (exist != null)
+                _project.Characters[_project.Characters.IndexOf(exist)] = c;
+            else
+                _project.Characters.Add(c);
+
+            _project.Save();
+        }
+    }
+
+    public void DeleteCharacter(string id)
+    {
+        lock (_gate)
+        {
+            var c = _project?.Characters.FirstOrDefault(x => x.CharacterId == id);
+            if (c == null) return;
+            _project!.Characters.Remove(c);
+            _project.Save();
+        }
+    }
+
+    // ==================================================================
+    // AI 写作记忆（复用桌面版 AiMemoryManager，与界面共用同一份文件）
+    // ==================================================================
+
+    public string Memory()
+    {
+        var path = _project?.FilePath;
+        if (path == null) return "";
+
+        var m = new AiMemoryManager(path);
+        m.Load();
+        return m.GetMemoryContext();
+    }
+
+    public void SetMemory(string content)
+    {
+        var path = _project?.FilePath;
+        if (path == null) return;
+
+        var m = new AiMemoryManager(path);
+        m.Load();
+        m.SetMemory(content ?? "");
     }
 
     // ==================================================================

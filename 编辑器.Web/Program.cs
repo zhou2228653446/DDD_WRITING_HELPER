@@ -19,7 +19,13 @@ catch (Exception ex) { Console.Error.WriteLine($"[web] 载入提示词配置失�
 var app = builder.Build();
 
 app.UseDefaultFiles();
-app.UseStaticFiles();
+// 前端无构建步骤、改完即刷新，所以静态文件必须每次向服务器校验新鲜度，
+// 不许浏览器拿着旧 app.js 不放（刚在验证时踩过）。
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx =>
+        ctx.Context.Response.Headers["Cache-Control"] = "no-cache",
+});
 
 app.MapHub<LiveHub>("/hub/live");
 
@@ -176,6 +182,77 @@ app.MapPost("/api/settings", async (WorkspaceService ws, SettingsReq req) =>
 
 app.MapGet("/api/stats", (WorkspaceService ws) => Results.Ok(ws.Stats() ?? new { }));
 app.MapGet("/api/snapshots", (WorkspaceService ws) => Results.Ok(ws.Snapshots()));
+
+app.MapPost("/api/snapshot/restore", async (WorkspaceService ws, BookNameReq req) =>
+{
+    var ok = ws.RestoreSnapshot(req.Name ?? "");
+    if (!ok) return Results.NotFound(new { error = "找不到这个快照" });
+
+    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    return Results.Ok(new { ok = true });
+});
+
+// 导出：直接复用桌面版那三个服务（Word / PDF / TXT），排版规则只有一份
+app.MapGet("/api/export", (WorkspaceService ws, string? format) =>
+{
+    var p = ws.Current;
+    if (p == null) return Results.BadRequest("还没打开项目");
+
+    var f = (format ?? "docx").ToLowerInvariant();
+    var (ext, mime) = f switch
+    {
+        "pdf" => (".pdf", "application/pdf"),
+        "txt" => (".txt", "text/plain; charset=utf-8"),
+        _ => (".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    };
+
+    var safe = string.Concat(p.ProjectName.Split(Path.GetInvalidFileNameChars()));
+    if (string.IsNullOrWhiteSpace(safe)) safe = "书稿";
+    var tmp = Path.Combine(Path.GetTempPath(), $"{safe}-{Guid.NewGuid():N}{ext}");
+
+    try
+    {
+        if (f == "pdf") PdfExportService.Export(tmp, p);
+        else if (f == "txt") TxtExportService.Export(tmp, p);
+        else WordExportService.Export(tmp, p);
+
+        var bytes = File.ReadAllBytes(tmp);
+        return Results.File(bytes, mime, safe + ext);
+    }
+    finally
+    {
+        try { File.Delete(tmp); } catch { }
+    }
+});
+
+// ══════════════════════════════════════════════════════════════════
+// 人物卡 / AI 写作记忆
+// ══════════════════════════════════════════════════════════════════
+
+app.MapGet("/api/characters", (WorkspaceService ws) => Results.Ok(new { characters = ws.Characters() }));
+
+app.MapPost("/api/characters", async (WorkspaceService ws, Character c) =>
+{
+    ws.UpsertCharacter(c);
+    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    return Results.Ok(new { ok = true });
+});
+
+app.MapDelete("/api/characters/{id}", async (WorkspaceService ws, string id) =>
+{
+    ws.DeleteCharacter(id);
+    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    return Results.Ok(new { ok = true });
+});
+
+app.MapGet("/api/memory", (WorkspaceService ws) => Results.Ok(new { text = ws.Memory() }));
+
+app.MapPost("/api/memory", async (WorkspaceService ws, BookNameReq req) =>
+{
+    ws.SetMemory(req.Name ?? "");
+    await ws.BroadcastAsync("memory-changed", new { });
+    return Results.Ok(new { ok = true });
+});
 
 // ══════════════════════════════════════════════════════════════════
 // AI 生成（SSE 流式，前端能看着字一个一个出来）

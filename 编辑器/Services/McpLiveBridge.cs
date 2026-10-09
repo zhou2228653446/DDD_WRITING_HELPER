@@ -89,17 +89,28 @@ namespace 编辑器.Services
 
         /// <summary>
         /// 自检（--selftest）时置为 true，避免自检临时项目把用户开着的编辑器窗口刷屏。
+        /// 用 volatile 包装：它由调用方线程设置、后台发送线程读取，
+        /// 普通静态属性没有可见性保证（bool 读写虽原子，但可能被读到陈旧值）。
         /// </summary>
-        public static bool Suppressed { get; set; }
+        public static bool Suppressed
+        {
+            get => _suppressed;
+            set => _suppressed = value;
+        }
+        private static volatile bool _suppressed;
 
         /// <summary>进程内事件钩子（供单元测试或同进程调试直接订阅）。</summary>
         public static event Action<McpLiveEvent>? InProcessEvent;
 
+        // 有界 + 丢最旧的：万一后台发送任务死了或桌面端长时间连不上，
+        // 队列不会无限增长（无界队列在这种"没人消费"的情况下就是缓慢的内存泄漏）。
+        // 正常情况消费者会及时取走，256 条缓冲根本用不满。
         private static readonly Channel<McpLiveEvent> _sendChannel =
-            Channel.CreateUnbounded<McpLiveEvent>(new UnboundedChannelOptions
+            Channel.CreateBounded<McpLiveEvent>(new BoundedChannelOptions(256)
             {
                 SingleReader = true,
                 SingleWriter = false,
+                FullMode = BoundedChannelFullMode.DropOldest,
             });
 
         private static int _senderStarted;
@@ -234,32 +245,45 @@ namespace 编辑器.Services
                 NamedPipeClientStream? client = null;
                 StreamWriter? writer = null;
 
-                await foreach (var ev in _sendChannel.Reader.ReadAllAsync())
+                try
                 {
-                    if (Suppressed) continue;
-
-                    try
+                    await foreach (var ev in _sendChannel.Reader.ReadAllAsync())
                     {
-                        if (client == null || !client.IsConnected)
+                        if (Suppressed) continue;
+
+                        try
                         {
-                            DisposeClient(ref client, ref writer);
-                            client = new NamedPipeClientStream(".", PipeName, PipeDirection.Out, PipeOptions.Asynchronous);
-                            await client.ConnectAsync(50);
-                            writer = new StreamWriter(client, new UTF8Encoding(false))
+                            if (client == null || !client.IsConnected)
                             {
-                                AutoFlush = true,
-                                NewLine = "\n",
-                            };
-                        }
+                                DisposeClient(ref client, ref writer);
+                                client = new NamedPipeClientStream(".", PipeName, PipeDirection.Out, PipeOptions.Asynchronous);
+                                await client.ConnectAsync(50);
+                                writer = new StreamWriter(client, new UTF8Encoding(false))
+                                {
+                                    AutoFlush = true,
+                                    NewLine = "\n",
+                                };
+                            }
 
-                        var line = JsonSerializer.Serialize(ev, _jsonOptions);
-                        await writer!.WriteLineAsync(line);
+                            var line = JsonSerializer.Serialize(ev, _jsonOptions);
+                            await writer!.WriteLineAsync(line);
+                        }
+                        catch
+                        {
+                            // 桌面端未启动或已关闭：静默断开，下次事件再试
+                            DisposeClient(ref client, ref writer);
+                        }
                     }
-                    catch
-                    {
-                        // 桌面端未启动或已关闭：静默断开，下次事件再试
-                        DisposeClient(ref client, ref writer);
-                    }
+                }
+                catch
+                {
+                    // 循环本身出错：退出前必须把启动标志复位，
+                    // 否则这个桥会永久失效——Publish 只管入队，再没人消费。
+                }
+                finally
+                {
+                    DisposeClient(ref client, ref writer);
+                    Interlocked.Exchange(ref _senderStarted, 0);
                 }
             });
         }

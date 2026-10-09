@@ -279,7 +279,22 @@ namespace 编辑器
                 _currentProject.SettingsBook = fresh.SettingsBook;
                 _currentProject.LiteratureLibrary = fresh.LiteratureLibrary ?? new List<LiteratureEntry>();
 
-                bool structureChanged = SyncChaptersInPlace(_currentProject.Chapters, fresh.Chapters);
+                // ★ 用户正在界面上敲字、还没落盘时，绝不能让磁盘内容盖掉内存里的那几章。
+                //   MCP 存的版本里没有用户这一版，直接覆盖就是静默丢稿——
+                //   而且丢的是用户亲手写的字，是这个工具最不能出的事。
+                //   保护范围取"已打开的标签页 + 当前选中章"：用户最可能在编辑的就是这几章。
+                var protectedChapters = new HashSet<Chapter>();
+                if (_isDirty)
+                {
+                    foreach (var tab in EditorTabControl.Items.OfType<TabItem>())
+                        if (tab.Tag is Chapter tc) protectedChapters.Add(tc);
+
+                    var sel = GetSelectedChapter();
+                    if (sel != null) protectedChapters.Add(sel);
+                }
+
+                bool structureChanged =
+                    SyncChaptersInPlace(_currentProject.Chapters, fresh.Chapters, protectedChapters);
                 if (structureChanged)
                 {
                     RefreshProjectView();
@@ -320,7 +335,18 @@ namespace 编辑器
                     UpdateWordCount(currentCh?.Content);
                 }
 
-                _isDirty = false;
+                if (protectedChapters.Count > 0)
+                {
+                    // 有意保持 dirty：内存里现在是"MCP 改过的章 + 用户正在改的章"的合并结果，
+                    // 交给自动保存写回磁盘，两边的内容都不会丢。
+                    ShowNotification(
+                        $"MCP 已更新项目，但你正在编辑的 {protectedChapters.Count} 章尚未保存，已为你保留（稍后一并存盘）。",
+                        isError: false);
+                }
+                else
+                {
+                    _isDirty = false;
+                }
             }
             finally
             {
@@ -328,7 +354,14 @@ namespace 编辑器
             }
         }
 
-        private bool SyncChaptersInPlace(List<Chapter> currentList, List<Chapter> freshList)
+        /// <param name="protectedChapters">
+        /// 用户有未保存编辑的章节：这些章的正文与梗概**不覆盖**，
+        /// 保留内存里的版本（其余字段仍同步）。保护后调用方应保持 dirty，
+        /// 让自动保存把"MCP 改的章 + 用户改的章"合并写回磁盘。
+        /// </param>
+        private bool SyncChaptersInPlace(
+            List<Chapter> currentList, List<Chapter> freshList,
+            HashSet<Chapter>? protectedChapters = null)
         {
             bool structureChanged = currentList.Count != freshList.Count;
             var existingById = currentList.ToDictionary(c => c.ChapterId, StringComparer.Ordinal);
@@ -352,10 +385,15 @@ namespace 编辑器
 
                     existing.ChapterNumber = f.ChapterNumber;
                     existing.Title = f.Title;
-                    existing.Content = f.Content;
-                    existing.Summary = f.Summary;
-                    existing.ModifiedDate = f.ModifiedDate;
-                    existing.LastModified = f.LastModified;
+
+                    // 正文与梗概只在"用户没在改这一章"时才跟磁盘走
+                    if (protectedChapters == null || !protectedChapters.Contains(existing))
+                    {
+                        existing.Content = f.Content;
+                        existing.Summary = f.Summary;
+                        existing.ModifiedDate = f.ModifiedDate;
+                        existing.LastModified = f.LastModified;
+                    }
                     keptIds.Add(existing.ChapterId);
                     updatedOrder.Add(existing);
                 }

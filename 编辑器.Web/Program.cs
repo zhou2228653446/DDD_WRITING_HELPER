@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using 编辑器;
@@ -101,6 +102,7 @@ app.MapGet("/api/book", (WorkspaceService ws) =>
         chapters = p.Chapters.OrderBy(c => c.ChapterNumber).Select(c => new
         {
             n = c.ChapterNumber,
+            id = c.ChapterId,
             title = c.Title,
             words = c.WordCount,
             summary = c.Summary,
@@ -111,6 +113,15 @@ app.MapGet("/api/book", (WorkspaceService ws) =>
         background = p.BackgroundSettings,
         style = p.WritingStyle,
         viewpoint = p.NarrativeViewpoint,
+        world = p.WorldSetting == null ? null : new
+        {
+            worldName = p.WorldSetting.WorldName,
+            timePeriod = p.WorldSetting.TimePeriod,
+            location = p.WorldSetting.Location,
+            background = p.WorldSetting.Background,
+            magicSystem = p.WorldSetting.MagicSystem,
+            technologyLevel = p.WorldSetting.TechnologyLevel,
+        },
     });
 });
 
@@ -261,21 +272,36 @@ app.MapPost("/api/memory", async (WorkspaceService ws, BookNameReq req) =>
 app.MapPost("/api/ai", async (HttpContext ctx, WorkspaceService ws) =>
 {
     var req = await ctx.Request.ReadFromJsonAsync<AiReq>()
-              ?? new AiReq(null, null, 0, null);
+              ?? new AiReq(null, null, 0, null, null, null, null);
 
     var cfg = LoadApiConfig();
     if (cfg == null)
     {
         ctx.Response.StatusCode = 400;
-        await ctx.Response.WriteAsync("还没配置 AI 服务商。请在桌面版「AI 设置」里配好后重启本服务。");
+        await ctx.Response.WriteAsync("还没配置 AI 服务商。点右上角「AI 设置」配好 Key 再来。");
         return;
     }
 
     var service = ApiProviders.CreateService(cfg);
     var p = ws.Current;
 
-    // 与桌面版同源：同一个 PromptContextBuilder，同一套上下文规则
-    var system = PromptContextBuilder.BuildSystemPrompt(p, req.Task ?? "continue", null, null, req.OutputContract);
+    // 任务键 → 任务提示词文本（桌面版同源：先取默认，再让技能覆盖）
+    var skill = ResolveSkill(req.SkillId);
+    var (taskText, contract) = ResolveTask(req.Task, skill, req.OutputContract);
+
+    // 与桌面版同源：同一个 PromptContextBuilder（设定集/文献库/参考章节全部生效）
+    var system = PromptContextBuilder.BuildSystemPrompt(
+        p, taskText, ws.Memory(), req.RelatedChapterIds, contract);
+
+    // 审稿：把全书正文放进 user 侧（桌面版 RunAiReview 的做法）
+    var prompt = req.Prompt ?? "";
+    if ((req.Task ?? "") == "review" && p != null)
+    {
+        var book = string.Join("\n\n", p.Chapters.OrderBy(c => c.ChapterNumber)
+            .Select(c => $"── 第{c.ChapterNumber}章 {c.Title} ──\n{c.Content}"));
+        prompt = AiPrompts.Section("全书正文", book) + "\n" +
+                 "请对照我的设定（见系统部分）审这本书的一致性问题。" + prompt;
+    }
 
     ctx.Response.ContentType = "text/event-stream; charset=utf-8";
     ctx.Response.Headers.CacheControl = "no-cache";
@@ -288,7 +314,11 @@ app.MapPost("/api/ai", async (HttpContext ctx, WorkspaceService ws) =>
 
     try
     {
-        var result = await service.CompleteTextAsync(req.Prompt ?? "", system, new CompletionOptions
+        var history = req.History?.Select(m => new ChatMessage(
+            string.Equals(m.Role, "assistant", StringComparison.OrdinalIgnoreCase) ? "assistant" : "user",
+            m.Content ?? "")).ToList();
+
+        var result = await service.CompleteTextAsync(prompt, system, new CompletionOptions
         {
             MaxTokens = req.MaxTokens > 0 ? req.MaxTokens : 4096,
             Temperature = 0.7,
@@ -296,7 +326,7 @@ app.MapPost("/api/ai", async (HttpContext ctx, WorkspaceService ws) =>
             OnNotice = msg => { _ = Send("notice", msg); },
             OnProgress = (inTok, outTok) => { _ = Send("progress", new { inTok, outTok }); },
             OnStreamText = text => { _ = Send("text", text); },
-        });
+        }, history);
 
         await Send("done", new { text = result.Text, ok = result.IsUsable });
     }
@@ -306,12 +336,277 @@ app.MapPost("/api/ai", async (HttpContext ctx, WorkspaceService ws) =>
     }
 });
 
+// ── 任务解析：与桌面版 MainWindow.ResolveTaskText / ResolveContractText 同一套规则 ──
+
+static NovelSkill? ResolveSkill(string? skillId)
+{
+    if (string.IsNullOrEmpty(skillId)) return null;
+    try
+    {
+        return NovelSkillStore.Load(ConfigDir()).FirstOrDefault(s => s.Id == skillId);
+    }
+    catch { return null; }
+}
+
+static (string task, string? contract) ResolveTask(string? key, NovelSkill? skill, string? overrideContract)
+{
+    var k = key ?? "continue";
+    return k switch
+    {
+        "polish" => (NovelSkillStore.ResolveTaskPrompt(skill, AiPrompts.Keys.Polish, AiPrompts.Task.Polish),
+                     overrideContract ?? NovelSkillStore.ResolveContract(skill, AiPrompts.Keys.Polish, null)),
+        "expand" => (NovelSkillStore.ResolveTaskPrompt(skill, AiPrompts.Keys.Expand, AiPrompts.Task.Expand),
+                     overrideContract ?? NovelSkillStore.ResolveContract(skill, AiPrompts.Keys.Expand, null)),
+        "name" => (NovelSkillStore.ResolveTaskPrompt(skill, AiPrompts.Keys.Name, AiPrompts.Task.Name),
+                   overrideContract ?? NovelSkillStore.ResolveContract(skill, AiPrompts.Keys.Name, AiPrompts.StructuredOutput)),
+        "character" => (NovelSkillStore.ResolveTaskPrompt(skill, AiPrompts.Keys.Character, AiPrompts.Task.Character),
+                        overrideContract ?? NovelSkillStore.ResolveContract(skill, AiPrompts.Keys.Character, AiPrompts.StructuredOutput)),
+        "outline" => (NovelSkillStore.ResolveTaskPrompt(skill, AiPrompts.Keys.Outline, AiPrompts.Task.Outline),
+                      overrideContract ?? NovelSkillStore.ResolveContract(skill, AiPrompts.Keys.Outline, AiPrompts.StructuredOutput)),
+        "background" => (NovelSkillStore.ResolveTaskPrompt(skill, AiPrompts.Keys.Background, AiPrompts.Task.Background),
+                         overrideContract ?? NovelSkillStore.ResolveContract(skill, AiPrompts.Keys.Background, AiPrompts.StructuredOutput)),
+        "chapterOutline" => (NovelSkillStore.ResolveTaskPrompt(skill, AiPrompts.Keys.ChapterOutline, AiPrompts.Task.ChapterOutline),
+                             overrideContract ?? NovelSkillStore.ResolveContract(skill, AiPrompts.Keys.ChapterOutline, AiPrompts.StructuredOutput)),
+        "style" => (NovelSkillStore.ResolveTaskPrompt(skill, AiPrompts.Keys.WriteStyle, AiPrompts.Task.WriteStyle),
+                    overrideContract ?? NovelSkillStore.ResolveContract(skill, AiPrompts.Keys.WriteStyle, AiPrompts.StructuredOutput)),
+        "review" => (NovelSkillStore.ResolveTaskPrompt(skill, AiPrompts.Keys.Review, AiPrompts.Task.Review),
+                     overrideContract ?? NovelSkillStore.ResolveContract(skill, AiPrompts.Keys.Review, AiPrompts.StructuredOutput)),
+        "chat" => (NovelSkillStore.ResolveTaskPrompt(skill, AiPrompts.Keys.Chat, AiPrompts.Task.Chat),
+                   overrideContract ?? NovelSkillStore.ResolveContract(skill, AiPrompts.Keys.Chat, AiPrompts.StructuredOutput)),
+        // 默认按续写处理（与桌面版一致：续写/润色用创作类契约，BuildSections 里兜底）
+        _ => (NovelSkillStore.ResolveTaskPrompt(skill, AiPrompts.Keys.Continue, AiPrompts.Task.Continue),
+              overrideContract ?? NovelSkillStore.ResolveContract(skill, AiPrompts.Keys.Continue, null)),
+    };
+}
+
+// ── API 方案管理（与桌面版共用 api_profiles.json）──
+
 app.MapGet("/api/ai/profiles", () =>
 {
     var mgr = new ApiProfileManager(Path.Combine(ConfigDir(), "api_profiles.json"));
     mgr.Load();
-    return Results.Ok(new { active = mgr.ActiveProfileName, names = mgr.GetProfileNames() });
+    return Results.Ok(new
+    {
+        active = mgr.ActiveProfileName,
+        names = mgr.GetProfileNames(),
+        profiles = mgr.Profiles.Select(kv => new
+        {
+            name = kv.Key,
+            provider = kv.Value.Provider,
+            apiUrl = kv.Value.ApiUrl,
+            model = kv.Value.Model,
+            hasKey = !string.IsNullOrWhiteSpace(kv.Value.ApiKey),
+        }),
+    });
 });
+
+// 保存（新增或覆盖）一个方案。Key 传空字符串表示清空；不传（null）表示保留原 Key。
+app.MapPost("/api/ai/profiles/save", async (WorkspaceService ws, ProfileSaveReq req) =>
+{
+    var mgr = new ApiProfileManager(Path.Combine(ConfigDir(), "api_profiles.json"));
+    mgr.Load();
+
+    var name = (req.Name ?? "").Trim();
+    if (name.Length == 0) return Results.BadRequest(new { error = "方案名不能为空" });
+
+    var cfg = new ApiConfig
+    {
+        Provider = req.Provider ?? ApiProviders.IdOpenAi,
+        ApiUrl = req.ApiUrl ?? "",
+        Model = req.Model ?? "",
+        AuthOverride = req.AuthOverride ?? "",
+        ApiKey = req.ApiKey ?? "",
+    };
+    if (req.ApiKey == null)
+    {
+        // 不传 Key 就保留旧值——编辑方案时表单里没有明文 Key 回显
+        var old = mgr.Profiles.TryGetValue(name, out var o) ? o : null;
+        cfg.ApiKey = old?.ApiKey ?? "";
+    }
+
+    mgr.AddOrUpdate(name, cfg);
+    if (req.Activate == true) mgr.SetActive(name);
+    mgr.Save();   // 一次落盘同时覆盖"保存"与"激活"两个动作
+    await Task.CompletedTask;
+    return Results.Ok(new { ok = true });
+});
+
+app.MapPost("/api/ai/profiles/active", (NameReq req) =>
+{
+    var mgr = new ApiProfileManager(Path.Combine(ConfigDir(), "api_profiles.json"));
+    mgr.Load();
+    if (!mgr.Profiles.ContainsKey(req.Name ?? "")) return Results.NotFound(new { error = "没有这个方案" });
+    mgr.SetActive(req.Name!);
+    mgr.Save();
+    return Results.Ok(new { ok = true, active = mgr.ActiveProfileName });
+});
+
+app.MapPost("/api/ai/profiles/delete", (NameReq req) =>
+{
+    var mgr = new ApiProfileManager(Path.Combine(ConfigDir(), "api_profiles.json"));
+    mgr.Load();
+    return mgr.Delete(req.Name ?? "")
+        ? Results.Ok(new { ok = true })
+        : Results.NotFound(new { error = "没有这个方案" });
+});
+
+// 服务商预置（协议/地址/常用模型一次填好）
+app.MapGet("/api/ai/providers", () => Results.Ok(new
+{
+    providers = ApiProviders.All.Select(p => new
+    {
+        id = p.Id,
+        name = p.Name,
+        group = p.Group,
+        endpoint = p.Endpoint,
+        defaultModel = p.DefaultModel,
+        models = p.Models,
+        consoleUrl = p.ConsoleUrl,
+        note = p.Note,
+    }),
+}));
+
+// 测试连接：认证头走与真实调用同一份逻辑（防"测试成功、调用 401"的假阳性）
+app.MapPost("/api/ai/profiles/test", async (ProfileSaveReq req) =>
+{
+    var config = new ApiConfig
+    {
+        Provider = req.Provider ?? ApiProviders.IdOpenAi,
+        ApiUrl = req.ApiUrl ?? "",
+        Model = req.Model ?? "",
+        AuthOverride = req.AuthOverride ?? "",
+        ApiKey = req.ApiKey ?? "",
+    };
+    if (string.IsNullOrWhiteSpace(config.ApiKey))
+        return Results.Ok(new { ok = false, message = "请输入 API Key" });
+
+    try
+    {
+        using var client = new HttpClient();
+        client.Timeout = TimeSpan.FromSeconds(15);
+        ApiProviders.ApplyHeaders(client.DefaultRequestHeaders, config);
+        ApiProviders.ApplyExtraHeaders(client.DefaultRequestHeaders, config);
+
+        object body = ApiProviders.ResolveWire(config) == ApiWire.AnthropicMessages
+            ? new { model = config.Model, max_tokens = 10, messages = new[] { new { role = "user", content = "Hello" } } }
+            : new { model = config.Model, messages = new[] { new { role = "user", content = "Hello" } }, max_tokens = 10 };
+
+        var content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+        var response = await client.PostAsync(ApiProviders.ResolveEndpoint(config), content);
+
+        if (response.IsSuccessStatusCode)
+            return Results.Ok(new { ok = true, message = $"连接成功（{response.StatusCode}）" });
+
+        var err = await response.Content.ReadAsStringAsync();
+        return Results.Ok(new { ok = false, message = $"HTTP {(int)response.StatusCode}：{Truncate(err, 200)}" });
+    }
+    catch (Exception ex)
+    {
+        return Results.Ok(new { ok = false, message = ex.Message });
+    }
+});
+
+static string Truncate(string s, int max) => string.IsNullOrEmpty(s) || s.Length <= max ? s : s[..max] + "…";
+
+// ── 技能列表（内置 5 个 + 用户自定义，存 skills.json）──
+
+app.MapGet("/api/skills", () =>
+{
+    try
+    {
+        var skills = NovelSkillStore.Load(ConfigDir());
+        return Results.Ok(new
+        {
+            skills = skills.Select(s => new
+            {
+                id = s.Id, name = s.Name, description = s.Description,
+                isBuiltIn = s.IsBuiltIn, appliesTo = s.AppliesTo, inputHint = s.InputHint,
+            }),
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Ok(new { skills = Array.Empty<object>(), error = ex.Message });
+    }
+});
+
+// ══════════════════════════════════════════════════════════════════
+// 文献库（论文场景；AI 生成时自动作为引用上下文，正文引 [n]）
+// ══════════════════════════════════════════════════════════════════
+
+app.MapGet("/api/literature", (WorkspaceService ws) => Results.Ok(new { entries = ws.Literature() }));
+
+app.MapPost("/api/literature", async (WorkspaceService ws, LiteratureEntry e) =>
+{
+    ws.UpsertLiterature(e);
+    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    return Results.Ok(new { ok = true });
+});
+
+app.MapDelete("/api/literature/{id}", async (WorkspaceService ws, string id) =>
+{
+    var ok = ws.DeleteLiterature(id);
+    if (ok) await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    return ok ? Results.Ok(new { ok = true }) : Results.NotFound(new { error = "没有这条文献" });
+});
+
+app.MapPost("/api/literature/import-bibtex", async (WorkspaceService ws, BibReq req) =>
+{
+    var n = ws.ImportBibtex(req.Text ?? "");
+    if (n == 0) return Results.BadRequest(new { error = "没解析出任何条目（检查 .bib 内容）" });
+    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    return Results.Ok(new { ok = true, imported = n });
+});
+
+app.MapGet("/api/literature/gbt", (WorkspaceService ws) => Results.Ok(new { text = ws.GbtReferenceList() }));
+
+// 在线检索（OpenAlex / Semantic Scholar），勾选后走上面的 upsert 入库
+app.MapGet("/api/literature/search", async (string? q, string? source) =>
+{
+    if (string.IsNullOrWhiteSpace(q)) return Results.Ok(new { results = Array.Empty<object>() });
+    var src = string.Equals(source, "semantic", StringComparison.OrdinalIgnoreCase)
+        ? LiteratureSearchSource.SemanticScholar : LiteratureSearchSource.OpenAlex;
+    try
+    {
+        var list = await LiteratureSearch.SearchAsync(q, src, 15);
+        return Results.Ok(new
+        {
+            results = list.Select(r => new
+            {
+                title = r.Title, authors = r.Authors, year = r.Year, venue = r.Venue,
+                doi = r.Doi, display = r.Display,
+            }),
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+// ══════════════════════════════════════════════════════════════════
+// 单章梗概 / 世界设定 / 角色出场
+// ══════════════════════════════════════════════════════════════════
+
+app.MapPost("/api/chapter/{n:int}/summary", async (WorkspaceService ws, int n, BookNameReq req) =>
+{
+    var ok = ws.SetChapterSummary(n, req.Name ?? "");
+    if (!ok) return Results.NotFound(new { error = "没有这一章" });
+    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    return Results.Ok(new { ok = true });
+});
+
+app.MapGet("/api/world", (WorkspaceService ws) => Results.Ok(ws.WorldSetting() ?? new { }));
+
+app.MapPost("/api/world", async (WorkspaceService ws, JsonElement req) =>
+{
+    ws.UpdateWorldSetting(req);
+    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    return Results.Ok(new { ok = true });
+});
+
+app.MapGet("/api/character-appearances", (WorkspaceService ws) =>
+    Results.Ok(new { stats = ws.CharacterAppearances() }));
 
 app.Run();
 
@@ -335,16 +630,34 @@ static ApiConfig? LoadApiConfig()
 }
 
 public record BookNameReq([property: JsonPropertyName("name")] string? Name);
+public record NameReq([property: JsonPropertyName("name")] string? Name);
 public record MoveReq([property: JsonPropertyName("delta")] int Delta);
 public record SaveChapterReq(
     [property: JsonPropertyName("content")] string? Content,
     [property: JsonPropertyName("stamp")] long? Stamp);
+public record BibReq([property: JsonPropertyName("text")] string? Text);
+
+public record ProfileSaveReq(
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("provider")] string? Provider,
+    [property: JsonPropertyName("apiUrl")] string? ApiUrl,
+    [property: JsonPropertyName("model")] string? Model,
+    [property: JsonPropertyName("apiKey")] string? ApiKey,
+    [property: JsonPropertyName("authOverride")] string? AuthOverride,
+    [property: JsonPropertyName("activate")] bool? Activate);
 
 public record AiReq(
     [property: JsonPropertyName("task")] string? Task,
     [property: JsonPropertyName("prompt")] string? Prompt,
     [property: JsonPropertyName("maxTokens")] int MaxTokens,
-    [property: JsonPropertyName("outputContract")] string? OutputContract);
+    [property: JsonPropertyName("outputContract")] string? OutputContract,
+    [property: JsonPropertyName("skillId")] string? SkillId,
+    [property: JsonPropertyName("relatedChapterIds")] List<string>? RelatedChapterIds,
+    [property: JsonPropertyName("history")] List<ChatTurn>? History);
+
+public record ChatTurn(
+    [property: JsonPropertyName("role")] string? Role,
+    [property: JsonPropertyName("content")] string? Content);
 
 public record SettingsReq(
     [property: JsonPropertyName("outline")] string? Outline,

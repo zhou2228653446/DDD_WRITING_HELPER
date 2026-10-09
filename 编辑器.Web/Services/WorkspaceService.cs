@@ -326,6 +326,151 @@ public sealed class WorkspaceService
     }
 
     // ==================================================================
+    // 单章梗概 / 世界设定 / 角色出场
+    // ==================================================================
+
+    /// <summary>改单章梗概。大纲卡片上直接编辑的那一块。</summary>
+    public bool SetChapterSummary(int number, string summary)
+    {
+        lock (_gate)
+        {
+            var ch = GetChapter(number);
+            if (ch == null) return false;
+            ch.Summary = summary ?? "";
+            _project!.Save();
+            return true;
+        }
+    }
+
+    public object? WorldSetting()
+    {
+        var w = _project?.WorldSetting;
+        if (w == null) return null;
+        return new
+        {
+            worldName = w.WorldName, timePeriod = w.TimePeriod, location = w.Location,
+            background = w.Background, magicSystem = w.MagicSystem, technologyLevel = w.TechnologyLevel,
+        };
+    }
+
+    public void UpdateWorldSetting(JsonElement w)
+    {
+        lock (_gate)
+        {
+            if (_project == null) return;
+            var world = _project.WorldSetting ??= new WorldSetting();
+            world.WorldName = TryGet(w, "worldName") ?? world.WorldName;
+            world.TimePeriod = TryGet(w, "timePeriod") ?? world.TimePeriod;
+            world.Location = TryGet(w, "location") ?? world.Location;
+            world.Background = TryGet(w, "background") ?? world.Background;
+            world.MagicSystem = TryGet(w, "magicSystem") ?? world.MagicSystem;
+            world.TechnologyLevel = TryGet(w, "technologyLevel") ?? world.TechnologyLevel;
+            _project.Save();
+        }
+    }
+
+    private static string? TryGet(JsonElement e, string name) =>
+        e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString() : null;
+
+    /// <summary>角色出场统计：谁在哪几章露过面、连续缺席几章（对照设定集查漏洞用）。</summary>
+    public List<object> CharacterAppearances()
+    {
+        lock (_gate)
+        {
+            if (_project == null) return new();
+            return CharacterAppearanceService.Analyze(_project)
+                .Select(s => (object)new
+                {
+                    name = s.Name,
+                    chapters = s.Chapters,
+                    totalHits = s.TotalHits,
+                    lastChapter = s.LastChapter,
+                    absentStreak = s.LastChapter == null ? (int?)null : s.AbsentStreak(s.LastChapter.Value),
+                })
+                .ToList();
+        }
+    }
+
+    // ==================================================================
+    // 文献库（论文场景；与桌面版共用同一份 LiteratureLibrary 数据）
+    // ==================================================================
+
+    public List<LiteratureEntry> Literature()
+    {
+        lock (_gate)
+            return _project?.LiteratureLibrary ?? new List<LiteratureEntry>();
+    }
+
+    public void UpsertLiterature(LiteratureEntry entry)
+    {
+        lock (_gate)
+        {
+            if (_project == null) return;
+            var lib = _project.LiteratureLibrary;
+
+            if (string.IsNullOrEmpty(entry.Id))
+                entry.Id = Guid.NewGuid().ToString("N");
+
+            var idx = lib.FindIndex(x => x.Id == entry.Id);
+            if (idx >= 0) lib[idx] = entry;
+            else
+            {
+                // CitationKey 是 AI 引用 [n] 的锚点，为空时给个兜底
+                if (string.IsNullOrWhiteSpace(entry.CitationKey))
+                    entry.CitationKey = "ref" + (lib.Count + 1);
+                lib.Add(entry);
+            }
+            _project.Save();
+        }
+    }
+
+    public bool DeleteLiterature(string id)
+    {
+        lock (_gate)
+        {
+            if (_project == null) return false;
+            var lib = _project.LiteratureLibrary;
+            var removed = lib.RemoveAll(x => x.Id == id);
+            if (removed > 0) _project.Save();
+            return removed > 0;
+        }
+    }
+
+    /// <summary>导入 BibTeX 文本（Zotero / 知网导出的 .bib）。返回导入条数。</summary>
+    public int ImportBibtex(string bibText)
+    {
+        lock (_gate)
+        {
+            if (_project == null) return 0;
+            var parsed = BibtexParser.Parse(bibText ?? "");
+            if (parsed.Count == 0) return 0;
+
+            var lib = _project.LiteratureLibrary;
+            foreach (var e in parsed)
+            {
+                // 同 DOI / 同 CitationKey 视为重复，不重复入库
+                var dup = lib.Any(x =>
+                    (!string.IsNullOrEmpty(e.Doi) && x.Doi == e.Doi) ||
+                    (!string.IsNullOrEmpty(e.CitationKey) && x.CitationKey == e.CitationKey));
+                if (!dup) lib.Add(e);
+            }
+            _project.Save();
+            return parsed.Count;
+        }
+    }
+
+    /// <summary>GB/T 7714-2015 顺序编码制参考文献表（复制到论文里直接用）。</summary>
+    public string GbtReferenceList()
+    {
+        lock (_gate)
+        {
+            if (_project == null) return "";
+            return LiteratureFormatter.FormatReferenceList(_project.LiteratureLibrary);
+        }
+    }
+
+    // ==================================================================
     // 广播：让网页立刻看到改动（人自己改的，或 agent 改的）
     // ==================================================================
 

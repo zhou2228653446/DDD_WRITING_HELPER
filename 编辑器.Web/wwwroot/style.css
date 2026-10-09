@@ -1,14 +1,38 @@
-:root{
-  --bg:#f4f2ec; --panel:#fbfaf6; --ink:#33302a; --muted:#7c7468;
-  --line:#ded7c9; --accent:#4a729c; --ok:#5f8f62; --warn:#a0742f;
-  --radius:8px;
+/* ══════════════ 配色主题（与桌面版 AppearanceManager 同一套色值） ══════════════ */
+:root, html[data-scheme="default-white"]{
+  --bg:#EBE6DC; --panel:#F8F5EE; --editor-bg:#FDFBF6; --ink:#33302A;
+  --line:#DCD3C6; --accent:#4A729C; --muted:#7C7468; --danger:#C2605C;
 }
-@media (prefers-color-scheme:dark){
-  :root{
-    --bg:#1a1c20; --panel:#22252a; --ink:#cfcac2; --muted:#8b9098;
-    --line:#3f444d; --accent:#7ba3cc; --ok:#5ea97e; --warn:#c2954a;
-  }
+html[data-scheme="night-mode"]{
+  --bg:#1A1C20; --panel:#22252A; --editor-bg:#282C31; --ink:#CFCAC2;
+  --line:#3F444D; --accent:#7BA3CC; --muted:#8B9098; --danger:#D2706B;
 }
+html[data-scheme="green-theme"]{
+  --bg:#E4E8DF; --panel:#EFF3EA; --editor-bg:#FAFBF6; --ink:#333A31;
+  --line:#C5D1BB; --accent:#5B7F5E; --muted:#6E7A68; --danger:#BE625C;
+}
+html[data-scheme="yellow-theme"]{
+  --bg:#EFE8D7; --panel:#F6F1E5; --editor-bg:#FCFAF3; --ink:#3A322A;
+  --line:#D5C8AD; --accent:#A0742F; --muted:#857460; --danger:#BE605A;
+}
+html[data-scheme="ocean-blue"]{
+  --bg:#1B2430; --panel:#222C3A; --editor-bg:#2A3543; --ink:#D6DEE8;
+  --line:#35414F; --accent:#4A90C2; --muted:#8A97A6; --danger:#D2706B;
+}
+html[data-scheme="mist-gray"]{
+  --bg:#E8E9EB; --panel:#F4F5F6; --editor-bg:#FBFBFC; --ink:#2E3136;
+  --line:#D2D5DA; --accent:#5C6B7A; --muted:#757A82; --danger:#C2605C;
+}
+html[data-scheme="terracotta"]{
+  --bg:#EDE2D8; --panel:#F7F0E8; --editor-bg:#FDF8F2; --ink:#3D2F26;
+  --line:#D6C4B2; --accent:#B5654A; --muted:#8A7263; --danger:#BE605A;
+}
+html[data-scheme="ink-pine"]{
+  --bg:#1E2422; --panel:#262D2A; --editor-bg:#2C3431; --ink:#D3DAD5;
+  --line:#3A4440; --accent:#6E9B7A; --muted:#8A948E; --danger:#CC726B;
+}
+:root{ --ok:#5f8f62; --warn:#a0742f; --radius:8px; }
+
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
 body{
@@ -21,7 +45,7 @@ body{
 .hidden{display:none!important}
 
 header{
-  display:flex;align-items:center;gap:8px;padding:10px 16px;
+  display:flex;align-items:center;gap:8px;padding:10px 16px;flex-wrap:wrap;
   background:var(--panel);border-bottom:1px solid var(--line);flex-shrink:0;
 }
 .brand{font-weight:600;margin-right:8px}
@@ -52,73 +76,39 @@ aside,section{overflow:auto}
 #chList li{
   padding:7px 10px;border-radius:var(--radius);cursor:pointer;
   display:flex;justify-content:space-between;gap:8px;align-items:baseline;
+  position:relative;
 }
 #chList li:hover{background:var(--bg)}
 #chList li.active{background:var(--bg);font-weight:600}
 #chList .w{font-size:11px;color:var(--muted);flex-shrink:0}
+#chList .ops{
+  display:none;gap:2px;position:absolute;right:6px;top:50%;transform:translateY(-50%);
+  background:var(--panel);padding:1px 3px;border-radius:6px;
+}
+#chList li:hover .ops{display:flex}
+#chList .ops button{
+  border:none;background:transparent;color:var(--muted);cursor:pointer;
+  font-size:12px;padding:0 3px;line-height:1.4;
+}
+#chList .ops button:hover{color:var(--accent)}
+#chList .ops button.del:hover{color:var(--danger)}
+#chList .ops + .w{opacity:0}
 .mini{
   border:none;background:transparent;color:var(--muted);cursor:pointer;
   font-size:16px;line-height:1;padding:0 4px;
 }
 
 #center{flex:1;display:flex;flex-direction:column;min-width:0}
-.view{display:flex;flex-direction:column;height:100%;padding:12px}
+.view{display:flex;flex-direction:column;height:100%;padding:12px;overflow:auto}
+.view > *{flex-shrink:0}
+#view-write{overflow:hidden}
 .editor-bar{display:flex;align-items:center;gap:10px;margin-bottom:8px}
 .editor-bar input{flex:1;max-width:320px}
 #editor{
   flex:1;resize:none;font:16px/1.9 "Songti SC","SimSun",serif;
-  color:var(--ink);background:var(--panel);border:1px solid var(--line);
+  color:var(--ink);background:var(--editor-bg);border:1px solid var(--line);
   border-radius:var(--radius);padding:18px 22px;outline:none;
 }
-
-.cards{display:flex;flex-wrap:wrap;gap:12px;overflow:auto}
-.card{
-  width:250px;background:var(--panel);border:1px solid var(--line);
-  border-radius:var(--radius);padding:12px;cursor:pointer;
-}
-.card:hover{border-color:var(--accent)}
-.card .top{display:flex;align-items:center;gap:7px;margin-bottom:6px}
-.dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.card .t{font-weight:600}
-.card .w{margin-left:auto;font-size:11px;color:var(--muted)}
-.card .s{font-size:12px;color:var(--muted);max-height:44px;overflow:hidden}
-.outline-stats{margin-bottom:10px;font-size:12px;color:var(--muted)}
-
-#view-settings label{display:block;margin-bottom:10px;font-size:12px;color:var(--muted)}
-#view-settings textarea,#view-settings input{
-  width:100%;font:inherit;color:var(--ink);background:var(--panel);
-  border:1px solid var(--line);border-radius:var(--radius);padding:8px;resize:vertical;
-}
-#view-settings .primary,#aiGoBtn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
-
-#right{
-  width:320px;flex-shrink:0;background:var(--panel);
-  border-left:1px solid var(--line);display:flex;flex-direction:column;
-}
-.ai-box{padding:12px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--line)}
-.ai-box textarea{
-  font:inherit;color:var(--ink);background:var(--bg);
-  border:1px solid var(--line);border-radius:var(--radius);padding:8px;resize:vertical;
-}
-.ai-box button{cursor:pointer}
-.ai-out{
-  min-height:80px;max-height:280px;overflow:auto;font-size:13px;
-  background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);padding:10px;
-  white-space:pre-wrap;
-}
-.live{flex:1;overflow:auto;padding:8px 12px;font-size:12px}
-.live .row{padding:5px 0;border-bottom:1px solid var(--line);color:var(--muted)}
-.live .row b{color:var(--ink);font-weight:600}
-.live .row.agent b{color:var(--accent)}
-
-/* ---------- 导出按钮组 ---------- */
-.export{display:flex;align-items:center;gap:5px;margin-right:6px}
-.export button{
-  font:inherit;font-size:12px;color:var(--ink);background:var(--bg);
-  border:1px solid var(--line);border-radius:var(--radius);
-  padding:4px 9px;cursor:pointer;
-}
-.export button:hover{border-color:var(--accent)}
 
 /* ---------- 查找替换条 ---------- */
 #findBar{
@@ -139,19 +129,51 @@ aside,section{overflow:auto}
 }
 .mini-btn:hover{border-color:var(--accent)}
 
-/* ---------- 人物卡 ---------- */
+/* ---------- 大纲 / 卡片 ---------- */
+.cards{display:flex;flex-wrap:wrap;gap:12px}
+.card{
+  width:250px;background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--radius);padding:12px;cursor:pointer;
+}
+.card:hover{border-color:var(--accent)}
+.card .top{display:flex;align-items:center;gap:7px;margin-bottom:6px}
+.dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.card .t{font-weight:600}
+.card .w{margin-left:auto;font-size:11px;color:var(--muted)}
+.card .s{font-size:12px;color:var(--muted);max-height:44px;overflow:hidden}
+.outline-stats{margin-bottom:10px;font-size:12px;color:var(--muted);display:flex;gap:8px;align-items:center}
+.sub-head{font-size:13px;font-weight:600;margin:14px 0 6px}
+
+/* 大纲卡上的操作按钮 */
+.card .card-ops{display:flex;gap:5px;margin-top:8px}
+.card .card-ops .mini-btn{padding:2px 8px}
+
+/* ---------- 导出按钮组 ---------- */
+.export{display:flex;align-items:center;gap:5px;margin-right:6px}
+.export button{
+  font:inherit;font-size:12px;color:var(--ink);background:var(--bg);
+  border:1px solid var(--line);border-radius:var(--radius);
+  padding:4px 9px;cursor:pointer;
+}
+.export button:hover{border-color:var(--accent)}
+
+/* ---------- 人物 ---------- */
 #charCards .card{cursor:default;width:260px}
 #charCards .card .fields{font-size:12px;color:var(--muted);margin-top:4px}
 #charCards .card .fields div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #charCards .card .ops{display:flex;gap:6px;margin-top:8px}
-.char-edit{
-  background:transparent;border:1px solid var(--line);border-radius:var(--radius);
-  color:var(--ink);font-size:12px;padding:2px 10px;cursor:pointer;
+.appear-list{display:flex;flex-direction:column;gap:4px;font-size:12px}
+.appear-row{
+  display:flex;align-items:center;gap:10px;background:var(--panel);
+  border:1px solid var(--line);border-radius:var(--radius);padding:6px 12px;
 }
-.char-edit:hover{border-color:var(--accent)}
+.appear-row b{min-width:90px}
+.appear-row .chapters{color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.appear-row .absent{color:var(--warn);flex-shrink:0}
+.appear-row .absent.bad{color:var(--danger)}
 
-/* ---------- 快照列表 ---------- */
-.snap-list{display:flex;flex-direction:column;gap:8px;overflow:auto}
+/* ---------- 快照 ---------- */
+.snap-list{display:flex;flex-direction:column;gap:8px}
 .snap-item{
   display:flex;align-items:center;gap:12px;
   background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
@@ -159,7 +181,6 @@ aside,section{overflow:auto}
 }
 .snap-item .when{font-weight:600;min-width:150px}
 .snap-item .why{color:var(--muted);font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.snap-item .size{color:var(--muted);font-size:12px;flex-shrink:0}
 .snap-restore{
   font:inherit;font-size:12px;color:var(--ink);background:var(--bg);
   border:1px solid var(--line);border-radius:var(--radius);
@@ -167,21 +188,79 @@ aside,section{overflow:auto}
 }
 .snap-restore:hover{border-color:var(--warn)}
 
-/* ---------- 人物对话框 ---------- */
+/* ---------- 文献 ---------- */
+.lit-list{display:flex;flex-direction:column;gap:6px}
+.lit-item{
+  display:flex;align-items:baseline;gap:10px;background:var(--panel);
+  border:1px solid var(--line);border-radius:var(--radius);padding:8px 12px;cursor:pointer;
+}
+.lit-item:hover{border-color:var(--accent)}
+.lit-item .no{color:var(--accent);font-weight:600;flex-shrink:0}
+.lit-item .main{flex:1;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lit-item .meta{color:var(--muted);font-size:12px;flex-shrink:0}
+.lit-search-results{display:flex;flex-direction:column;gap:6px;max-height:320px;overflow:auto;margin-top:10px}
+.lit-search-results .r{
+  display:flex;align-items:center;gap:10px;border:1px solid var(--line);
+  border-radius:var(--radius);padding:7px 12px;font-size:13px;
+}
+.lit-search-results .r .m{flex:1}
+
+/* ---------- 设定页 ---------- */
+#view-settings{max-width:760px}
+#view-settings label{display:block;margin-bottom:10px;font-size:12px;color:var(--muted)}
+#view-settings textarea,#view-settings input{
+  width:100%;font:inherit;color:var(--ink);background:var(--panel);
+  border:1px solid var(--line);border-radius:var(--radius);padding:8px;resize:vertical;
+}
+#view-settings .primary{background:var(--accent);color:#fff;border-color:var(--accent);cursor:pointer;
+  font:inherit;padding:6px 18px;border-radius:var(--radius)}
+#view-settings .grid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+hr{border:none;border-top:1px solid var(--line);margin:16px 0}
+
+/* ---------- AI 面板 ---------- */
+#right{
+  width:340px;flex-shrink:0;background:var(--panel);
+  border-left:1px solid var(--line);display:flex;flex-direction:column;
+}
+.ai-box{padding:12px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--line)}
+.ai-box textarea{
+  font:inherit;color:var(--ink);background:var(--bg);
+  border:1px solid var(--line);border-radius:var(--radius);padding:8px;resize:vertical;
+}
+.ai-box button{cursor:pointer}
+#aiGoBtn.primary{background:var(--accent);color:#fff;border-color:var(--accent);padding:7px}
+#ctxBox{font-size:13px}
+#ctxBox summary{cursor:pointer;color:var(--muted);user-select:none}
+.ctx-chapters{max-height:160px;overflow:auto;margin-top:6px;display:flex;flex-direction:column;gap:2px}
+.ctx-chapters label{display:flex;gap:6px;align-items:center;font-size:12px;cursor:pointer}
+.ctx-ops{display:flex;gap:6px;margin-top:4px}
+.ai-out{
+  min-height:80px;max-height:280px;overflow:auto;font-size:13px;
+  background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);padding:10px;
+  white-space:pre-wrap;
+}
+.ai-ops{display:flex;gap:6px}
+.live{flex:1;overflow:auto;padding:8px 12px;font-size:12px}
+.live .row{padding:5px 0;border-bottom:1px solid var(--line);color:var(--muted)}
+.live .row b{color:var(--ink);font-weight:600}
+.live .row.agent b{color:var(--accent)}
+
+/* ---------- 对话框 ---------- */
 dialog{
   background:var(--panel);color:var(--ink);border:1px solid var(--line);
-  border-radius:12px;padding:20px 24px;min-width:520px;max-width:640px;
+  border-radius:12px;padding:20px 24px;min-width:520px;max-width:680px;
 }
 dialog::backdrop{background:rgba(0,0,0,.45)}
 dialog h3{margin:0 0 14px;font-size:16px}
 dialog label{display:block;font-size:12px;color:var(--muted);margin-bottom:9px}
-dialog input,dialog textarea{
-  width:100%;font:inherit;font-size:13px;color:var(--ink);background:var(--bg);
+dialog input,dialog textarea,dialog select{
+  font:inherit;font-size:13px;color:var(--ink);background:var(--bg);
   border:1px solid var(--line);border-radius:var(--radius);padding:6px 9px;
-  resize:vertical;outline:none;
+  width:100%;resize:vertical;outline:none;
 }
 dialog input:focus,dialog textarea:focus{border-color:var(--accent)}
 dialog .grid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+#summaryText{font:15px/1.8 "Songti SC","SimSun",serif}
 .dlg-btns{display:flex;gap:8px;margin-top:12px;align-items:center}
 .dlg-btns button{
   font:inherit;font-size:13px;color:var(--ink);background:var(--bg);
@@ -189,7 +268,14 @@ dialog .grid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
   padding:6px 16px;cursor:pointer;
 }
 .dlg-btns .primary{background:var(--accent);color:#fff;border-color:var(--accent)}
-.dlg-btns .danger{color:#c0564f;border-color:#c0564f}
+.dlg-btns .danger{color:var(--danger);border-color:var(--danger)}
 
-hr{border:none;border-top:1px solid var(--line);margin:16px 0}
-#view-settings{max-width:760px}
+/* ---------- 统计 ---------- */
+.stats-summary{font-size:14px;margin-bottom:14px;display:flex;gap:24px}
+.stats-summary b{font-size:20px;display:block}
+.stats-bars{display:flex;align-items:flex-end;gap:5px;height:110px;padding-top:8px}
+.stats-bars .bar{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;height:100%;justify-content:flex-end}
+.stats-bars .col{width:100%;max-width:26px;background:var(--accent);border-radius:3px 3px 0 0;min-height:2px}
+.stats-bars .zero{background:var(--line)}
+.stats-bars .d{font-size:10px;color:var(--muted);white-space:nowrap}
+.stats-bars .v{font-size:10px;color:var(--muted)}

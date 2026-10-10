@@ -1,7 +1,26 @@
+# Codex CLI —— 追加/合并进 ~/.codex/config.toml
+#
+# 与 Claude / Cursor 的 JSON 不同，Codex 用 TOML，且顶层键是 mcp_servers
+# （不是 mcpServers）。
+#
+# 推荐直接跑一键安装，它做的是**结构化合并**：只替换下面这一段，
+# 你 config.toml 里其它 [mcp_servers.*] 与注释逐字节保留，并自动备份。
+#
+#   python install-mcp.py --install codex
+#
+# 装完用 codex mcp list 应该能看到 tdxclaw-writing。
+
 [mcp_servers.tdxclaw-writing]
 command = "D:\\编辑器\\dist\\mcp\\TdxClaw.Mcp.exe"
 args = []
+# Codex 默认只给 MCP 服务器 10 秒完成握手（startup_timeout_sec 默认 10）。
+# 本服务器是自包含 .NET exe，首次冷启动（杀软扫盘 / JIT）常超过 10 秒，
+# 不抬高的话 Codex 里只会看到「handshaking with MCP server failed」。
+startup_timeout_sec = 30
 
 # 排障时打开日志（客户端会吞掉 stderr，落盘才看得到）：
 # [mcp_servers.tdxclaw-writing.env]
 # TDX_MCP_LOG = "C:\\Users\\Administrator\\tdxclaw-mcp.log"
+
+# 注：Codex 也支持项目级 .codex/config.toml；只想在某个书稿目录里用，
+# 就把上面这一段放进那个目录的 .codex/config.toml。

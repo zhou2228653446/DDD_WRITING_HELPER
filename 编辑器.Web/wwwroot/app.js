@@ -2099,6 +2099,80 @@ document.addEventListener('click', e => {
   if (!e.target.closest || !e.target.closest('#menubar')) closeMenus();
 });
 
+// 菜单的鼠标行为（对齐桌面端那套 WPF Menu 的手感）：
+// ① 划到别的顶级菜单就直接切过去 —— WPF 菜单栏的标准行为，
+//    不然得先点一下空白把上一个关掉，很难用
+// ② 鼠标离开菜单区域就自动收起（延时 300ms；鼠标回来就取消，
+//    否则手一抖从菜单上滑过去就没了）
+let menuCloseTimer = null;
+const cancelMenuClose = () => { clearTimeout(menuCloseTimer); menuCloseTimer = null; };
+const scheduleMenuClose = () => {
+  cancelMenuClose();
+  menuCloseTimer = setTimeout(closeMenus, 300);
+};
+
+{
+  const bar = $('#menubar');
+  bar.addEventListener('mouseenter', cancelMenuClose);
+  bar.addEventListener('mouseleave', scheduleMenuClose);   // 下拉是这个节点的后代，鼠标在上面不会触发
+
+  document.querySelectorAll('#menubar > details').forEach(d => {
+    // 鼠标刚把它「划开」的时刻。紧接着的点击只是落点，不该又把它关掉——
+    // 否则会出现「划过去看着开了、一点反而没了」这种最恼人的手感。
+    let hoverOpenedAt = 0;
+
+    d.addEventListener('mouseenter', () => {
+      cancelMenuClose();
+      const opened = document.querySelector('#menubar > details[open]');
+      if (opened && opened !== d) {
+        opened.open = false;
+        d.open = true;
+        hoverOpenedAt = Date.now();
+      }
+    });
+
+    // 键盘 / 触摸走点击这条路，也要保证同时只开一个
+    d.querySelector('summary').addEventListener('click', e => {
+      document.querySelectorAll('#menubar > details').forEach(o => { if (o !== d) o.open = false; });
+      if (Date.now() - hoverOpenedAt < 400) {
+        e.preventDefault();   // 刚划开就点的这一下，保持打开
+        d.open = true;
+        hoverOpenedAt = 0;
+      }
+    });
+  });
+}
+
+// 菜单的键盘操作（桌面端 Header 里的 _F/_E/_A/_V/_H 就是这些）：
+// Alt+字母开菜单、左右方向键在菜单间挪、Esc 收起。
+document.addEventListener('keydown', e => {
+  const menus = [...document.querySelectorAll('#menubar > details')];
+  const open = menus.find(m => m.open);
+
+  if (e.key === 'Escape' && open) { closeMenus(); return; }
+
+  if (open && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
+    const i = menus.indexOf(open);
+    const step = e.key === 'ArrowRight' ? 1 : menus.length - 1;
+    const next = menus[(i + step) % menus.length];
+    open.open = false; next.open = true;
+    next.querySelector('summary').focus();
+    e.preventDefault();
+    return;
+  }
+
+  if (e.altKey && !e.ctrlKey && !e.metaKey) {
+    const map = { f: 0, e: 1, a: 2, v: 3, h: 4 };   // 文件 / 编辑 / AI助手 / 视图 / 帮助
+    const idx = map[(e.key || '').toLowerCase()];
+    if (idx != null && menus[idx]) {
+      e.preventDefault();
+      const wasOpen = menus[idx].open;
+      closeMenus();
+      if (!wasOpen) menus[idx].open = true;
+    }
+  }
+});
+
 loadBooks().catch(e => console.error(e));
 loadSkills();
 loadPresetSelect();

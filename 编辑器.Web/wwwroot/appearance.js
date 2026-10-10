@@ -123,6 +123,13 @@ const rgba = (c, a) => `rgba(${c.r},${c.g},${c.b},${a})`;
  * （0.88 - 透光×强度×1.2，夹在 0.55~1.0）：背景图模式下玻璃要透得更多，
  * 透出来的就是真实画面——这才是"玻璃"该有的样子。
  */
+/** 与 surfaceColor 同一套调色，但**不带 alpha** —— 给菜单这类必须不透明的表面用。 */
+function solidColor(hex, mat, dark = false) {
+  let c = hexRgb(hex);
+  if (mat.stretched && !dark) c = mixRgb(c, { r: 0xC4, g: 0xD0, b: 0xDC }, 0.14);
+  return `rgb(${c.r}, ${c.g}, ${c.b})`;
+}
+
 function surfaceColor(hex, mat, k, role, throughFactor = 1.0, dark = false, bgAlpha = null) {
   let c = hexRgb(hex);
   // 玻璃的"冷"调：浅色主题下白色柔光打在浅底上几乎看不见，
@@ -154,6 +161,10 @@ function applyAppearance(state) {
     '--panel':     surfaceColor(scheme.panelBg,     mat, k, 0.95, 1.0, dark, panelAlpha),
     '--editor-bg': surfaceColor(scheme.editorBg,    mat, k, 1.08, 0.3, dark),
     '--menu-bg':   surfaceColor(scheme.menuBg,      mat, k, 0.85, 1.0, dark, panelAlpha),
+    // ★ 菜单一定要实色：下拉弹出来是盖在正文上的，半透明会让背后的字透出来，
+    //   菜单项根本读不清（材料再好看也不能牺牲可读性）。材质只影响它的色调，
+    //   不参与透明度——桌面端菜单也是不透明的。
+    '--menu-solid': solidColor(scheme.menuBg, mat, dark),
     '--ink':       scheme.textColor,
     '--muted':     scheme.textMuted,
     '--accent':    scheme.accent,

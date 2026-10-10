@@ -580,9 +580,13 @@ dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
 #statusbar #sbApi{color:var(--accent)}
 
 /* ---------- 菜单栏（对应桌面端「文件 / 编辑 / AI助手 / 视图 / 帮助」） ---------- */
+/* ★ 背景一律用 --menu-solid（**不带 alpha**）：下拉是盖在正文上的，
+   用 --panel 的话在玻璃材质下会半透明、背后的字透出来，菜单根本读不清。
+   材质只该改它的色调，不该改它的可读性。 */
 #menubar{
   display:flex;align-items:center;gap:2px;padding:0 8px;flex-shrink:0;
-  background:var(--panel);border-bottom:1px solid var(--line);font-size:12.5px;
+  background:var(--menu-solid,var(--panel));
+  border-bottom:1px solid var(--line);font-size:12.5px;
 }
 #menubar .menu{position:relative}
 #menubar summary{
@@ -590,11 +594,22 @@ dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
   color:var(--ink);user-select:none;
 }
 #menubar summary::-webkit-details-marker{display:none}
-#menubar summary:hover,#menubar details[open] summary{background:var(--bg)}
+#menubar summary:hover{background:var(--bg)}
+#menubar details[open] summary{background:var(--bg)}
 #menubar .menu-items{
   position:absolute;left:0;top:100%;z-index:60;min-width:200px;
-  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  background:var(--menu-solid,var(--panel));
+  border:1px solid var(--line);border-radius:var(--radius);
   box-shadow:0 8px 24px rgba(0,0,0,.16);padding:5px;
+  transform-origin:top left;
+}
+/* 展开动画：与桌面端 Motion.PlayUnfold 同一套（0.72 → 1 缩放 + 淡入，DurPop 320ms） */
+#menubar details[open]>.menu-items{
+  animation:menuUnfold 320ms cubic-bezier(.2,.85,.3,1);
+}
+@keyframes menuUnfold{
+  from{opacity:0;transform:scale(.72) translateY(-6px)}
+  to{opacity:1;transform:scale(1) translateY(0)}
 }
 #menubar .menu-items button{
   display:flex;justify-content:space-between;align-items:center;gap:16px;
@@ -619,3 +634,27 @@ dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
 #historyBox>summary:hover{background:var(--bg)}
 #historyBox #historyList{overflow:auto;padding:0 8px 8px;min-height:0}
 #historyList .snap-item .why{display:none}   /* 左栏窄，只留时间 + 恢复 */
+
+/* ---------- 动效：对齐桌面端 Motion.cs（那边有窗口登场/菜单弹出/树展开/标签切换） ---------- */
+/* 时长与曲线取桌面端的 token：DurFade 240 / DurPop 320，缓动接近其 Tween 的观感 */
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes riseIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+@keyframes dlgIn{from{opacity:0;transform:translateY(-10px) scale(.97)}to{opacity:1;transform:none}}
+
+/* ① 窗口登场（对应 PlayFadeIn） */
+body{animation:fadeIn 260ms ease-out}
+
+/* ② 树 / 折叠区展开（对应 OnTreeItemExpanded） */
+#ctxBox[open]>#ctxChapters,#historyBox[open]>#historyList{
+  animation:fadeIn 240ms ease-out;
+}
+#ctxBox[open]>.ctx-ops{animation:fadeIn 240ms ease-out}
+
+/* ③ 标签切换（对应 OnTabSelectionChanged）：视图显示时淡入 */
+.view:not(.hidden){animation:fadeIn 200ms ease-out}
+
+/* ④ 对话框登场（对应窗口登场那一段） */
+dialog[open]{animation:dlgIn 240ms cubic-bezier(.2,.85,.3,1)}
+
+/* ⑤ 面板视图开关（章节栏 / AI 面板显隐）也带一点淡入 */
+aside:not(.hidden){animation:fadeIn 180ms ease-out}

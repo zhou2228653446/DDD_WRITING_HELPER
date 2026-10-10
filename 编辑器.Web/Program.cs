@@ -332,19 +332,16 @@ app.MapPost("/api/ai", async (HttpContext ctx, WorkspaceService ws) =>
     var (taskText, contract) = ResolveTask(built.TaskKey, skill, req.OutputContract);
 
     // 与桌面版同源：同一个 PromptContextBuilder（设定集/文献库/参考章节全部生效）
+    //
+    // ★ 审稿是唯一把设定集挪到 **user 侧** 的任务（桌面端 ReviewChapter_Click
+    //   传 includeSettingsBook:false）：要让「比对基准」紧挨着「待审正文」，
+    //   模型照着逐条核对；system 里再放一份只是重复占位。
     var system = PromptContextBuilder.BuildSystemPrompt(
-        p, taskText, ws.Memory(), req.RelatedChapterIds, contract);
+        p, taskText, ws.Memory(), req.RelatedChapterIds, contract,
+        includeSettingsBook: task != "review");
 
+    // 素材构造全部在 BuildAiPrompt 里、与桌面端逐条同源，这里不再另拼一份
     var prompt = built.UserPrompt;
-
-    // 审稿：把全书正文放进 user 侧（桌面版 RunAiReview 的做法）
-    if (task == "review" && p != null)
-    {
-        var book = string.Join("\n\n", p.Chapters.OrderBy(c => c.ChapterNumber)
-            .Select(c => $"── 第{c.ChapterNumber}章 {c.Title} ──\n{c.Content}"));
-        prompt = AiPrompts.Section("全书正文", book) + "\n" +
-                 "请对照我的设定（见系统部分）审这本书的一致性问题。" + prompt;
-    }
 
     ctx.Response.ContentType = "text/event-stream; charset=utf-8";
     ctx.Response.Headers.CacheControl = "no-cache";
@@ -458,6 +455,9 @@ static (int MaxTokens, double Temperature) TuningFor(string task, NovelProject? 
         "viewpoint" => (4096, 0.4),
         "chat" => (16384, 0.7),
         "name" => (8192, 0.7),
+        // 审稿要稳、不许发挥：与桌面端 ReviewChapter_Click 同一组数值。
+        // 少给 token 会把问题清单截在半句上——那是这份报告唯一的价值所在。
+        "review" => (16384, 0.3),
         _ => (4096, 0.7),
     };
 }
@@ -466,6 +466,31 @@ static (int MaxTokens, double Temperature) TuningFor(string task, NovelProject? 
 /// 与桌面端同源的 user prompt 构造。返回要用的任务键（上下文类在"已有内容非空"时
 /// 改用 Expand 提示词）、拼好的 user prompt，以及生成成功后的自动落点。
 /// </summary>
+/// <summary>
+/// 审稿基准：设定集里描述「事实」的章 + 五项贯穿设定。
+/// 与桌面端 <c>ReviewSourceKeys</c> 同一份名单——审的是「和设定对不对得上」，
+/// 所以只有描写既有事实的章才算基准，剧情梗概那类章不该拿来当尺子。
+/// </summary>
+static string BuildReviewFacts(NovelProject p)
+{
+    SettingsBookTemplates.EnsureBook(p);
+    var book = p.SettingsBook;
+    var sb = new StringBuilder();
+    string[] keys = { "characters", "relations", "glossary", "history", "world", "power", "foreshadow" };
+    foreach (var key in keys)
+    {
+        var c = book?.Chapters.FirstOrDefault(x => x.SourceKey == key && x.IncludeInExport);
+        if (c == null || string.IsNullOrWhiteSpace(c.Content)) continue;
+        sb.AppendLine("### " + c.Title).AppendLine(c.Content.Trim()).AppendLine();
+    }
+    if (!string.IsNullOrWhiteSpace(p.BackgroundSettings))
+        sb.AppendLine("### 背景设定").AppendLine(p.BackgroundSettings.Trim());
+    var chars = p.BuildEffectiveCharacterSettings();
+    if (!string.IsNullOrWhiteSpace(chars))
+        sb.AppendLine("### 人物设定").AppendLine(chars);
+    return sb.ToString();
+}
+
 static (string TaskKey, string UserPrompt, string? ApplyField, string? ApplyLabel) BuildAiPrompt(
     string task, NovelProject? p, int? targetChapter, string requirement, string? polishStyle, string? scaleHint)
 {
@@ -486,6 +511,23 @@ static (string TaskKey, string UserPrompt, string? ApplyField, string? ApplyLabe
                 user += "\n" + AiPrompts.Section("前情梗概与上章末尾（供衔接）", prior);
             if (input.Length > 0) user += $"\n{input}";
             return ("continue", user, null, null);
+        }
+        case "review":
+        {
+            // 一致性审稿：与桌面端 ReviewChapter_Click 同源——
+            // 素材 = 待审章节 + 设定集里描述「事实」的章 + 五项贯穿设定 + 前情梗概。
+            // 只读分析：报告不写回正文，只把矛盾点摆出来给人自己改。
+            if (p == null || chapter == null) return ("review", "", null, null);
+            var user = AiPrompts.Section("待审章节",
+                $"第{chapter.ChapterNumber}章 {chapter.Title}\n{chapter.Content}");
+            var facts = BuildReviewFacts(p);
+            user += "\n" + AiPrompts.Section("设定集与项目设定（比对基准）", facts.Length > 0
+                ? facts
+                : "（作者还没有维护设定集。只做前后文与常识层面的检查，涉及设定一致性的结论一律标「存疑」。）");
+            var prior = p.BuildPriorChapterBrief(chapter.ChapterNumber, true);
+            if (!string.IsNullOrWhiteSpace(prior))
+                user += "\n" + AiPrompts.Section("前情梗概与上章末尾（供跨章比对）", prior);
+            return ("review", user, null, null);
         }
 
         case "polish":
@@ -823,6 +865,30 @@ app.MapGet("/api/ai/providers", () => Results.Ok(new
         new { value = nameof(ApiAuth.ApiKeyHeader), label = ApiProviders.AuthLabel(ApiAuth.ApiKeyHeader) },
     },
 }));
+
+// 角色出场统计：与桌面端「角色出场」按钮同源（CharacterAppearanceService，
+// 纯本地扫描，不花 token）。stats 给界面列表用，report 是可复制的文本报告——
+// 同一个数据源两种形态，不再另开一个端点各算一遍。
+app.MapGet("/api/character-appearances", (WorkspaceService ws) =>
+{
+    var (title, report, count) = ws.CharacterAppearanceReport();
+    return Results.Ok(new { stats = ws.CharacterAppearances(), title, report, count });
+});
+
+// ── MCP 实时跟随（与桌面端 settings.json 同一个文件、同一个键）──
+// 关掉之后，agent 通过 MCP 改稿时界面不再自动切章/刷新，避免正写着被打断。
+app.MapGet("/api/settings/mcp-live-sync", () =>
+{
+    var path = Path.Combine(ConfigDir(), "settings.json");
+    return Results.Ok(new { enabled = McpLiveBridge.LoadLiveSyncEnabled(path), path });
+});
+
+app.MapPost("/api/settings/mcp-live-sync", (EnabledReq req) =>
+{
+    var path = Path.Combine(ConfigDir(), "settings.json");
+    McpLiveBridge.SaveLiveSyncEnabled(req.Enabled ?? true, path);
+    return Results.Ok(new { ok = true, enabled = req.Enabled ?? true });
+});
 
 // 从服务商现拉真实模型名（与桌面版 ApiSettingsWindow.FetchModelsAsync 同一个 ModelCatalog）。
 // 拉回来的清单只用于填下拉，不缓存——缓存文件在桌面端那边管。
@@ -1284,9 +1350,6 @@ app.MapPost("/api/world", async (WorkspaceService ws, JsonElement req) =>
     return Results.Ok(new { ok = true });
 });
 
-app.MapGet("/api/character-appearances", (WorkspaceService ws) =>
-    Results.Ok(new { stats = ws.CharacterAppearances() }));
-
 // ══════════════════════════════════════════════════════════════════
 // 外观：配色 × 材质（与桌面版共用 appearance.json，48 种组合）
 //
@@ -1679,6 +1742,8 @@ public record SaveChapterReq(
     [property: JsonPropertyName("content")] string? Content,
     [property: JsonPropertyName("stamp")] string? Stamp);
 public record BibReq([property: JsonPropertyName("text")] string? Text);
+
+public record EnabledReq([property: JsonPropertyName("enabled")] bool? Enabled);
 
 public record ProfileSaveReq(
     [property: JsonPropertyName("name")] string? Name,

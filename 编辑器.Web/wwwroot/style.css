@@ -510,6 +510,15 @@ dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
 .ai-prof-row{flex-wrap:nowrap;align-items:flex-end}
 .ai-prof-row label{margin-bottom:0;flex:1;min-width:0}
 .ai-prof-row .mini-btn{flex:none;white-space:nowrap;padding:5px 10px}
+/* 只读报告（AI 审稿 / 角色出场）：报告可能很长，框内滚动，别把对话框撑爆 */
+.report-body{
+  white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.8;
+  max-height:56vh;overflow:auto;padding:10px 12px;margin:4px 0 2px;
+  background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);
+}
+#reportDlg{width:min(760px,94vw)}
+.ai-check{display:flex;align-items:center;gap:7px;font-size:12px;margin:8px 0 4px}
+.ai-check input{width:auto;flex:none}
 .ai-empty{
   font-size:12px;color:var(--muted);background:var(--bg);
   border:1px dashed var(--line);border-radius:var(--radius);

@@ -480,6 +480,24 @@ public sealed class WorkspaceService
         }
     }
 
+    /// <summary>
+    /// 同一份出场统计的**文本报告**形式，与桌面端「角色出场」按钮弹窗里的内容同源
+    /// （CharacterAppearanceService.FormatReport）。列表给界面看，报告给「复制带走 /
+    /// 贴进设定集」用——一个数据源两种形态，不另算一套。
+    /// </summary>
+    public (string Title, string Report, int Count) CharacterAppearanceReport()
+    {
+        lock (_gate)
+        {
+            if (_project == null) return ("", "", 0);
+            var stats = CharacterAppearanceService.Analyze(_project);
+            var title = _project.Chapters.Count > 0
+                ? $"{_project.ProjectName}（共 {_project.Chapters.Count} 章）"
+                : _project.ProjectName;
+            return (title, CharacterAppearanceService.FormatReport(_project, stats), stats.Count);
+        }
+    }
+
     // ==================================================================
     // 文献库（论文场景；与桌面版共用同一份 LiteratureLibrary 数据）
     // ==================================================================

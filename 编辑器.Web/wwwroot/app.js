@@ -772,6 +772,9 @@ async function openAiDlg() {
   if (profs.active || (profs.profiles || []).length) loadProfileForm(profs);
   else fillFromProvider(sel.value);
 
+  const mcpBox = $('#mcpLiveSync');
+  if (mcpBox) mcpBox.checked = mcpFollow;
+
   $('#testResult').textContent = '';
   $('#aiDlg').showModal();
 }
@@ -1007,7 +1010,9 @@ let aiAbort = null;
 let lastTokens = '';
 
 async function runAi(task, extra = {}) {
-  const out = $('#aiOut');
+  // 审稿用独立报告框（对应桌面端 ReviewResultWindow），别的任务照旧写进 AI 面板
+  const useReport = extra.report === true;
+  const out = useReport ? $('#reportBody') : $('#aiOut');
   out.textContent = '';
   const go = $('#aiGoBtn'), stop = $('#aiStopBtn');
   go.disabled = true; go.textContent = '生成中…';
@@ -1018,6 +1023,13 @@ async function runAi(task, extra = {}) {
   // 续写/润色吃服务器上的正文，先把编辑器里未保存的字落盘
   // （顺带保证服务器在生成前拍的那张快照是最新的）
   await flushSave();
+
+  if (useReport) {
+    const t = ($('#chTitle').value || '').trim();
+    $('#reportTitle').textContent = `审稿报告 · 第${current}章${t ? ' ' + t : ''}`;
+    $('#reportNote').textContent = '只读分析：报告不会改动正文';
+    $('#reportDlg').showModal();
+  }
 
   const isChat = task === 'chat';
   const body = {
@@ -1121,6 +1133,32 @@ $('#aiGoBtn').onclick = () => runAi($('#aiTask').value);
 $('#aiStopBtn').onclick = () => { if (aiAbort) aiAbort.abort(); };
 $('#aiTask').onchange = () =>
   $('#polishRow').classList.toggle('hidden', $('#aiTask').value !== 'polish');
+
+// ---------- AI 审稿 / 角色出场统计（桌面端顶栏同款两个按钮） ----------
+
+$('#reviewBtn').onclick = async () => {
+  if (current == null) return alert('先选一章，再对它审稿');
+  if (!($('#editor').value || '').trim()) return alert('本章还没有正文，无可审阅');
+  await runAi('review', { report: true });
+};
+
+$('#charAppearBtn').onclick = async () => {
+  try {
+    const r = await api('/api/character-appearances');
+    if (!r.report) return alert('还没有正文或角色名单，无从统计。');
+    $('#reportTitle').textContent = `角色出场统计 · ${r.title}`;
+    $('#reportNote').textContent = `${r.count || 0} 个角色 · 本地扫描，不花 token`;
+    $('#reportBody').textContent = r.report || '';
+    $('#reportDlg').showModal();
+  } catch (e) { alert(errMsg(e)); }
+};
+
+$('#reportCopy').onclick = async () => {
+  const text = $('#reportBody').textContent || '';
+  try { await navigator.clipboard.writeText(text); log('报告已复制'); }
+  catch { alert('复制失败，请手动选中后复制'); }
+};
+$('#reportClose').onclick = () => $('#reportDlg').close();
 
 // ---------- AI 面板浮动（对应桌面端的「AI 助手独立浮窗」） ----------
 // 桌面版能把这个面板弹成独立窗口、拖到任意位置；网页版就在同一个页面里
@@ -1582,12 +1620,44 @@ function log(text, isAgent) {
 }
 $('#clearLog').onclick = () => { $('#live').innerHTML = ''; };
 
+// ---------- MCP 实时跟随（与桌面端 settings.json 同一个键） ----------
+// 关掉之后，agent 通过 MCP 改稿时界面不再自动切章/刷新——正在写的字不会被
+// 另一个客户端的改动顶掉。默认开（与桌面端一致）。
+let mcpFollow = true;
+
+async function loadMcpFollow() {
+  try {
+    const r = await api('/api/settings/mcp-live-sync');
+    mcpFollow = r.enabled !== false;
+  } catch { mcpFollow = true; }
+  const box = $('#mcpLiveSync');
+  if (box) box.checked = mcpFollow;
+}
+
+$('#mcpLiveSync').onchange = async () => {
+  const want = $('#mcpLiveSync').checked;
+  try {
+    await post('/api/settings/mcp-live-sync', { enabled: want });
+    mcpFollow = want;
+    log(want ? '已开启 MCP 实时跟随' : '已关闭 MCP 实时跟随：MCP 的改动不再自动刷新界面');
+  } catch (e) {
+    alert(errMsg(e));
+    $('#mcpLiveSync').checked = mcpFollow;   // 没存住就别让界面显示成开着的
+  }
+};
+
 function connect() {
   if (typeof signalR === 'undefined') return;
+  loadMcpFollow();
   const conn = new signalR.HubConnectionBuilder()
     .withUrl('/hub/live').withAutomaticReconnect().build();
 
   conn.on('live', e => {
+    if (!mcpFollow) {
+      // 不跟随，但要让人知道稿子被动过，否则会以为自己记错了
+      if (e.kind === 'project-changed') log('MCP 改了稿子（未跟随——AI 设置里已关闭实时跟随）');
+      return;
+    }
     if (e.kind === 'project-changed') {
       log('项目已更新');
       refresh();   // 正在编辑的章节由 openChapter/flushSave 机制保护
@@ -1596,9 +1666,13 @@ function connect() {
     }
   });
 
-  conn.on('memory-changed', () => { log('AI 记忆已更新'); loadMemory(); });
+  conn.on('memory-changed', () => {
+    if (!mcpFollow) return;
+    log('AI 记忆已更新'); loadMemory();
+  });
 
   conn.on('live', e => {   // 第二个 live 处理器：SignalR 允许同一事件多次注册
+    if (!mcpFollow) return;
     if (e.kind === 'settingsbook-changed' && !$('#view-sbook').classList.contains('hidden')) {
       loadSettingsBook();
     }

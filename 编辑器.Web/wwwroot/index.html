@@ -22,6 +22,8 @@
     <button data-fmt="pdf" title="PDF 文档">PDF</button>
     <button data-fmt="txt" title="纯文本">TXT</button>
   </div>
+  <button id="reviewBtn" title="对照设定集检查本章正文，输出矛盾清单（只读，不改正文）">AI 审稿</button>
+  <button id="charAppearBtn" title="统计每个角色出场章次与连续缺席（本地扫描，不花 token）">角色出场</button>
   <button id="aiSetBtn" title="AI 服务商 / API Key">AI 设置</button>
   <button id="promptBtn" title="提示词方案与覆写">提示词</button>
   <button id="skillBtn" title="写作技能管理">技能</button>
@@ -287,6 +289,12 @@
       <span id="modelStatus" class="muted"></span>
     </div>
 
+    <!-- 与桌面端 AI 设置里的 McpLiveSyncCheckBox 同一个开关、同一份 settings.json -->
+    <label class="ai-check">
+      <input type="checkbox" id="mcpLiveSync">
+      通过 MCP 操作时，在界面实时显示并跟随（自动切章 / 同步设定）
+    </label>
+
     <div class="dlg-btns">
       <button type="button" id="profDelete" class="danger">删除方案</button>
       <span class="grow"></span>
@@ -296,6 +304,18 @@
     </div>
     <div id="testResult" class="muted" style="margin-top:8px"></div>
   </form>
+</dialog>
+
+<!-- 只读报告（AI 审稿 / 角色出场统计，对应桌面端共用的 ReviewResultWindow） -->
+<dialog id="reportDlg">
+  <h3 id="reportTitle">报告</h3>
+  <div id="reportBody" class="report-body">正在生成…</div>
+  <div class="dlg-btns">
+    <span id="reportNote" class="muted"></span>
+    <span class="grow"></span>
+    <button type="button" id="reportCopy">复制报告</button>
+    <button type="button" id="reportClose" class="primary">关闭</button>
+  </div>
 </dialog>
 
 <!-- 帮助：关于 / 快捷键 / 接入 Agent -->

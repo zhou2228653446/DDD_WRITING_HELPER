@@ -394,6 +394,28 @@ app.MapPost("/api/ai", async (HttpContext ctx, WorkspaceService ws) =>
         await ctx.Response.Body.FlushAsync();
     }
 
+    // 取消/异常时 SSE 的 done 发不出去（连接已断），但用量不能丢 ——
+    // 桌面端「停止」后状态栏照样显示 token（CanceledWithPartial 分支仍走 ShowTokenUsage），
+    // 网页版换成 SignalR 这条独立连接补送。
+    // ⚠ 不能依赖 Send("done") 抛异常来触发：客户端断开后 WriteAsync 可能写进内核
+    //   缓冲区「成功」返回（方法正常结束、catch 根本进不去），实测就踩了这个坑。
+    //   所以「请求已中止 / 结果是取消」时主动补发；幂等标志防重复累计。
+    AiResult? result = null;
+    var usageBroadcast = false;
+    void BroadcastUsageIfAny()
+    {
+        if (usageBroadcast) return;
+        if (result == null || (result.InputTokens == 0 && result.OutputTokens == 0)) return;
+        usageBroadcast = true;
+        _ = hubProvider.Clients.All.SendAsync("tokenUsage", new
+        {
+            inputTokens = result.InputTokens,
+            outputTokens = result.OutputTokens,
+            totalTokens = result.TotalTokens,
+            cachedInputTokens = result.CachedInputTokens,
+        });
+    }
+
     try
     {
         var (maxTokens, temperature) = TuningFor(task, p, req.TargetChapter);
@@ -434,7 +456,7 @@ app.MapPost("/api/ai", async (HttpContext ctx, WorkspaceService ws) =>
                 m.Content ?? "")).ToList();
         }
 
-        var result = await service.CompleteTextAsync(prompt, system, new CompletionOptions
+        result = await service.CompleteTextAsync(prompt, system, new CompletionOptions
         {
             MaxTokens = req.MaxTokens > 0 ? req.MaxTokens : maxTokens,
             Temperature = temperature,
@@ -465,15 +487,33 @@ app.MapPost("/api/ai", async (HttpContext ctx, WorkspaceService ws) =>
             await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
         }
 
-        await Send("done", new { text = result.Text, ok = result.IsUsable, applied });
+        // 用户停止（前端 abort）→ 连接已断，done 送不到浏览器；用量走 SignalR 补发。
+        // 注意放在 Send 之前主动判断——见 BroadcastUsageIfAny 上的注释。
+        if (ctx.RequestAborted.IsCancellationRequested || result.IsCanceled)
+            BroadcastUsageIfAny();
+
+        await Send("done", new
+        {
+            text = result.Text,
+            ok = result.IsUsable,
+            applied,
+            // Token 用量：与桌面端 ShowTokenUsage 同一组字段（输入/输出/合计/缓存命中）
+            inputTokens = result.InputTokens,
+            outputTokens = result.OutputTokens,
+            totalTokens = result.TotalTokens,
+            cachedInputTokens = result.CachedInputTokens,
+        });
     }
     catch (OperationCanceledException)
     {
-        // 用户主动停止：已经流出去的部分留在前端，不再补发
+        // 用户主动停止：已经流出去的部分留在前端，不再补发；
+        // 但用量走 SignalR 补送（连接已断，SSE 送不到）
+        BroadcastUsageIfAny();
         try { await Send("stopped", new { }); } catch { /* 连接已断，忽略 */ }
     }
     catch (Exception ex)
     {
+        BroadcastUsageIfAny();
         try { await Send("error", ex.Message); } catch { /* 连接已断，忽略 */ }
     }
 });
@@ -1563,7 +1603,17 @@ app.MapPost("/api/settingsbook/generate", async (HttpContext ctx, WorkspaceServi
             ws.SaveSettingsBookChapterContent(chapter.ChapterId, result.Text);
             await ws.BroadcastAsync("settingsbook-changed", new { chapterId = chapter.ChapterId });
         }
-        await Send("done", new { text = result.Text, ok = result.IsUsable, saved = result.IsUsable });
+        await Send("done", new
+        {
+            text = result.Text,
+            ok = result.IsUsable,
+            saved = result.IsUsable,
+            // 与 /api/ai 同一组用量字段（设定集生成同样消耗 token，状态栏要算进去）
+            inputTokens = result.InputTokens,
+            outputTokens = result.OutputTokens,
+            totalTokens = result.TotalTokens,
+            cachedInputTokens = result.CachedInputTokens,
+        });
     }
     catch (Exception ex)
     {
@@ -1704,8 +1754,10 @@ app.Run();
 
 // ══════════════════════════════════════════════════════════════════
 
-static string ConfigDir() => Path.Combine(
-    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TdxClaw");
+// 配置目录**必须**与 MCP / 桌面端解析出同一个（paths.json 的 ConfigDirectory 重定向）。
+// 此前硬拼 %APPDATA%\TdxClaw，用户一旦重定向配置目录，网页版的 AI 设置/提示词方案
+// 读的就不是同一份文件了——又是「两条路只对了一条」。
+static string ConfigDir() => 编辑器.Mcp.NovelTools.ResolveConfigDirectory();
 
 /// <summary>从运行目录往上找仓库根（认 install-mcp.py）。找不到返回 null。</summary>
 static string? RepoRoot()

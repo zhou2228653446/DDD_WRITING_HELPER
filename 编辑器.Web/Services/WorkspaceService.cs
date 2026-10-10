@@ -35,35 +35,14 @@ public sealed class WorkspaceService
     /// 两边各写各的，「你在网页上写、agent 通过 MCP 改同一本书」这个核心场景
     /// 根本无从谈起：界面永远看不到 agent 动的是哪本书（甚至一本都看不到）。
     ///
-    /// 解析顺序照抄 <c>NovelTools.ResolveProjectsDirectory</c>：
-    /// paths.json 里的 ProjectsDirectory（桌面端「路径设置」写的）→ 文档\TdxClaw\Projects。
+    /// 直接调用 MCP 侧同一份实现（InternalsVisibleTo），不再复刻——
+    /// 复刻版此前没有的 CreateDirectory 保留在下面。
     /// </summary>
     private static string ResolveBooksDir()
     {
-        try
-        {
-            var pathsFile = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "TdxClaw", "paths.json");
-            if (File.Exists(pathsFile))
-            {
-                using var doc = JsonDocument.Parse(File.ReadAllText(pathsFile));
-                if (doc.RootElement.TryGetProperty("ProjectsDirectory", out var p) &&
-                    p.ValueKind == JsonValueKind.String &&
-                    !string.IsNullOrWhiteSpace(p.GetString()))
-                {
-                    var dir = p.GetString()!;
-                    Directory.CreateDirectory(dir);
-                    return dir;
-                }
-            }
-        }
-        catch { /* 配置坏了就用默认位置，不能让工作区起不来 */ }
-
-        var fallback = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "TdxClaw", "Projects");
-        Directory.CreateDirectory(fallback);
-        return fallback;
+        var dir = 编辑器.Mcp.NovelTools.ResolveProjectsDirectory();
+        Directory.CreateDirectory(dir);   // 首次运行时目录可能还不存在
+        return dir;
     }
 
     public NovelProject? Current => _project;

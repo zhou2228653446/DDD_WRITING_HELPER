@@ -183,6 +183,10 @@ internal sealed class Session
 /// </summary>
 internal static class NovelTools
 {
+    // 注：ResolveProjectsDirectory / ResolveConfigDirectory 由 编辑器.Web 直接调用
+    //（InternalsVisibleTo）。网页版与 MCP 分发的是同一个 exe 家族，必须解析出
+    // **同一个**目录；此前网页版各自复刻了一份（还漏了 ConfigDirectory，硬拼
+    // %APPDATA%），复刻迟早漂移，统一收敛到这一份实现。
     // ---- 参数读取：agent 传来的 JSON 缺字段、类型不对是常态，一律给默认值而不是抛异常 ----
     internal static string Str(JsonElement a, string key, string def = "")
     {

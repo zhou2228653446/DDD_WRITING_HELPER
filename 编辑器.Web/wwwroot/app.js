@@ -1047,6 +1047,37 @@ $('#ctxNone').onclick = () => { $$('#ctxChapters input').forEach(i => i.checked 
 let aiAbort = null;
 let lastTokens = '';
 
+// ---------- 状态栏 Token 消耗 ----------
+// 主显示是**最近一次调用**的用量，格式与桌面端逐字对齐（桌面端状态栏的
+// TokenUsageTextBlock：ShowTokenUsage / McpLive 两处）；悬停给出本次会话累计。
+// 累计范围：网页 AI 调用（/api/ai、设定集生成）+ MCP 调用，页面会话级。
+let tokenTotal = { inTok: 0, outTok: 0, cached: 0 };
+
+function tokenLine(inTok, outTok, cached, total, prefix) {
+  const c = cached > 0 ? `（其中缓存命中 ${cached}）` : '';
+  return `${prefix || 'Token'}: 输入 ${inTok}${c} + 输出 ${outTok} = ${total != null ? total : inTok + outTok}`;
+}
+
+function sessionTokenTip() {
+  const t = tokenTotal;
+  if (!t.inTok && !t.outTok) return '';
+  const c = t.cached > 0 ? `（其中缓存命中 ${t.cached}）` : '';
+  return `本次会话累计（网页 AI + MCP）：输入 ${t.inTok}${c} + 输出 ${t.outTok} = ${t.inTok + t.outTok}`;
+}
+
+function showTokenStat(text) {
+  const el = $('#sbTokens');
+  if (!el) return;
+  el.textContent = text || '';
+  el.title = sessionTokenTip();
+}
+
+function addTokenTotal(inTok, outTok, cached) {
+  tokenTotal.inTok += inTok || 0;
+  tokenTotal.outTok += outTok || 0;
+  tokenTotal.cached += cached || 0;
+}
+
 async function runAi(task, extra = {}) {
   // 审稿用独立报告框（对应桌面端 ReviewResultWindow），别的任务照旧写进 AI 面板
   const useReport = extra.report === true;
@@ -1108,10 +1139,18 @@ async function runAi(task, extra = {}) {
         else if (ev.type === 'progress') {
           lastTokens = `${ev.payload.inTok} in / ${ev.payload.outTok} out`;
           updateChatInfo();
+          // 状态栏实时跑数（桌面端 _tokenProgress 同格式，流式期间输出为估值）
+          showTokenStat(tokenLine(ev.payload.inTok, ev.payload.outTok, 0));
         }
         else if (ev.type === 'chatinfo') { chatInfo = ev.payload; updateChatInfo(); }
         else if (ev.type === 'done') {
           out.textContent = ev.payload.text;
+          // 最终用量（含缓存命中）→ 状态栏 + 会话累计（桌面端 ShowTokenUsage 同口径）
+          const u = ev.payload;
+          if (u.totalTokens > 0) {
+            addTokenTotal(u.inputTokens, u.outputTokens, u.cachedInputTokens);
+            showTokenStat(tokenLine(u.inputTokens, u.outputTokens, u.cachedInputTokens, u.totalTokens));
+          }
           if (isChat) updateChatInfo();
           if (ev.payload.applied) {
             log(`AI 已写入「${ev.payload.applied}」`);
@@ -1673,6 +1712,7 @@ let mcpFollow = true;
 let mcpStreaming = false;      // 期间不许自动保存去动 stamp——内容由 agent 写盘
 let mcpStreamChapter = null;   // 正在流式生成的章号
 let mcpStreamBase = '';        // append 模式下的基准正文
+let mcpCallTokens = null;      // 本次 MCP 调用的最新用量（done 时结算进会话累计）
 let mcpBadgeTimer = null;
 
 function mcpBadgeShow(text, busy, autoHide) {
@@ -1742,6 +1782,15 @@ function connect() {
     log(p.message || JSON.stringify(o), true);
   });
 
+  // 取消时有用量补发：用户点「停止」→ SSE 连接已断、done 送不出去，
+  // 服务器改用 SignalR 这条独立连接送（对应桌面端停止后 CanceledWithPartial
+  // 分支照样显示 token 的行为）。
+  conn.on('tokenUsage', u => {
+    if (!u || !(u.totalTokens > 0)) return;
+    addTokenTotal(u.inputTokens, u.outputTokens, u.cachedInputTokens);
+    showTokenStat(tokenLine(u.inputTokens, u.outputTokens, u.cachedInputTokens, u.totalTokens));
+  });
+
   // ---------- agent 通过 MCP 在做什么：看得见（对应桌面端 HandleMcpLiveEvent）----------
   // 桌面端那套是四件事：状态栏徽章 + 状态文案 + 自动切到 agent 正在改的章节 +
   // 把流式正文实时打进编辑框，外加 Token 用量。网页版此前只做了个开关、
@@ -1752,6 +1801,7 @@ function connect() {
 
     if (t === 'start') {
       mcpBadgeShow('MCP 执行中', true, false);
+      mcpCallTokens = null;      // 新一次调用，用量从头计
       if (ev.summary) log(ev.summary, true);
 
       // ★ 跟着 agent 切书：它换了项目，界面还停在上本书的话，
@@ -1786,6 +1836,9 @@ function connect() {
       if (ev.inputTokens || ev.outputTokens) {
         lastTokens = `MCP ${ev.inputTokens} in / ${ev.outputTokens} out`;
         updateChatInfo();
+        // 状态栏：与桌面端 McpLive 同格式（流式期间是累计值，越滚越大）
+        mcpCallTokens = { inTok: ev.inputTokens || 0, outTok: ev.outputTokens || 0 };
+        showTokenStat(tokenLine(mcpCallTokens.inTok, mcpCallTokens.outTok, 0, null, 'MCP Token'));
       }
       if (ev.previewText) {
         $('#aiOut').textContent = ev.previewText;
@@ -1813,6 +1866,14 @@ function connect() {
     mcpStreaming = false;
     mcpStreamChapter = null;
     mcpStreamBase = '';
+    // MCP 用量结算：最后一次 stream 的累计值就是这次调用的最终值（done 事件不带 token），
+    // 计入会话累计；主显示不动——桌面端 done 时也停在最后一次的值上
+    if (mcpCallTokens) {
+      addTokenTotal(mcpCallTokens.inTok, mcpCallTokens.outTok, 0);
+      mcpCallTokens = null;
+      const el = $('#sbTokens');
+      if (el) el.title = sessionTokenTip();
+    }
     mcpBadgeShow(t === 'error' ? 'MCP 出错' : 'MCP 已同步', false, true);
     if (ev.summary) log(ev.summary, true);   // MCP 的消息都是 agent 发的，别标成「你」
     if (ev.previewText) $('#aiOut').textContent = ev.previewText;
@@ -1954,8 +2015,15 @@ $('#sbAiBtn').onclick = async () => {
         if (!p.startsWith('data: ')) continue;
         const ev = JSON.parse(p.slice(6));
         if (ev.type === 'text') { text = ev.payload; $('#sbContent').value = text; out.textContent = '生成中… ' + text.length + ' 字'; }
+        else if (ev.type === 'progress') showTokenStat(tokenLine(ev.payload.inTok, ev.payload.outTok, 0));
         else if (ev.type === 'error') out.textContent = '出错：' + ev.payload;
         else if (ev.type === 'done') {
+          // 设定集生成同样消耗 token，结算进状态栏与会话累计
+          const u = ev.payload;
+          if (u.totalTokens > 0) {
+            addTokenTotal(u.inputTokens, u.outputTokens, u.cachedInputTokens);
+            showTokenStat(tokenLine(u.inputTokens, u.outputTokens, u.cachedInputTokens, u.totalTokens));
+          }
           if (ev.payload.saved) { out.textContent = '已生成并保存 ' + new Date().toLocaleTimeString(); log(`设定集「${$('#sbChTitle').value}」已由 AI 生成`, true); }
           else out.textContent = '生成结果不可用';
         }

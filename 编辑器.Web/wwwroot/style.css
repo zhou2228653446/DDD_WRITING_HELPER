@@ -586,6 +586,8 @@ dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
 }
 #statusbar .muted{font-size:12px}
 #statusbar #sbApi{color:var(--accent)}
+/* Token 用量（对应桌面端 TokenUsageTextBlock）：窄屏下允许收缩省略，别把状态栏挤爆 */
+#statusbar #sbTokens{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* ---------- 菜单栏（对应桌面端「文件 / 编辑 / AI助手 / 视图 / 帮助」） ---------- */
 /* ★ 背景一律用 --menu-solid（**不带 alpha**）：下拉是盖在正文上的，

@@ -308,6 +308,12 @@ internal static class AiTools
                 "可在软件「AI 设置」里点测试连接确认（MCP 与界面共用同一份配置）。");
         }
 
+        // ★ 强制发布一次最终用量：stream 事件按 180ms 节流，服务商的 usage 分片
+        //   常撞在节流窗口里被吃掉（mock 这类毫秒级响应必吃），而 done 事件不带 token——
+        //   不发这一次，界面（桌面 / 网页）最后停在的可能还是「输入 0 + 输出 0」。
+        //   此时 result 已到手，token 就是权威值。
+        PublishStream($"🤖 MCP AI 已完成{taskLabel}（输入 {result.InputTokens} / 输出 {result.OutputTokens} token）", force: true);
+
         // 头部把"这次到底带了什么"摊开给 agent：技能/记忆/人物卡/设定集/文献有没有生效，一眼能看出来，
         // 不用猜——尤其是技能静默不生效这类问题，不显示就永远发现不了。
         var head = $"[task={task} · model={config.Model}" +

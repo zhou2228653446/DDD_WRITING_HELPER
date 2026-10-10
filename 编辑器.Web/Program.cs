@@ -12,6 +12,12 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSignalR();
 builder.Services.AddSingleton<WorkspaceService>();
 
+// 「其他设备的 agent」只能通过 HTTP 连这台机器的 /mcp（stdio 要求那台机器上有 exe）。
+// 默认只绑回环——个人工具，绑局域网 = 同网段任何设备都能改你的稿子、烧你的 API；
+// 确实要给别的设备用时显式开：set TDXCLAW_LAN=1
+if (Environment.GetEnvironmentVariable("TDXCLAW_LAN") == "1")
+    builder.WebHost.UseUrls("http://0.0.0.0:5280");
+
 // 提示词方案/技能配置与界面共用同一份文件。⚠ Store 必须在这里赋值——
 // 之前只调了 Load，Store 本身是 null，用户在桌面版改过的提示词覆写
 // 在网页版从来没生效过（AiPrompts.Resolve 全部回落到内置默认）。
@@ -54,24 +60,33 @@ McpServer.SetNotifier(o =>
 //   agent 的具体操作"。这里接上同一根管道（服务端允许多实例，可与桌面端并存），
 //   把事件转成 SignalR 广播交给前端。
 //   字段名在这里就定死成 camelCase，免得前端去猜 SignalR 的序列化策略。
+//
+// ★ HTTP 路径（其他设备上的 agent 走 /mcp）的事件在本进程发布，走管道回环有
+//   一个不确定点：管道客户端连到哪个监听实例不受控——桌面端也开着时可能被它
+//   抢走，网页端一条都收不到。所以本进程发的事件走 InProcessEvent 直达；
+//   管道再回来的同一份（连回了自己）用 SourcePid 跳过，不会重复广播。
+void BroadcastMcpLive(McpLiveEvent ev) => _ = hubProvider.Clients.All.SendAsync("mcpLive", new
+{
+    eventType = ev.EventType,
+    toolName = ev.ToolName,
+    taskName = ev.TaskName,
+    projectPath = ev.ProjectPath,
+    chapterNumber = ev.ChapterNumber,
+    settingField = ev.SettingField,
+    summary = ev.Summary,
+    previewText = ev.PreviewText,
+    inputTokens = ev.InputTokens,
+    outputTokens = ev.OutputTokens,
+    projectModified = ev.ProjectModified,
+    writeBack = ev.WriteBack,
+    writeMode = ev.WriteMode,
+});
+McpLiveBridge.InProcessEvent += BroadcastMcpLive;
+
 _ = McpLiveBridge.StartServer(ev =>
 {
-    _ = hubProvider.Clients.All.SendAsync("mcpLive", new
-    {
-        eventType = ev.EventType,
-        toolName = ev.ToolName,
-        taskName = ev.TaskName,
-        projectPath = ev.ProjectPath,
-        chapterNumber = ev.ChapterNumber,
-        settingField = ev.SettingField,
-        summary = ev.Summary,
-        previewText = ev.PreviewText,
-        inputTokens = ev.InputTokens,
-        outputTokens = ev.OutputTokens,
-        projectModified = ev.ProjectModified,
-        writeBack = ev.WriteBack,
-        writeMode = ev.WriteMode,
-    });
+    if (ev.SourcePid == Environment.ProcessId) return;   // 本进程发的已由 InProcessEvent 送达
+    BroadcastMcpLive(ev);
 }, CancellationToken.None);
 
 app.MapPost("/mcp", async (HttpContext ctx, WorkspaceService ws) =>

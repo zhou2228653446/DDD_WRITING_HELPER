@@ -2066,13 +2066,15 @@ $$('#helpDlg .help-tabs button').forEach(b => {
 });
 $('#helpBtn').onclick = () => $('#helpDlg').showModal();
 
-// 网页版工作区本身就是一个 HTTP MCP 端点。写清楚用哪种：装了 exe 的走 stdio 最稳，
-// 这条路只对"能走 Streamable HTTP 的客户端"有意义，且必须服务器开着。
+// 网页版工作区本身就是一个 HTTP MCP 端点（已用官方 MCP SDK 标准客户端实测：
+// 握手 / 28 个工具 / 两分钟长任务全通过）。分两种场景说清楚。
 $('#httpMcpHint').innerHTML =
-  `另一个选择：当前网页工作区本身就是一个 HTTP MCP 端点 ` +
-  `<code>${location.origin}/mcp</code>（免装 exe，改的就是网页上正开着的这本书）。` +
-  `只在客户端支持 Streamable HTTP、且这个网页服务器开着时可用；` +
-  `没在 Codex 客户端里实测过，求稳还是用上面 stdio 那份配置。`;
+  `另一条路：这个网页工作区本身就是 HTTP MCP 端点 <code>${location.origin}/mcp</code>` +
+  `（免装 exe，agent 改的就是网页上正开着的这本书；已用官方 MCP SDK 标准客户端实测通过）。` +
+  `<br>· <b>同一台机器</b>上的 agent：直接用上面的地址即可。` +
+  `<br>· <b>其他设备</b>上的 agent：本机服务默认只监听本机（防同网段设备乱改稿子），` +
+  `要先以 <code>set TDXCLAW_LAN=1</code> 启动服务放行局域网，对方连 ` +
+  `<code>http://本机IP:5280/mcp</code>；Windows 防火墙首次会弹窗，选「允许」。`;
 
 let agentClientsLoaded = false;
 async function loadAgentClients() {

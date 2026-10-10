@@ -53,6 +53,14 @@ namespace 编辑器.Services
         /// <summary>ai_write 是否启用了 writeBack。</summary>
         public bool WriteBack { get; set; }
 
+        /// <summary>
+        /// 发布方进程号。网页版（编辑器.Web）进程内处理 HTTP 的 MCP 请求时，事件会
+        /// 同时走进程内回调（InProcessEvent）和命名管道回环——管道客户端连到哪个
+        /// 监听实例是不确定的，连回自己就造成重复广播。监听端拿这个字段跳过
+        /// 自己进程发的事件（那部分已由进程内回调送达）。
+        /// </summary>
+        public int SourcePid { get; set; } = Environment.ProcessId;
+
         /// <summary>写入模式（append / replace）。</summary>
         public string? WriteMode { get; set; }
 

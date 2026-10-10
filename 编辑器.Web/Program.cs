@@ -130,6 +130,12 @@ app.MapPost("/api/auth/login", async (HttpContext ctx, AccountStore accounts, Au
 
     var req = await ctx.Request.ReadFromJsonAsync<LoginReq>();
     var user = (req.User ?? "").Trim().ToLowerInvariant();
+
+    // 未初始化：不说「密码不对」（那会让第一次进来的人莫名其妙，还白记失败次数），
+    // 明确返回 needInit 让前端走初始化流程
+    if (!accounts.Initialized)
+        return Results.Json(new { error = "首次使用：请设置自用密码", needInit = true }, statusCode: 401);
+
     string subject;
     if (user == "self")
     {

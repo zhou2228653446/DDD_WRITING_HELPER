@@ -722,12 +722,20 @@ $('#stats').onclick = async () => {
 // ---------- AI 设置（方案管理） ----------
 
 let providers = [];
+let authChoices = [];
+
+// 后端抛的是 "400 至少保留一个配置方案" 这种——状态码对用户没意义，剥掉
+function errMsg(e) {
+  return String(e?.message || e || '操作失败').replace(/^\d{3}\s*/, '');
+}
+
 async function openAiDlg() {
   const [pd, profs] = await Promise.all([
     api('/api/ai/providers'),
     api('/api/ai/profiles').catch(() => ({ profiles: [], active: null })),
   ]);
   providers = pd.providers || [];
+  authChoices = pd.authChoices || [];
 
   const sel = $('#provSel');
   sel.innerHTML = '';
@@ -735,6 +743,15 @@ async function openAiDlg() {
     const o = document.createElement('option');
     o.value = p.id; o.textContent = `${p.name}（${p.group}）`;
     sel.appendChild(o);
+  });
+
+  // 认证方式（与桌面端 AuthComboBox 同一组四项）
+  const as = $('#authSel');
+  as.innerHTML = '';
+  (authChoices.length ? authChoices : [{ value: '', label: '自动（推荐）' }]).forEach(c => {
+    const o = document.createElement('option');
+    o.value = c.value; o.textContent = c.label;
+    as.appendChild(o);
   });
 
   const ps = $('#profSel');
@@ -745,13 +762,36 @@ async function openAiDlg() {
     o.textContent = `${p.name}${p.name === profs.active ? '（当前）' : ''}`;
     ps.appendChild(o);
   });
+  // 「有没有方案」永远为真——文件不存在时 Load() 会自己造一个「默认配置」
+  // 空壳（桌面端同样如此，不改动它）。真正该提醒的是"没有一个是配好 Key 的"：
+  // 那才是点 AI 会直接失败的时刻。
+  const hasUsable = (profs.profiles || []).some(p => p.hasKey);
+  $('#profEmpty').classList.toggle('hidden', hasUsable);
 
-  // 预选当前方案
-  if (profs.active) loadProfileForm(profs);
-  else sel.selectedIndex >= 0 && fillFromProvider(sel.value);
+  // 预选当前方案；没有方案就按当前服务商把表单填一遍，省得从空开始
+  if (profs.active || (profs.profiles || []).length) loadProfileForm(profs);
+  else fillFromProvider(sel.value);
 
   $('#testResult').textContent = '';
   $('#aiDlg').showModal();
+}
+
+// 可用型号下拉。模型名可以手填（大小写敏感，服务商说改名就改名），
+// 这个下拉只是"从已知清单里挑一个"，两者指向同一个输入框。
+function renderModelPresets(list) {
+  const sel = $('#modelPreset');
+  sel.innerHTML = '';
+  const none = document.createElement('option');
+  none.value = ''; none.textContent = '（手动输入）';
+  sel.appendChild(none);
+  (list || []).forEach(m => {
+    const id = typeof m === 'string' ? m : (m.id || '');
+    const label = typeof m === 'string' ? m : (m.displayName || m.id || '');
+    if (!id) return;
+    const o = document.createElement('option');
+    o.value = id; o.textContent = label;
+    sel.appendChild(o);
+  });
 }
 
 function fillFromProvider(pid) {
@@ -759,8 +799,11 @@ function fillFromProvider(pid) {
   if (!p) return;
   $('#profUrl').value = p.endpoint || '';
   $('#profModel').value = p.defaultModel || '';
-  $('#modelList').innerHTML = (p.models || []).map(m => `<option value="${m}">`).join('');
+  $('#modelList').innerHTML = (p.models || []).map(m => `<option value="${escapeHtml(m)}">`).join('');
+  renderModelPresets(p.models || []);
   $('#provNote').textContent = p.note || '';
+  // 换服务商 → 认证方式回到「自动」，避免上一家的手工选择残留到这一家
+  $('#authSel').value = '';
 }
 
 function loadProfileForm(profs) {
@@ -772,6 +815,8 @@ function loadProfileForm(profs) {
   $('#profModel').value = cur.model || '';
   $('#profKey').value = '';
   fillFromProvider(cur.provider);
+  // ⚠ 认证的回显必须排在 fillFromProvider 之后——它会把认证复位成「自动」
+  $('#authSel').value = cur.authOverride || '';
 }
 
 $('#provSel').onchange = () => fillFromProvider($('#provSel').value);
@@ -780,17 +825,59 @@ $('#profSel').onchange = async () => {
   loadProfileForm(profs);
 };
 
+// 从「可用型号」里挑一个 → 直接填进模型名输入框（与桌面端 ModelPresetComboBox 同款）
+$('#modelPreset').onchange = () => {
+  const v = $('#modelPreset').value;
+  if (v) $('#profModel').value = v;
+};
+
+// ＋ 新建：以当前方案为蓝本复制一份（Key 一起带过来）
+$('#profNew').onclick = async () => {
+  const name = (prompt('新方案名称？', '') || '').trim();
+  if (!name) return;
+  try {
+    await post('/api/ai/profiles/new', { name, from: $('#profSel').value || '', activate: true });
+  } catch (e) { alert(errMsg(e)); return; }
+  log(`已新建 AI 方案「${name}」`);
+  await openAiDlg();
+  $('#profSel').value = name;
+};
+
+// 另存为：按表单里现在的值存成新名字；Key 从当前方案带过来（表单不回显明文 Key）
+$('#profDup').onclick = async () => {
+  const base = $('#profSel').value || '新方案';
+  const name = (prompt('把这个配置另存为？', `${base} 副本`) || '').trim();
+  if (!name) return;
+  try {
+    await post('/api/ai/profiles/new', {
+      name,
+      from: $('#profSel').value || '',
+      provider: $('#provSel').value,
+      apiUrl: $('#profUrl').value.trim(),
+      model: $('#profModel').value.trim(),
+      authOverride: $('#authSel').value || '',
+      activate: true,
+    });
+  } catch (e) { alert(errMsg(e)); return; }
+  log(`AI 配置已另存为「${name}」`);
+  await openAiDlg();
+  $('#profSel').value = name;
+};
+
 $('#profSave').onclick = async () => {
   const name = $('#profSel').value.trim() || $('#provSel option:checked').textContent.replace(/（.*）/, '');
   if (!name) return alert('方案名不能为空');
-  await post('/api/ai/profiles/save', {
-    name,
-    provider: $('#provSel').value,
-    apiUrl: $('#profUrl').value.trim(),
-    model: $('#profModel').value.trim(),
-    apiKey: $('#profKey').value || null,   // null = 保留原 Key
-    activate: true,
-  });
+  try {
+    await post('/api/ai/profiles/save', {
+      name,
+      provider: $('#provSel').value,
+      apiUrl: $('#profUrl').value.trim(),
+      model: $('#profModel').value.trim(),
+      authOverride: $('#authSel').value || '',
+      apiKey: $('#profKey').value || null,   // null = 保留原 Key
+      activate: true,
+    });
+  } catch (e) { alert(errMsg(e)); return; }
   $('#testResult').textContent = `已保存并启用方案「${name}」`;
   log(`AI 方案已切换：${name}`);
   await openAiDlg();
@@ -799,9 +886,11 @@ $('#profSave').onclick = async () => {
 $('#profDelete').onclick = async () => {
   const name = $('#profSel').value;
   if (!name || !confirm(`确定删除方案「${name}」？`)) return;
-  await post('/api/ai/profiles/delete', { name });
+  try {
+    await post('/api/ai/profiles/delete', { name });
+  } catch (e) { alert(errMsg(e)); return; }   // 「至少保留一个」会从后端挡回来
   log(`AI 方案已删除：${name}`);
-  $('#aiDlg').close();
+  await openAiDlg();
 };
 $('#aiDlgClose').onclick = () => $('#aiDlg').close();
 $('#aiSetBtn').onclick = openAiDlg;
@@ -813,6 +902,7 @@ $('#profTest').onclick = async () => {
     provider: $('#provSel').value,
     apiUrl: $('#profUrl').value.trim(),
     model: $('#profModel').value.trim(),
+    authOverride: $('#authSel').value || '',   // 认证方式不同的话，测出来的结果也不同
     apiKey: $('#profKey').value || undefined,
   });
   out.textContent = r.ok ? '✓ ' + r.message : '✗ ' + r.message;
@@ -835,11 +925,13 @@ $('#fetchModels').onclick = async () => {
       provider: $('#provSel').value,
       apiUrl: $('#profUrl').value.trim(),
       model: $('#profModel').value.trim(),
+      authOverride: $('#authSel').value || '',
       apiKey: $('#profKey').value || undefined,
     });
     if (!r.ok) { st.textContent = '✗ ' + (r.error || '拉取失败'); return; }
     $('#modelList').innerHTML = (r.models || [])
       .map(m => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.displayName || '')}</option>`).join('');
+    renderModelPresets(r.models || []);   // 拉到的真实清单也要能直接挑
     st.textContent = `✓ 拉到 ${r.models.length} 个模型` + (r.nonChat ? `（${r.nonChat} 个非对话模型已收起）` : '');
   } catch (e) { st.textContent = '✗ ' + e.message; }
 };

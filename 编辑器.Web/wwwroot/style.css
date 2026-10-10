@@ -506,6 +506,15 @@ dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
 /* ---------- AI 设置：服务商控制台 / 拉模型 / JSON ---------- */
 .prov-ops{display:flex;align-items:center;gap:8px;margin:6px 0;flex-wrap:wrap}
 .prov-ops .muted{font-size:12px;flex:1;min-width:0}
+/* 方案行：下拉撑开、两个按钮贴在右边，不换行（换行会把「新建」挤到看不见） */
+.ai-prof-row{flex-wrap:nowrap;align-items:flex-end}
+.ai-prof-row label{margin-bottom:0;flex:1;min-width:0}
+.ai-prof-row .mini-btn{flex:none;white-space:nowrap;padding:5px 10px}
+.ai-empty{
+  font-size:12px;color:var(--muted);background:var(--bg);
+  border:1px dashed var(--line);border-radius:var(--radius);
+  padding:8px 10px;margin:2px 0 8px;line-height:1.7;
+}
 #rawDlg{width:min(760px,94vw)}
 #rawDlg textarea{font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
 

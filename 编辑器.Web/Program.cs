@@ -694,9 +694,48 @@ app.MapGet("/api/ai/profiles", () =>
             provider = kv.Value.Provider,
             apiUrl = kv.Value.ApiUrl,
             model = kv.Value.Model,
+            // 认证方式要回显：不然用户改过一次后界面永远显示「自动」，
+            // 看着像没保存住
+            authOverride = kv.Value.AuthOverride,
             hasKey = !string.IsNullOrWhiteSpace(kv.Value.ApiKey),
         }),
     });
+});
+
+// 新建方案。可以给一个「蓝本」from——新建多半是"同一家换个模型"，
+// 所以连 Key 一起复制过去，不让人重粘一遍。
+app.MapPost("/api/ai/profiles/new", (ProfileNewReq req) =>
+{
+    var mgr = new ApiProfileManager(Path.Combine(ConfigDir(), "api_profiles.json"));
+    mgr.Load();
+
+    var name = (req.Name ?? "").Trim();
+    if (name.Length == 0) return Results.BadRequest(new { error = "方案名不能为空" });
+    if (mgr.Profiles.ContainsKey(name))
+        return Results.BadRequest(new { error = $"方案「{name}」已经存在了" });
+
+    // 蓝本只作兜底：请求里带了哪个字段就用哪个，没带的才从蓝本继承。
+    // 这样同一个端点既能做「+ 新建」（只给 from，整份复制），
+    // 也能做「另存为」（from 提供 Key，其余字段按表单里改过的走）。
+    var from = (req.From ?? "").Trim();
+    var basis = from.Length > 0 && mgr.Profiles.TryGetValue(from, out var b) ? b : null;
+
+    var cfg = new ApiConfig
+    {
+        Provider = req.Provider ?? basis?.Provider ?? ApiProviders.IdOpenAi,
+        ApiUrl = req.ApiUrl ?? basis?.ApiUrl ?? "",
+        Model = req.Model ?? basis?.Model ?? "",
+        AuthOverride = req.AuthOverride ?? basis?.AuthOverride ?? "",
+        // ★ Key 只能从蓝本带过来。表单里从来不回显明文 Key（输入框留空即表示
+        //   「保留原来的」），所以新建/另存为不走这一步就会把 Key 悄悄弄丢，
+        //   表现为「方案建出来了，一调用就 401」。
+        ApiKey = req.ApiKey ?? basis?.ApiKey ?? "",
+    };
+
+    mgr.AddOrUpdate(name, cfg);
+    if (req.Activate == true) mgr.SetActive(name);
+    mgr.Save();
+    return Results.Ok(new { ok = true, name });
 });
 
 // 保存（新增或覆盖）一个方案。Key 传空字符串表示清空；不传（null）表示保留原 Key。
@@ -744,6 +783,12 @@ app.MapPost("/api/ai/profiles/delete", (NameReq req) =>
 {
     var mgr = new ApiProfileManager(Path.Combine(ConfigDir(), "api_profiles.json"));
     mgr.Load();
+
+    // 与桌面端一致：至少留一个。删光之后界面上就再也没有可编辑的方案了，
+    // 用户只能去改 JSON——那是把人往坑里推。
+    if (mgr.Profiles.Count <= 1)
+        return Results.BadRequest(new { error = "至少保留一个配置方案" });
+
     return mgr.Delete(req.Name ?? "")
         ? Results.Ok(new { ok = true })
         : Results.NotFound(new { error = "没有这个方案" });
@@ -762,7 +807,21 @@ app.MapGet("/api/ai/providers", () => Results.Ok(new
         models = p.Models,
         consoleUrl = p.ConsoleUrl,
         note = p.Note,
+        // 这家服务商推荐哪种认证头。填错头不会报「认证方式不对」，
+        // 只会返回 401/403，用户根本看不出是头的问题——所以要能选。
+        auth = p.Auth.ToString(),
+        authLabel = p.AuthLabel,
+        wire = p.WireLabel,
+        isCustom = p.IsCustom,
     }),
+    // 「自动」永远排第一：绝大多数情况下不用管，只有接中转站时才要手选
+    authChoices = new object[]
+    {
+        new { value = "", label = "自动（推荐）" },
+        new { value = nameof(ApiAuth.Bearer), label = ApiProviders.AuthLabel(ApiAuth.Bearer) },
+        new { value = nameof(ApiAuth.XApiKey), label = ApiProviders.AuthLabel(ApiAuth.XApiKey) },
+        new { value = nameof(ApiAuth.ApiKeyHeader), label = ApiProviders.AuthLabel(ApiAuth.ApiKeyHeader) },
+    },
 }));
 
 // 从服务商现拉真实模型名（与桌面版 ApiSettingsWindow.FetchModelsAsync 同一个 ModelCatalog）。
@@ -1623,6 +1682,16 @@ public record BibReq([property: JsonPropertyName("text")] string? Text);
 
 public record ProfileSaveReq(
     [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("provider")] string? Provider,
+    [property: JsonPropertyName("apiUrl")] string? ApiUrl,
+    [property: JsonPropertyName("model")] string? Model,
+    [property: JsonPropertyName("apiKey")] string? ApiKey,
+    [property: JsonPropertyName("authOverride")] string? AuthOverride,
+    [property: JsonPropertyName("activate")] bool? Activate);
+
+public record ProfileNewReq(
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("from")] string? From,
     [property: JsonPropertyName("provider")] string? Provider,
     [property: JsonPropertyName("apiUrl")] string? ApiUrl,
     [property: JsonPropertyName("model")] string? Model,

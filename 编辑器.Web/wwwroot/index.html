@@ -249,26 +249,44 @@
 <dialog id="aiDlg">
   <form id="aiDlgForm" method="dialog">
     <h3>AI 设置</h3>
-    <div class="grid">
-      <label>方案<select id="profSel"></select></label>
-      <label>服务商<select id="provSel"></select></label>
+
+    <!-- 方案行：下拉 + 新建 + 另存为（对应桌面端「+ 新建 / 覆盖保存 / 删除」那一排） -->
+    <div class="prov-ops ai-prof-row">
+      <label class="grow">配置方案<select id="profSel"></select></label>
+      <button type="button" id="profNew" class="mini-btn" title="以当前方案为蓝本新建一个（Key 一起带过去）">＋ 新建</button>
+      <button type="button" id="profDup" class="mini-btn" title="把表单里现在的值另存成一个新名字">另存为</button>
     </div>
+    <div id="profEmpty" class="ai-empty hidden">
+      还没有一个是配好 Key 的方案。下面选一个服务商、填 API Key，然后点「＋ 新建」把它存成一个方案。
+    </div>
+
+    <label>AI 服务商<select id="provSel"></select></label>
     <div class="prov-ops">
       <button type="button" id="provConsole" class="mini-btn" title="去服务商控制台申请 Key">获取 API Key</button>
       <span id="provNote" class="muted"></span>
     </div>
+
     <label>API 地址（BaseURL）<input id="profUrl" placeholder="选服务商后自动填"></label>
+
     <div class="grid">
       <label>模型名称<input id="profModel" list="modelList" placeholder="区分大小写！">
         <datalist id="modelList"></datalist>
       </label>
+      <label>可用型号<select id="modelPreset"></select></label>
+    </div>
+
+    <!-- 认证方式：填错请求头不会报「认证方式不对」，只会 401/403，所以必须能选 -->
+    <div class="grid">
+      <label>认证方式<select id="authSel"></select></label>
       <label>API Key（留空保留原 Key）<input id="profKey" type="password" autocomplete="off"></label>
     </div>
+
     <div class="prov-ops">
       <button type="button" id="fetchModels" class="mini-btn" title="向服务商现拉真实模型名（需先填 Key）">拉取模型列表</button>
       <button type="button" id="rawEditBtn" class="mini-btn" title="直接编辑 api_profiles.json（与桌面版同一份）">编辑 JSON</button>
       <span id="modelStatus" class="muted"></span>
     </div>
+
     <div class="dlg-btns">
       <button type="button" id="profDelete" class="danger">删除方案</button>
       <span class="grow"></span>

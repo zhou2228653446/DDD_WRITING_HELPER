@@ -641,7 +641,12 @@ dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
 #historyBox>summary::-webkit-details-marker{display:none}
 #historyBox>summary:hover{background:var(--bg)}
 #historyBox #historyList{overflow:auto;padding:0 8px 8px;min-height:0}
-#historyList .snap-item .why{display:none}   /* 左栏窄，只留时间 + 恢复 */
+/* 左栏版本历史：窄，时间必须短、按钮不许被挤掉。
+   .snap-item .when 原本写死 min-width:150px，在 214px 宽的左栏里必然溢出。 */
+#historyList .snap-item{gap:7px;padding:5px 8px}
+#historyList .snap-item .when{min-width:auto;flex:none;font-size:11.5px}
+#historyList .snap-item .why{display:block;flex:1;min-width:0;font-size:11px}
+#historyList .snap-restore{padding:3px 9px;font-size:11.5px}
 
 /* ---------- 动效：对齐桌面端 Motion.cs（那边有窗口登场/菜单弹出/树展开/标签切换） ---------- */
 /* 时长与曲线取桌面端的 token：DurFade 240 / DurPop 320，缓动接近其 Tween 的观感 */

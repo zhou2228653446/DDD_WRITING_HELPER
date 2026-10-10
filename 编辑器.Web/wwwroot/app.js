@@ -652,11 +652,11 @@ async function loadSnapshots() {
 function renderSnapshots(list) {
   // 渲染两处：左栏常驻的「版本历史」（对应桌面端左栏下半部分）和快照视图。
   // 桌面端左栏一直摆着版本历史，不用切视图就能回滚——这点网页版此前缺。
-  renderSnapshotInto($('#historyList'), list.slice(0, 12));
+  renderSnapshotInto($('#historyList'), list.slice(0, 12), true);
   renderSnapshotInto($('#snapList'), list);
 }
 
-function renderSnapshotInto(box, list) {
+function renderSnapshotInto(box, list, compact = false) {
   if (!box) return;
   box.innerHTML = '';
   if (!list.length) {
@@ -666,7 +666,12 @@ function renderSnapshotInto(box, list) {
   list.forEach(s => {
     const d = document.createElement('div');
     d.className = 'snap-item';
-    const when = s.timestamp ? new Date(s.timestamp).toLocaleString() : '未知时间';
+    // 左栏窄：时间用 HH:mm:ss（桌面端版本历史也是这个格式），
+    // 完整日期在这儿会把「恢复」按钮挤出去。
+    const t = s.timestamp ? new Date(s.timestamp) : null;
+    const when = t
+      ? (compact ? t.toLocaleTimeString('zh-CN', { hour12: false }) : t.toLocaleString())
+      : '未知时间';
     d.innerHTML =
       `<span class="when">${escapeHtml(when)}</span>` +
       `<span class="why">${escapeHtml(s.description || '')}</span>` +

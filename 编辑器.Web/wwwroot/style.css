@@ -230,6 +230,7 @@ hr{border:none;border-top:1px solid var(--line);margin:16px 0}
 #right{
   width:340px;flex-shrink:0;background:var(--panel);
   border-left:1px solid var(--line);display:flex;flex-direction:column;
+  min-height:0;          /* 不加这个，子元素会把它撑出视口，底部内容永远看不到 */
 }
 /* 浮动模式：脱离右栏变成可拖动浮层（对应桌面端的 AI 助手独立窗口）。
    用 fixed 而不是 absolute，是为了让正文区能立刻占满腾出来的宽度。 */
@@ -243,7 +244,12 @@ hr{border:none;border-top:1px solid var(--line);margin:16px 0}
 }
 #right.floating #aiPanelHead{cursor:move;user-select:none;border-radius:12px 12px 0 0}
 #right.floating #aiPanelHead:active{cursor:grabbing}
-.ai-box{padding:12px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--line)}
+.ai-box{
+  padding:10px 12px;display:flex;flex-direction:column;gap:7px;
+  /* 占满剩余高度；内容实在放不下就自己滚，不要把底部裁掉 */
+  flex:1;min-height:0;overflow-y:auto;
+  border-bottom:1px solid var(--line);
+}
 .ai-box textarea{
   font:inherit;color:var(--ink);background:var(--bg);
   border:1px solid var(--line);border-radius:var(--radius);padding:8px;resize:vertical;
@@ -256,12 +262,16 @@ hr{border:none;border-top:1px solid var(--line);margin:16px 0}
 .ctx-chapters label{display:flex;gap:6px;align-items:center;font-size:12px;cursor:pointer}
 .ctx-ops{display:flex;gap:6px;margin-top:4px}
 .ai-out{
-  min-height:80px;max-height:280px;overflow:auto;font-size:13px;
+  min-height:110px;max-height:none;overflow:auto;font-size:13px;
   background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);padding:10px;
   white-space:pre-wrap;
 }
 .ai-ops{display:flex;gap:6px}
-.live{flex:1;overflow:auto;padding:8px 12px;font-size:12px}
+.live{
+  /* ★ 原来是 flex:1 —— 它会把 AI 面板的剩余空间全抢走，AI 回复区被挤成一条缝。
+     这里给它固定高度，剩下的留给上面。 */
+  flex:none;height:150px;overflow:auto;padding:8px 12px;font-size:12px;
+}
 .live .row{padding:5px 0;border-bottom:1px solid var(--line);color:var(--muted)}
 .live .row b{color:var(--ink);font-weight:600}
 .live .row.agent b{color:var(--accent)}
@@ -551,7 +561,7 @@ dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
 /* 桌面端主任务是「续写 / 润色」两个大按钮，不是一个任务下拉 */
 .ai-main-btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:2px 0 8px}
 .ai-main-btns button{
-  font:inherit;font-size:13px;font-weight:600;padding:8px 0;cursor:pointer;
+  font:inherit;font-size:13px;font-weight:600;padding:6px 0;cursor:pointer;
   color:var(--ink);background:var(--bg);border:1px solid var(--line);
   border-radius:var(--radius);
 }
@@ -658,3 +668,39 @@ dialog[open]{animation:dlgIn 240ms cubic-bezier(.2,.85,.3,1)}
 
 /* ⑤ 面板视图开关（章节栏 / AI 面板显隐）也带一点淡入 */
 aside:not(.hidden){animation:fadeIn 180ms ease-out}
+
+/* ---------- 小屏适配：1080p 在 125% / 150% 缩放下 CSS 视口只有 1536x760 / 1280x633 ---------- */
+/* 顶栏在 1536 宽就会换行，多占一行 44px；把能收的收进菜单，保证单行 */
+@media (max-width:1680px){
+  header{gap:6px;padding:8px 10px}
+  header .brand{display:none}                 /* 品牌字让位，菜单栏已经说明了这是哪 */
+  header .export .muted{display:none}         /* 「导出」二字 */
+  #toggleChapters,#toggleRight{display:none}  /* 菜单「视图」里有，避免重复占位 */
+  header button{padding:4px 9px;font-size:12.5px}
+  .tab{padding:4px 9px;font-size:12.5px}
+  #mcpBadge{font-size:11px;padding:1px 7px}
+}
+@media (max-width:1400px){
+  #stats{display:none}          /* 今日字数——状态栏里已经有更全的 */
+  #themeSel{display:none}       /* 配色快捷切换移到「外观」对话框 */
+}
+
+/* 矮屏：AI 面板内容多，先把次要区域压下去，别让「生成」按钮要滚才看得见 */
+@media (max-height:980px){
+  .live{height:106px}
+  .ai-box{gap:5px;padding:8px 10px}
+  .ai-out{min-height:88px}
+  .ai-main-btns button{padding:5px 0}
+  .ai-sub-head{margin:6px 0 3px;padding-top:6px}
+  .ctx-chapters{max-height:110px}
+  .ai-main-btns{margin:1px 0 5px}
+  .ai-chips{margin-bottom:6px}
+}
+@media (max-height:700px){
+  .live{height:78px}
+  .ai-out{min-height:64px}
+  .ai-box{gap:4px;padding:7px 9px}
+  #chapters{width:200px}
+  #right{width:300px}
+  .panel-head{padding:7px 10px}
+}

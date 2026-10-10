@@ -48,6 +48,32 @@ McpServer.SetNotifier(o =>
     _ = hubProvider.Clients.All.SendAsync("mcpProgress", o);
 });
 
+// ★ stdio 启动的 agent（Codex / Claude / Cursor…）事件**不走 HTTP**，而是走
+//   McpLiveBridge 的命名管道——桌面端 MainWindow 一直在监听它，网页版此前完全
+//   没接。后果就是：agent 用 stdio 写小说，网页界面上一片空白，用户"完全看不到
+//   agent 的具体操作"。这里接上同一根管道（服务端允许多实例，可与桌面端并存），
+//   把事件转成 SignalR 广播交给前端。
+//   字段名在这里就定死成 camelCase，免得前端去猜 SignalR 的序列化策略。
+_ = McpLiveBridge.StartServer(ev =>
+{
+    _ = hubProvider.Clients.All.SendAsync("mcpLive", new
+    {
+        eventType = ev.EventType,
+        toolName = ev.ToolName,
+        taskName = ev.TaskName,
+        projectPath = ev.ProjectPath,
+        chapterNumber = ev.ChapterNumber,
+        settingField = ev.SettingField,
+        summary = ev.Summary,
+        previewText = ev.PreviewText,
+        inputTokens = ev.InputTokens,
+        outputTokens = ev.OutputTokens,
+        projectModified = ev.ProjectModified,
+        writeBack = ev.WriteBack,
+        writeMode = ev.WriteMode,
+    });
+}, CancellationToken.None);
+
 app.MapPost("/mcp", async (HttpContext ctx, WorkspaceService ws) =>
 {
     using var reader = new StreamReader(ctx.Request.Body);

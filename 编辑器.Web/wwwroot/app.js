@@ -126,6 +126,9 @@ function updateWords() {
 }
 
 async function flushSave() {
+  // agent 正在流式写这一章：内容由它落盘，我们的"预览"不该反过来去覆盖，
+  // 而且此刻 stamp 已过期，硬存只会弹一个 409 吓人。
+  if (mcpStreaming) return;
   if (!dirty || current == null) return;
   clearTimeout(saveTimer);
   try {
@@ -1625,6 +1628,21 @@ $('#clearLog').onclick = () => { $('#live').innerHTML = ''; };
 // 另一个客户端的改动顶掉。默认开（与桌面端一致）。
 let mcpFollow = true;
 
+// agent 流式写入期间的界面状态（见 connect() 里的 mcpLive 处理器）
+let mcpStreaming = false;      // 期间不许自动保存去动 stamp——内容由 agent 写盘
+let mcpStreamChapter = null;   // 正在流式生成的章号
+let mcpStreamBase = '';        // append 模式下的基准正文
+let mcpBadgeTimer = null;
+
+function mcpBadgeShow(text, busy, autoHide) {
+  const b = $('#mcpBadge');
+  b.textContent = text;
+  b.classList.toggle('busy', !!busy);
+  b.classList.remove('hidden');
+  clearTimeout(mcpBadgeTimer);
+  if (autoHide) mcpBadgeTimer = setTimeout(() => b.classList.add('hidden'), 4000);
+}
+
 async function loadMcpFollow() {
   try {
     const r = await api('/api/settings/mcp-live-sync');
@@ -1681,6 +1699,71 @@ function connect() {
   conn.on('mcpProgress', o => {
     const p = o?.params || {};
     log(p.message || JSON.stringify(o), true);
+  });
+
+  // ---------- agent 通过 MCP 在做什么：看得见（对应桌面端 HandleMcpLiveEvent）----------
+  // 桌面端那套是四件事：状态栏徽章 + 状态文案 + 自动切到 agent 正在改的章节 +
+  // 把流式正文实时打进编辑框，外加 Token 用量。网页版此前只做了个开关、
+  // 没有任何显示，所以「agent 在写什么」界面上完全看不到。
+  conn.on('mcpLive', async ev => {
+    if (!mcpFollow) return;
+    const t = ev.eventType;
+
+    if (t === 'start') {
+      mcpBadgeShow('MCP 执行中', true, false);
+      if (ev.summary) log(ev.summary, true);
+      // 切到 agent 正在操作的那一章（章节可能刚被建出来，失败就算了）
+      if (ev.chapterNumber > 0 && current !== ev.chapterNumber) {
+        try { await openChapter(ev.chapterNumber); } catch { /* 忽略 */ }
+      }
+      if (ev.toolName === 'ai_write' && ev.writeBack) {
+        mcpStreaming = true;
+        mcpStreamChapter = ev.chapterNumber;
+        mcpStreamBase = ev.writeMode === 'append' ? ($('#editor').value || '') : '';
+      }
+      return;
+    }
+
+    if (t === 'stream') {
+      mcpBadgeShow('MCP 执行中', true, false);
+      if (ev.inputTokens || ev.outputTokens) {
+        lastTokens = `MCP ${ev.inputTokens} in / ${ev.outputTokens} out`;
+        updateChatInfo();
+      }
+      if (ev.previewText) {
+        $('#aiOut').textContent = ev.previewText;
+        // ★ 主编辑框里实时显示正文增长——桌面端就是这么做的，
+        //   不然用户只能看着一个不动的屏幕猜 agent 有没有在干活
+        if (ev.writeBack && ev.chapterNumber > 0) {
+          if (mcpStreamChapter !== ev.chapterNumber) {
+            mcpStreamChapter = ev.chapterNumber;
+            mcpStreamBase = '';
+          }
+          const box = $('#editor');
+          box.value = ev.writeMode === 'replace'
+            ? ev.previewText
+            : (mcpStreamBase ? mcpStreamBase.replace(/\n+$/, '') + '\n' + ev.previewText
+                             : ev.previewText);
+          box.scrollTop = box.scrollHeight;
+          updateWords();
+          $('#saveState').textContent = 'MCP 写入中…';
+        }
+      }
+      return;
+    }
+
+    // done / error
+    mcpStreaming = false;
+    mcpStreamChapter = null;
+    mcpStreamBase = '';
+    mcpBadgeShow(t === 'error' ? 'MCP 出错' : 'MCP 已同步', false, true);
+    if (ev.summary) log(ev.summary, t === 'error');
+    if (ev.previewText) $('#aiOut').textContent = ev.previewText;
+    if (ev.projectModified) {
+      await refresh();           // 从磁盘把 agent 改的内容拉回来（含新的 stamp）
+      loadChatInfo();
+    }
+    $('#saveState').textContent = '已同步';
   });
 
   conn.start().catch(e => console.warn('实时连接失败', e));

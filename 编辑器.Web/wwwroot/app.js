@@ -80,6 +80,8 @@ async function refresh() {
 function renderChapters() {
   const ul = $('#chList');
   ul.innerHTML = '';
+  window.__chapters = book?.chapters || [];   // 状态栏要显示「第 N 章 / 共 M 章」
+  updateStatusBar();
   (book?.chapters || []).forEach(c => {
     const li = document.createElement('li');
     li.innerHTML = `<span>${c.n}. ${escapeHtml(c.title)}</span>` +
@@ -123,6 +125,27 @@ async function openChapter(n) {
 function updateWords() {
   const t = $('#editor').value.replace(/\s/g, '');
   $('#chWords').textContent = `${t.length} 字`;
+  updateStatusBar(t.length);
+}
+
+// 状态栏（对应桌面端底部那条：字数 / 章节 / 当前 API）
+let statusApi = '';
+function updateStatusBar(words) {
+  const w = words != null ? words : ($('#editor').value || '').replace(/\s/g, '').length;
+  $('#sbWords').textContent = `字数：${w}`;
+  const total = (window.__chapters || []).length;
+  $('#sbChapters').textContent = current == null
+    ? `章节：共 ${total} 章`
+    : `章节：第 ${current} 章 / 共 ${total} 章`;
+  $('#sbApi').textContent = statusApi ? `API ${statusApi}` : 'API 未配置';
+}
+
+async function loadStatusApi() {
+  try {
+    const p = await api('/api/ai/profiles');
+    statusApi = p.active || '';
+  } catch { statusApi = ''; }
+  updateStatusBar();
 }
 
 async function flushSave() {
@@ -627,7 +650,14 @@ async function loadSnapshots() {
 }
 
 function renderSnapshots(list) {
-  const box = $('#snapList');
+  // 渲染两处：左栏常驻的「版本历史」（对应桌面端左栏下半部分）和快照视图。
+  // 桌面端左栏一直摆着版本历史，不用切视图就能回滚——这点网页版此前缺。
+  renderSnapshotInto($('#historyList'), list.slice(0, 12));
+  renderSnapshotInto($('#snapList'), list);
+}
+
+function renderSnapshotInto(box, list) {
+  if (!box) return;
   box.innerHTML = '';
   if (!list.length) {
     box.innerHTML = '<div class="muted">还没有快照。</div>';
@@ -1132,10 +1162,16 @@ $('#chatClearBtn').onclick = async () => {
   } catch (e) { alert('清空失败：' + e.message); }
 };
 
-$('#aiGoBtn').onclick = () => runAi($('#aiTask').value);
+$('#aiGoBtn').onclick = () => runAi($('#aiTask').value || 'continue');
 $('#aiStopBtn').onclick = () => { if (aiAbort) aiAbort.abort(); };
-$('#aiTask').onchange = () =>
-  $('#polishRow').classList.toggle('hidden', $('#aiTask').value !== 'polish');
+
+// 主任务按钮：与桌面端 AiPanelControl 一样是「续写 / 润色」两个大按钮，
+// 其余任务走旁边的小 chip。aiTask 那个下拉留着（隐藏）当任务名的载体。
+$('#aiContinueBtn').onclick = () => { $('#aiTask').value = 'continue'; runAi('continue'); };
+$('#aiPolishBtn').onclick = () => { $('#aiTask').value = 'polish'; runAi('polish'); };
+document.querySelectorAll('.ai-chips [data-task]').forEach(b => {
+  b.onclick = () => { $('#aiTask').value = b.dataset.task; runAi(b.dataset.task); };
+});
 
 // ---------- AI 审稿 / 角色出场统计（桌面端顶栏同款两个按钮） ----------
 
@@ -2018,9 +2054,39 @@ document.addEventListener('keydown', e => {
   if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); $('#aiGoBtn').click(); }
 });
 
+// ---------- 菜单栏：入口换个地方，功能全是现成的（对应桌面端那一排菜单） ----------
+function closeMenus() {
+  document.querySelectorAll('#menubar details').forEach(d => { d.open = false; });
+}
+document.querySelectorAll('#menubar .menu-items button').forEach(b => {
+  b.onclick = () => {
+    const cmd = b.dataset.cmd;
+    closeMenus();
+    if (cmd === 'newbook') $('#newBookBtn').click();
+    else if (cmd === 'openbook') { $('#bookSel').focus(); log('在左上角的下拉里选一本书'); }
+    else if (cmd === 'save') flushSave();
+    else if (cmd === 'export') document.querySelector(`.export [data-fmt="${b.dataset.fmt}"]`)?.click();
+    else if (cmd === 'find') findOpen();
+    else if (cmd === 'ai') { $('#aiTask').value = b.dataset.task; runAi(b.dataset.task); }
+    else if (cmd === 'review') $('#reviewBtn').click();
+    else if (cmd === 'aiset') $('#aiSetBtn').click();
+    else if (cmd === 'prompts') $('#promptBtn').click();
+    else if (cmd === 'skills') $('#skillBtn').click();
+    else if (cmd === 'view') document.querySelector(`.tabs [data-view="${b.dataset.view}"]`)?.click();
+    else if (cmd === 'toggle') $(b.dataset.panel === 'chapters' ? '#toggleChapters' : '#toggleRight').click();
+    else if (cmd === 'appearance') $('#appearanceBtn').click();
+    else if (cmd === 'help') $('#helpBtn').click();
+  };
+});
+// 点别处就收起菜单
+document.addEventListener('click', e => {
+  if (!e.target.closest || !e.target.closest('#menubar')) closeMenus();
+});
+
 loadBooks().catch(e => console.error(e));
 loadSkills();
 loadPresetSelect();
 loadPolishPresets();
 loadAppearance().catch(e => console.error(e));
+loadStatusApi();
 connect();

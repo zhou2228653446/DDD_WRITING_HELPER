@@ -8,6 +8,60 @@
 </head>
 <body>
 
+<!-- 菜单栏：桌面端有「文件 / 编辑 / AI助手 / 视图 / 帮助」一整排，
+     网页版此前只有一个平铺的工具条。菜单项绑的都是已有的功能，只是换个入口。 -->
+<nav id="menubar">
+  <details class="menu"><summary>文件</summary>
+    <div class="menu-items">
+      <button data-cmd="newbook">新建项目</button>
+      <button data-cmd="openbook">打开项目</button>
+      <button data-cmd="save">保存章节</button>
+      <hr>
+      <button data-cmd="export" data-fmt="docx">导出为 Word</button>
+      <button data-cmd="export" data-fmt="pdf">导出为 PDF</button>
+      <button data-cmd="export" data-fmt="txt">导出为 TXT</button>
+    </div>
+  </details>
+  <details class="menu"><summary>编辑</summary>
+    <div class="menu-items">
+      <button data-cmd="find">查找替换<span class="key">Ctrl+F</span></button>
+    </div>
+  </details>
+  <details class="menu"><summary>AI 助手</summary>
+    <div class="menu-items">
+      <button data-cmd="ai" data-task="continue">续写</button>
+      <button data-cmd="ai" data-task="polish">润色</button>
+      <button data-cmd="ai" data-task="name">人名生成</button>
+      <button data-cmd="ai" data-task="chat">万能聊天</button>
+      <button data-cmd="review">AI 审稿</button>
+      <hr>
+      <button data-cmd="aiset">AI 设置</button>
+      <button data-cmd="prompts">提示词</button>
+      <button data-cmd="skills">技能</button>
+    </div>
+  </details>
+  <details class="menu"><summary>视图</summary>
+    <div class="menu-items">
+      <button data-cmd="view" data-view="write">写作</button>
+      <button data-cmd="view" data-view="outline">大纲</button>
+      <button data-cmd="view" data-view="characters">人物</button>
+      <button data-cmd="view" data-view="literature">文献</button>
+      <button data-cmd="view" data-view="sbook">设定集</button>
+      <button data-cmd="view" data-view="snapshots">快照</button>
+      <button data-cmd="view" data-view="settings">设定</button>
+      <hr>
+      <button data-cmd="toggle" data-panel="chapters">章节栏</button>
+      <button data-cmd="toggle" data-panel="right">AI 助手面板</button>
+      <button data-cmd="appearance">外观设置</button>
+    </div>
+  </details>
+  <details class="menu"><summary>帮助</summary>
+    <div class="menu-items">
+      <button data-cmd="help">关于 / 快捷键 / 接入 Agent</button>
+    </div>
+  </details>
+</nav>
+
 <header>
   <div class="brand">写作</div>
   <select id="bookSel" title="选择一本书"></select>
@@ -50,6 +104,11 @@
       <button id="addChBtn" class="mini">+</button>
     </div>
     <ul id="chList"></ul>
+    <!-- 版本历史：对应桌面端左栏下半部分（一直摆在那儿，不必切视图就能回滚） -->
+    <details id="historyBox" open>
+      <summary>版本历史 <span class="muted">最近 12 条</span></summary>
+      <div id="historyList" class="snap-list"></div>
+    </details>
   </aside>
 
   <!-- 中：编辑器 / 大纲 / 人物 / 文献 / 快照 / 设定 -->
@@ -180,46 +239,68 @@
 
   <!-- 右：AI 与 agent 活动 -->
   <aside id="right">
-    <div class="panel-head" id="aiPanelHead"><span>AI</span>
+    <div class="panel-head" id="aiPanelHead">
+      <span>AI 助手</span>
+      <!-- 预设跟着桌面端放在标题行上（桌面端就是「AI 助手 小说创作 ▾ 弹出」这一排） -->
+      <select id="aiPreset" title="提示词方案（与桌面版共用，切了桌面端也跟着变）"></select>
       <button id="floatAiBtn" class="mini" title="把 AI 面板变成可拖动的浮层，正文区就能占满宽度（对应桌面端的独立浮窗）">浮动</button>
     </div>
     <div class="ai-box">
-      <select id="aiPreset" title="提示词方案（与桌面版共用，切了桌面端也跟着变）"></select>
-      <select id="aiTask">
+      <!-- 主任务：与桌面端一样是两个大按钮，不是一个下拉 -->
+      <div class="ai-main-btns">
+        <button id="aiContinueBtn">续写</button>
+        <button id="aiPolishBtn">润色</button>
+      </div>
+      <div class="ai-chips">
+        <button class="mini-btn" data-task="expand" title="在已有内容上继续扩写">扩写</button>
+        <button class="mini-btn" data-task="name">人名生成</button>
+        <button class="mini-btn" data-task="chat">万能聊天</button>
+        <button class="mini-btn" data-task="review" title="对照设定集检查本章，只读不改正文">审稿</button>
+      </div>
+      <select id="aiTask" class="hidden" aria-hidden="true">
         <option value="continue">续写</option>
         <option value="polish">润色</option>
         <option value="expand">扩写</option>
-        <option value="outline">生成大纲</option>
-        <option value="character">人物设定</option>
         <option value="name">人名生成</option>
         <option value="chat">万能写作</option>
-        <option value="review">AI 审稿（一致性检查）</option>
+        <option value="review">AI 审稿</option>
       </select>
-      <select id="aiSkill"><option value="">技能：无</option></select>
-      <div id="polishRow" class="hidden">
-        <select id="polishStyle" title="润色风格预设（与桌面版共用 polish_presets.json）">
-          <option value="">风格：无</option>
-        </select>
-        <button id="polishAdd" class="mini-btn" title="把输入框里的文字存为风格预设">＋</button>
-        <button id="polishDel" class="mini-btn danger" title="删除选中的风格（内置不可删）">－</button>
-      </div>
-      <details id="ctxBox">
-        <summary>上下文章节 <span id="ctxCount" class="muted"></span></summary>
-        <div id="ctxChapters" class="ctx-chapters"></div>
-        <div class="ctx-ops"><button id="ctxAll" class="mini-btn" type="button">全选</button><button id="ctxNone" class="mini-btn" type="button">全不选</button></div>
-      </details>
+
       <div class="ctx-gen">
         <span class="muted">生成上下文</span>
         <div class="ctx-gen-btns">
           <button class="mini-btn" data-ctx="outline" title="生成全文大纲（已有则改成在原文上扩写）">全文大纲</button>
           <button class="mini-btn" data-ctx="chapterOutline">章节大纲</button>
-          <button class="mini-btn" data-ctx="character">人物</button>
-          <button class="mini-btn" data-ctx="background">背景</button>
+          <button class="mini-btn" data-ctx="character">生成人物</button>
+          <button class="mini-btn" data-ctx="background">生成背景</button>
           <button class="mini-btn" data-ctx="style">文风</button>
           <button class="mini-btn" data-ctx="viewpoint">视角</button>
         </div>
       </div>
-      <textarea id="aiPrompt" rows="3" placeholder="补充说明（可留空）"></textarea>
+
+      <details id="ctxBox">
+        <summary>上下文章节 <span id="ctxCount" class="muted"></span></summary>
+        <div id="ctxChapters" class="ctx-chapters"></div>
+        <div class="ctx-ops"><button id="ctxAll" class="mini-btn" type="button">全选</button><button id="ctxNone" class="mini-btn" type="button">全不选</button></div>
+      </details>
+
+      <label class="ai-field"><span>技能</span>
+        <select id="aiSkill"><option value="">无技能</option></select>
+      </label>
+      <textarea id="aiPrompt" rows="3" placeholder="要求 / 输入（可留空）"></textarea>
+
+      <!-- 润色风格：桌面端是常驻的一块（带「仅润色有效」说明 + ＋ － 管预设） -->
+      <div id="polishRow">
+        <div class="ai-sub-head">润色风格<span class="muted">仅润色有效</span></div>
+        <div class="polish-line">
+          <select id="polishStyle" title="润色风格预设（与桌面版共用 polish_presets.json）">
+            <option value="">（无预设）</option>
+          </select>
+          <button id="polishAdd" class="mini-btn" title="把输入框里的文字存为风格预设">＋</button>
+          <button id="polishDel" class="mini-btn danger" title="删除选中的风格（内置不可删）">－</button>
+        </div>
+      </div>
+
       <div class="ai-run">
         <button id="aiGoBtn" class="primary">生成</button>
         <button id="aiStopBtn" class="danger" disabled>停止</button>
@@ -247,6 +328,17 @@
     <div id="live" class="live"></div>
   </aside>
 </main>
+
+<!-- 状态栏：对应桌面端底部那条（字数 / 章节 / 当前 API）
+     —— 桌面端一直显示着当前字数和用的是哪个 API，网页版此前完全没有，
+     用户想知道"现在多少字、在用哪个方案"只能靠猜。 -->
+<footer id="statusbar">
+  <span id="sbWords" class="muted">字数：0</span>
+  <span id="sbChapters" class="muted">章节：未选择</span>
+  <span class="grow"></span>
+  <span id="sbSave" class="muted"></span>
+  <span id="sbApi" class="muted" title="当前启用的 AI 配置方案"></span>
+</footer>
 
 <!-- AI 设置对话框 -->
 <dialog id="aiDlg">
@@ -584,7 +676,10 @@
   </div>
 </dialog>
 
-<script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@8.0.7/dist/browser/signalr.min.js"></script>
+<!-- SignalR 前端库放本地，**不要用 CDN**：jsdelivr 在部分网络下不可达，
+     一旦加载失败，connect() 第一行就 return，MCP 可视化/实时同步会整体哑火，
+     而且表面上一点报错都没有（踩过）。 -->
+<script src="/vendor/signalr.min.js"></script>
 <script src="/appearance.js"></script>
 <script src="/app.js"></script>
 </body>

@@ -756,3 +756,168 @@ aside:not(.hidden){animation:fadeIn 180ms ease-out}
   border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);color:var(--ink);
 }
 #loginBanner .primary{cursor:pointer}
+
+/* ══════════════════════════════════════════════════════════════════
+   现代化润色层 —— 只动形状 / 层次 / 间距 / 动效，不碰配色变量
+   （外观系统的 8 套配色与材质照常生效；此处全部用已有变量派生）
+   ══════════════════════════════════════════════════════════════════ */
+:root{
+  --radius:10px; --radius-lg:14px; --radius-sm:8px;
+  --shadow-1:0 1px 2px rgba(0,0,0,.05), 0 2px 8px rgba(0,0,0,.05);
+  --shadow-2:0 4px 12px rgba(0,0,0,.08), 0 12px 32px rgba(0,0,0,.10);
+  --shadow-3:0 8px 24px rgba(0,0,0,.14), 0 20px 48px rgba(0,0,0,.16);
+  --line-soft:color-mix(in srgb, var(--line) 55%, transparent);
+  --accent-soft:color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-mid:color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* ── 字体与基调 ── */
+body{
+  font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ── 顶栏：微影替代硬边线 ── */
+header,#menubar{
+  border-bottom:1px solid var(--line-soft);
+  box-shadow:0 1px 3px rgba(0,0,0,.04);
+  position:relative; z-index:5;
+}
+
+/* ── 通用按钮：过渡 + 抬升 + 按下 ── */
+button,.tab,.mini-btn,.vt-btn,.mini{
+  transition:background .15s ease, border-color .15s ease, color .15s ease,
+             box-shadow .15s ease, transform .06s ease, opacity .15s ease;
+}
+button:active,.mini-btn:active,.tab:active{ transform:scale(.97); }
+button:hover:not(:disabled),.mini-btn:hover:not(:disabled){
+  border-color:var(--accent-mid);
+  box-shadow:0 1px 4px rgba(0,0,0,.06);
+}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{
+  outline:none; border-color:var(--accent);
+  box-shadow:0 0 0 3px var(--accent-soft);
+}
+button:disabled{ opacity:.5; cursor:not-allowed; }
+
+/* 主按钮：实底强调 */
+button.primary,.primary{
+  background:linear-gradient(180deg,
+    color-mix(in srgb, var(--accent) 92%, white),
+    var(--accent));
+  color:#fff; border-color:transparent; font-weight:600;
+  box-shadow:0 1px 3px color-mix(in srgb, var(--accent) 35%, transparent),
+             0 2px 8px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+button.primary:hover:not(:disabled),.primary:hover:not(:disabled){
+  background:linear-gradient(180deg,
+    color-mix(in srgb, var(--accent) 88%, white),
+    color-mix(in srgb, var(--accent) 94%, black));
+  box-shadow:0 2px 6px color-mix(in srgb, var(--accent) 45%, transparent),
+             0 4px 14px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+/* 危险按钮同构 */
+button.danger,.danger{ color:var(--danger); }
+button.danger:hover:not(:disabled){
+  border-color:color-mix(in srgb, var(--danger) 40%, transparent);
+  background:color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+/* 输入类：focus 光环 */
+input,select,textarea{
+  transition:border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+
+/* ── Tabs：底部指示条式 ── */
+.tabs .tab{ position:relative; border-radius:var(--radius-sm) var(--radius-sm) 0 0; }
+.tabs .tab.active{
+  background:transparent; border-color:transparent; color:var(--accent); font-weight:600;
+}
+.tabs .tab.active::after{
+  content:""; position:absolute; left:10px; right:10px; bottom:-1px; height:2px;
+  background:var(--accent); border-radius:2px;
+}
+.tabs .tab:hover:not(.active){ color:var(--ink); background:var(--accent-soft); }
+
+/* ── 左栏章节列表：呼吸感与选中态 ── */
+#chList li{ margin:1px 4px; border:1px solid transparent; }
+#chList li:hover{ background:var(--accent-soft); }
+#chList li.active{
+  background:var(--accent-mid); color:var(--accent); font-weight:600;
+  border-color:color-mix(in srgb, var(--accent) 25%, transparent);
+}
+#historyList .snap-item:hover{ background:var(--accent-soft); }
+.snap-item{ transition:background .15s ease; }
+
+/* ── 右栏 AI 面板：区块卡片化 ── */
+#right{ border-left:1px solid var(--line-soft); }
+.ai-box>details,.ai-sec{ border-radius:var(--radius); }
+.ai-sec-head:hover{ background:var(--accent-soft); border-radius:var(--radius-sm); }
+.ctx-gen-btns .mini-btn{ border-radius:999px; padding:3px 10px; font-size:12px; }
+.ai-main-btns button{ border-radius:var(--radius); }
+.ai-out,.live{
+  border-radius:var(--radius);
+  background:color-mix(in srgb, var(--bg) 55%, var(--panel));
+}
+
+/* ── 编辑器：纸面感 ── */
+#editor-wrap,#editor{
+  line-height:1.9; letter-spacing:.02em;
+}
+#editor-bar{ border-bottom:1px solid var(--line-soft); }
+
+/* ── 对话框：浮层质感 ── */
+dialog{
+  border-radius:var(--radius-lg); box-shadow:var(--shadow-3);
+  border:1px solid var(--line-soft); padding:20px 22px;
+}
+dialog::backdrop{ background:rgba(0,0,0,.32); backdrop-filter:blur(2px); }
+
+/* ── 滚动条 ── */
+*::-webkit-scrollbar{ width:8px; height:8px; }
+*::-webkit-scrollbar-track{ background:transparent; }
+*::-webkit-scrollbar-thumb{
+  background:color-mix(in srgb, var(--muted) 35%, transparent);
+  border-radius:4px;
+}
+*::-webkit-scrollbar-thumb:hover{ background:color-mix(in srgb, var(--muted) 55%, transparent); }
+
+/* ── 状态栏：更轻 ── */
+#statusbar{ border-top:1px solid var(--line-soft); }
+
+/* ── 徽章 / 小标签 ── */
+.mcp-badge{ border-radius:999px; box-shadow:var(--shadow-1); }
+.badge{ border-radius:999px; }
+
+/* ── 帮助横幅与菜单浮层 ── */
+#loginBanner{ box-shadow:var(--shadow-2); }
+#menubar .menu-items{ box-shadow:var(--shadow-2); border-radius:var(--radius); }
+
+/* ── 浮岛布局：三栏各自成卡片，间隙透出底色 ── */
+main{ gap:10px; padding:10px; }
+#chapters,#right,#center{
+  border-radius:var(--radius-lg);
+  border:1px solid var(--line-soft);
+  box-shadow:var(--shadow-1);
+  overflow:hidden;
+}
+#center{ background:var(--editor-bg); }
+#editor{ background:transparent; }
+/* 浮岛化后原栏位硬边线去掉 */
+#chapters{ border-right:1px solid var(--line-soft); }
+#right{ border-left:1px solid var(--line-soft); }
+/* 章节标题输入与编辑区融合 */
+.editor-bar{ background:transparent; border-bottom:1px solid var(--line-soft); }
+/* 帮助横幅压在浮岛之上 */
+#loginBanner{ z-index:130; }
+
+/* ── 细节：AI 面板分组分隔 + 纸上标题 ── */
+.ai-box>details+details,.ai-box .ai-sec+.ai-sec,.ai-box details+.ctx-gen{ }
+.ai-box>details{ padding:2px 0; }
+.ai-box>summary{ list-style:none; cursor:pointer; }
+.editor-bar input{
+  background:transparent; border-color:transparent; font-weight:600;
+}
+.editor-bar input:focus{
+  border-bottom:1px solid var(--accent); border-radius:0; box-shadow:none;
+}

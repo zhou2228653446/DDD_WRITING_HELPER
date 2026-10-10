@@ -734,3 +734,10 @@ aside:not(.hidden){animation:fadeIn 180ms ease-out}
 
 /* 生成上下文的 chips 容器原来带 margin，收进折叠体后由 .ai-sec-body 管间距 */
 .ai-sec-body.ctx-gen-btns{display:flex;flex-wrap:wrap;gap:6px}
+
+/* 访问口令设置（帮助 → 接入 Agent） */
+.key-set{display:flex;align-items:center;gap:8px;margin:8px 0;flex-wrap:wrap}
+.key-set input{
+  flex:1;min-width:180px;font:inherit;font-size:13px;padding:6px 10px;
+  border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);color:var(--ink);
+}

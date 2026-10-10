@@ -10,8 +10,25 @@ let saveTimer = null;
 let dirty = false;
 let chatInfo = null;      // 聊天记忆的规模（服务器侧 <项目目录>/.chat/session.json，与桌面端同一份）
 
+// ---------- 访问口令（外网/局域网访问时的门槛；本机回环不需要） ----------
+// 服务器配了 auth.conf 的 DASHBOARD_TOKEN 之后，非本机请求要带口令；
+// 401 时问一次、存 localStorage，之后所有请求自动带上。手机浏览器另有一条
+// 服务端种的 Cookie 兜底（就算这里没存上也能用）。
+const accessKey = () => localStorage.getItem('tdxKey') || '';
+const authHeaders = () => accessKey() ? { 'Authorization': 'Bearer ' + accessKey() } : {};
+function askAccessKey() {
+  const k = prompt('这个地址需要访问口令：', accessKey());
+  if (k !== null) localStorage.setItem('tdxKey', k.trim());
+  return accessKey();
+}
+
 const api = async (url, opt) => {
-  const r = await fetch(url, opt);
+  const merged = { ...opt, headers: { ...authHeaders(), ...(opt?.headers || {}) } };
+  let r = await fetch(url, merged);
+  if (r.status === 401) {                       // 口令缺失/失效 → 问一次再试一遍
+    askAccessKey();
+    r = await fetch(url, { ...merged, headers: { ...merged.headers, ...authHeaders() } });
+  }
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   return r.json();
 };
@@ -1749,7 +1766,11 @@ function connect() {
   if (typeof signalR === 'undefined') return;
   loadMcpFollow();
   const conn = new signalR.HubConnectionBuilder()
-    .withUrl('/hub/live').withAutomaticReconnect().build();
+    .withUrl('/hub/live', {
+      // 外网/局域网访问时服务器开了口令校验：WebSocket 走 access_token 参数、
+      // negotiate 走 Authorization 头，服务器两种都认
+      accessTokenFactory: () => accessKey(),
+    }).withAutomaticReconnect().build();
 
   conn.on('live', e => {
     if (!mcpFollow) {
@@ -2061,20 +2082,44 @@ $$('#helpDlg .help-tabs button').forEach(b => {
     $$('#helpDlg .help-tabs button').forEach(x => x.classList.toggle('active', x === b));
     ['about', 'keys', 'agents'].forEach(k =>
       $('#ht-' + k).classList.toggle('hidden', k !== b.dataset.htab));
-    if (b.dataset.htab === 'agents') loadAgentClients();
+    if (b.dataset.htab === 'agents') { loadAgentClients(); loadAccessKeyState(); }
   };
 });
 $('#helpBtn').onclick = () => $('#helpDlg').showModal();
 
 // 网页版工作区本身就是一个 HTTP MCP 端点（已用官方 MCP SDK 标准客户端实测：
-// 握手 / 28 个工具 / 两分钟长任务全通过）。分两种场景说清楚。
+// 握手 / 28 个工具 / 两分钟长任务全通过）。接入方式按场景说明。
 $('#httpMcpHint').innerHTML =
   `另一条路：这个网页工作区本身就是 HTTP MCP 端点 <code>${location.origin}/mcp</code>` +
   `（免装 exe，agent 改的就是网页上正开着的这本书；已用官方 MCP SDK 标准客户端实测通过）。` +
   `<br>· <b>同一台机器</b>上的 agent：直接用上面的地址即可。` +
-  `<br>· <b>其他设备</b>上的 agent：本机服务默认只监听本机（防同网段设备乱改稿子），` +
-  `要先以 <code>set TDXCLAW_LAN=1</code> 启动服务放行局域网，对方连 ` +
-  `<code>http://本机IP:5280/mcp</code>；Windows 防火墙首次会弹窗，选「允许」。`;
+  `<br>· <b>局域网内</b>的其他设备：以 <code>set TDXCLAW_LAN=1</code> 启动服务（放行局域网 + IPv6），` +
+  `对方连 <code>http://本机IP:5280/mcp</code>；Windows 防火墙首次弹窗选「允许」。` +
+  `<br>· <b>公网</b>（人在外面、手机流量）：家宽 IPv4 入站被运营商 CGNAT 挡着走不通，` +
+  `实际走 <b>IPv6 直连 + No-IP</b>——bili 看板已配好同一台机器的 No-IP 域名（AAAA 记录），` +
+  `直接复用：对方连 <code>http://你的域名.ddns.net:5280/mcp</code>。` +
+  `前提：TDXCLAW_LAN=1 启动、防火墙放行 5280、<b>必须设置下方访问口令</b>（公网裸奔 = 任何人可改稿烧 Key）。` +
+  `手机浏览器看稿：第一次打开时输一次口令即可（服务端会种 Cookie）。`;
+
+// ---- 访问口令的设置入口（仅本机回环可用；外部设备请求会被 403） ----
+async function loadAccessKeyState() {
+  const st = $('#accessKeyState');
+  try {
+    const d = await api('/api/access-key');
+    st.textContent = d.enabled ? '已启用口令' : '未设置（鉴权关闭）';
+  } catch { st.textContent = '（仅本机可查看）'; }
+}
+$('#accessKeySave').onclick = async () => {
+  const st = $('#accessKeyState');
+  const k = $('#accessKeyInput').value.trim();
+  if (!k && !confirm('留空保存 = 关闭口令校验，确定？')) return;
+  try {
+    const d = await post('/api/access-key/set', { key: k });
+    st.textContent = d.enabled ? '已启用口令' : '已关闭（未设置）';
+    $('#accessKeyInput').value = '';
+    log(d.enabled ? '访问口令已设置：非本机访问需要带上它' : '访问口令已关闭');
+  } catch (e) { st.textContent = '保存失败：' + errMsg(e); }
+};
 
 let agentClientsLoaded = false;
 async function loadAgentClients() {

@@ -13,10 +13,12 @@ builder.Services.AddSignalR();
 builder.Services.AddSingleton<WorkspaceService>();
 
 // 「其他设备的 agent」只能通过 HTTP 连这台机器的 /mcp（stdio 要求那台机器上有 exe）。
-// 默认只绑回环——个人工具，绑局域网 = 同网段任何设备都能改你的稿子、烧你的 API；
+// 默认只绑回环——个人工具，绑出去 = 别的设备都能改你的稿子、烧你的 API；
 // 确实要给别的设备用时显式开：set TDXCLAW_LAN=1
+// 绑 0.0.0.0（局域网 IPv4）+ [::]（IPv6）——家宽 IPv4 入站被运营商 CGNAT 挡着
+// 不通，公网访问实际走的是 IPv6 直连（bili 项目已验证的路子，No-IP 做 AAAA 解析）。
 if (Environment.GetEnvironmentVariable("TDXCLAW_LAN") == "1")
-    builder.WebHost.UseUrls("http://0.0.0.0:5280");
+    builder.WebHost.UseUrls("http://0.0.0.0:5280;http://[::]:5280");
 
 // 提示词方案/技能配置与界面共用同一份文件。⚠ Store 必须在这里赋值——
 // 之前只调了 Load，Store 本身是 null，用户在桌面版改过的提示词覆写
@@ -38,6 +40,63 @@ app.UseStaticFiles(new StaticFileOptions
 {
     OnPrepareResponse = ctx =>
         ctx.Context.Response.Headers["Cache-Control"] = "no-cache",
+});
+
+// ══════════════════════════════════════════════════════════════════
+// 访问口令 —— 公网暴露（No-IP IPv6 直连 / 局域网）的底线
+// ══════════════════════════════════════════════════════════════════
+// 与 bili 看板同一套约定：配置目录放 auth.conf 填 DASHBOARD_TOKEN=xxx。
+// 留空/没有 = 不鉴权（本机与局域网的现状不受影响）；配了之后，**非回环**
+// 请求访问 /api /mcp /hub 必须带口令。必须做的原因：/mcp 能调 AI 烧 Key、
+// /api 能改稿删稿——公网上裸奔等于把 API Key 和全部书稿交给所有人。
+app.Use(async (ctx, next) =>
+{
+    var token = LoadAccessToken();
+    var path = ctx.Request.Path;
+    var needsAuth = path.StartsWithSegments("/api") || path.StartsWithSegments("/mcp")
+                 || path.StartsWithSegments("/hub");
+    if (needsAuth && !string.IsNullOrEmpty(token))
+    {
+        var loopback = IsLoopback(ctx);
+        if (!loopback)
+        {
+            if (!TokenMatches(ctx, token))
+            {
+                ctx.Response.StatusCode = 401;
+                ctx.Response.Headers.WWWAuthenticate = "Bearer";
+                await ctx.Response.WriteAsJsonAsync(new
+                { error = "需要访问口令（Authorization: Bearer <token>，或 ?access_token=）" });
+                return;
+            }
+            // 口令对了：种一个长期 Cookie，浏览器（手机看稿）之后自动携带
+            ctx.Response.Headers["Set-Cookie"] =
+                $"tdx_token={Uri.EscapeDataString(token)}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax";
+        }
+    }
+    await next();
+});
+
+// 口令管理：**仅限本机回环**——公网上谁都不许读、也不许改口令。
+app.MapGet("/api/access-key", (HttpContext ctx) =>
+    IsLoopback(ctx)
+        ? Results.Ok(new { enabled = !string.IsNullOrEmpty(LoadAccessToken()) })
+        : Results.StatusCode(403));
+
+app.MapPost("/api/access-key/set", async (HttpContext ctx) =>
+{
+    if (!IsLoopback(ctx)) return Results.StatusCode(403);
+    var req = await ctx.Request.ReadFromJsonAsync<AccessKeyReq>();
+    var key = (req.Key ?? "").Trim();
+    var file = Path.Combine(编辑器.Mcp.NovelTools.ResolveConfigDirectory(), "auth.conf");
+    if (key.Length == 0)
+    {
+        if (File.Exists(file)) File.Delete(file);   // 留空 = 关闭鉴权
+        return Results.Ok(new { enabled = false });
+    }
+    await File.WriteAllTextAsync(file,
+        "# 访问口令（与 bili 看板同款约定）——配了之后，非本机访问 /api /mcp /hub 必须带上它\n" +
+        "DASHBOARD_TOKEN=" + key + "\n");
+    return Results.Ok(new { enabled = true });
 });
 
 app.MapHub<LiveHub>("/hub/live");
@@ -1774,6 +1833,59 @@ app.Run();
 // 读的就不是同一份文件了——又是「两条路只对了一条」。
 static string ConfigDir() => 编辑器.Mcp.NovelTools.ResolveConfigDirectory();
 
+// ── 访问口令（公网暴露的底线；约定与 bili 看板同款）──────────────────
+
+/// <summary>读访问口令（配置目录 auth.conf 的 DASHBOARD_TOKEN=）。没有/留空 = 未启用鉴权。</summary>
+static string? LoadAccessToken()
+{
+    try
+    {
+        var file = Path.Combine(ConfigDir(), "auth.conf");
+        if (!File.Exists(file)) return null;
+        foreach (var raw in File.ReadAllLines(file))
+        {
+            var i = raw.IndexOf('=');
+            if (i <= 0) continue;
+            if (!raw[..i].Trim().Equals("DASHBOARD_TOKEN", StringComparison.OrdinalIgnoreCase)) continue;
+            var v = raw[(i + 1)..].Trim();
+            return v.Length > 0 ? v : null;
+        }
+    }
+    catch { }
+    return null;
+}
+
+static bool IsLoopback(HttpContext ctx) =>
+    ctx.Connection.RemoteIpAddress is { } ip && System.Net.IPAddress.IsLoopback(ip);
+
+/// <summary>
+/// 取请求携带的口令并比对（恒时比较，防止计时侧信道）。
+/// 来源顺序：Authorization: Bearer → ?access_token=（SignalR 的
+/// accessTokenFactory 走这个）→ Cookie（口令对了之后服务端种下的那份）。
+/// </summary>
+static bool TokenMatches(HttpContext ctx, string token)
+{
+    var supplied = ctx.Request.Headers["Authorization"].ToString();
+    if (supplied.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        supplied = supplied["Bearer ".Length..].Trim();
+    if (string.IsNullOrEmpty(supplied))
+        supplied = ctx.Request.Query["access_token"].ToString();
+    if (string.IsNullOrEmpty(supplied))
+    {
+        foreach (var part in ctx.Request.Headers.Cookie.ToString().Split(';'))
+        {
+            var p = part.Trim();
+            if (p.StartsWith("tdx_token=", StringComparison.OrdinalIgnoreCase))
+                supplied = Uri.UnescapeDataString(p["tdx_token=".Length..]);
+        }
+    }
+    if (string.IsNullOrEmpty(supplied)) return false;
+    return supplied.Length == token.Length &&
+           System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+               System.Text.Encoding.UTF8.GetBytes(supplied),
+               System.Text.Encoding.UTF8.GetBytes(token));
+}
+
 /// <summary>从运行目录往上找仓库根（认 install-mcp.py）。找不到返回 null。</summary>
 static string? RepoRoot()
 {
@@ -1950,3 +2062,5 @@ public record AppearanceReq(
     [property: JsonPropertyName("scheme")] string? Scheme,
     [property: JsonPropertyName("material")] string? Material,
     [property: JsonPropertyName("intensity")] double? Intensity);
+
+public record AccessKeyReq([property: JsonPropertyName("key")] string? Key);

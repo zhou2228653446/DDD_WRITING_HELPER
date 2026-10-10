@@ -466,6 +466,17 @@
     <div id="agentHint" class="muted"></div>
     <div id="agentList" class="agent-list"></div>
     <p class="help-p muted" id="httpMcpHint"></p>
+
+    <div class="help-p" style="margin-top:12px">
+      <b>访问口令（对公网 / 局域网开放时的门槛）</b>
+      <div class="key-set">
+        <input id="accessKeyInput" type="password" placeholder="留空 = 关闭口令（仅建议本机使用时）">
+        <button id="accessKeySave" class="mini-btn" type="button">保存</button>
+        <span id="accessKeyState" class="muted"></span>
+      </div>
+      <span class="muted">只能在本机上设置（外部设备改不了）。设置后，非本机访问页面/API/MCP
+      都要带这串口令；agent 走 HTTP 时在请求头加 <code>Authorization: Bearer 口令</code>。</span>
+    </div>
   </div>
 
   <div class="dlg-btns">

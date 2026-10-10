@@ -65,7 +65,7 @@ app.MapPost("/mcp", async (HttpContext ctx, WorkspaceService ws) =>
     if (before != after)
     {
         ws.Reload();
-        await ws.BroadcastAsync("project-changed", new { stamp = after });
+        await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(after) });
     }
 
     return response == null ? Results.NoContent() : Results.Json(response);
@@ -87,8 +87,8 @@ app.MapPost("/api/books", async (WorkspaceService ws, BookNameReq req) =>
 app.MapPost("/api/books/open", async (WorkspaceService ws, BookNameReq req) =>
 {
     ws.OpenBook(req.Name ?? "");
-    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
-    return Results.Ok(new { name = ws.Current?.ProjectName, stamp = ws.Stamp() });
+    await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
+    return Results.Ok(new { name = ws.Current?.ProjectName, stamp = StampToken.From(ws.Stamp()) });
 });
 
 // ══════════════════════════════════════════════════════════════════
@@ -104,7 +104,7 @@ app.MapGet("/api/book", (WorkspaceService ws) =>
     {
         open = true,
         name = p.ProjectName,
-        stamp = ws.Stamp(),
+        stamp = StampToken.From(ws.Stamp()),
         chapters = p.Chapters.OrderBy(c => c.ChapterNumber).Select(c => new
         {
             n = c.ChapterNumber,
@@ -141,38 +141,38 @@ app.MapGet("/api/chapter/{n:int}", (WorkspaceService ws, int n) =>
 
 app.MapPost("/api/chapter/{n:int}", async (WorkspaceService ws, int n, SaveChapterReq req) =>
 {
-    var ok = ws.SaveChapter(n, req.Content ?? "", req.Stamp);
+    var ok = ws.SaveChapter(n, req.Content ?? "", StampToken.Parse(req.Stamp));
     if (!ok) return Results.Conflict(new { error = "这本书已经被别处改过了，请刷新后再保存" });
 
     await ws.BroadcastAsync("chapter-saved", new { n });
-    return Results.Ok(new { ok = true, stamp = ws.Stamp() });
+    return Results.Ok(new { ok = true, stamp = StampToken.From(ws.Stamp()) });
 });
 
 app.MapPost("/api/chapter", async (WorkspaceService ws, BookNameReq req) =>
 {
     var ch = ws.AddChapter(req.Name);
-    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
     return Results.Ok(new { n = ch.ChapterNumber, title = ch.Title });
 });
 
 app.MapPost("/api/chapter/{n:int}/rename", async (WorkspaceService ws, int n, BookNameReq req) =>
 {
     ws.RenameChapter(n, req.Name ?? "");
-    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
     return Results.Ok(new { ok = true });
 });
 
 app.MapPost("/api/chapter/{n:int}/move", async (WorkspaceService ws, int n, MoveReq req) =>
 {
     ws.MoveChapter(n, req.Delta);
-    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
     return Results.Ok(new { ok = true });
 });
 
 app.MapDelete("/api/chapter/{n:int}", async (WorkspaceService ws, int n) =>
 {
     ws.DeleteChapter(n);
-    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
     return Results.Ok(new { ok = true });
 });
 
@@ -193,7 +193,7 @@ app.MapPost("/api/settings", async (WorkspaceService ws, SettingsReq req) =>
     p.NarrativeViewpoint = req.Viewpoint ?? p.NarrativeViewpoint;
     p.Save();
 
-    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
     return Results.Ok(new { ok = true });
 });
 
@@ -205,7 +205,7 @@ app.MapPost("/api/snapshot/restore", async (WorkspaceService ws, BookNameReq req
     var ok = ws.RestoreSnapshot(req.Name ?? "");
     if (!ok) return Results.NotFound(new { error = "找不到这个快照" });
 
-    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
     return Results.Ok(new { ok = true });
 });
 
@@ -216,7 +216,7 @@ app.MapGet("/api/find", (WorkspaceService ws, string? q, bool? caseSensitive) =>
 app.MapPost("/api/replace-all", async (WorkspaceService ws, ReplaceAllReq req) =>
 {
     var n = ws.ReplaceAll(req.Q ?? "", req.R ?? "", req.CaseSensitive == true);
-    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
     return Results.Ok(new { ok = true, replaced = n });
 });
 
@@ -262,14 +262,14 @@ app.MapGet("/api/characters", (WorkspaceService ws) => Results.Ok(new { characte
 app.MapPost("/api/characters", async (WorkspaceService ws, Character c) =>
 {
     ws.UpsertCharacter(c);
-    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
     return Results.Ok(new { ok = true });
 });
 
 app.MapDelete("/api/characters/{id}", async (WorkspaceService ws, string id) =>
 {
     ws.DeleteCharacter(id);
-    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
     return Results.Ok(new { ok = true });
 });
 
@@ -281,6 +281,16 @@ app.MapPost("/api/memory", async (WorkspaceService ws, BookNameReq req) =>
     await ws.BroadcastAsync("memory-changed", new { });
     return Results.Ok(new { ok = true });
 });
+
+// ══════════════════════════════════════════════════════════════════
+// 万能聊天的对话记忆（与桌面端同一份 <项目目录>/.chat/session.json）
+// ══════════════════════════════════════════════════════════════════
+
+app.MapGet("/api/chat", (WorkspaceService ws) =>
+    Results.Ok(ws.ChatInfo(LoadApiConfig()?.Model ?? "")));
+
+app.MapPost("/api/chat/clear", (WorkspaceService ws) =>
+    Results.Ok(new { ok = ws.ClearChat() }));
 
 // ══════════════════════════════════════════════════════════════════
 // AI 生成（SSE 流式，前端能看着字一个一个出来）
@@ -347,11 +357,43 @@ app.MapPost("/api/ai", async (HttpContext ctx, WorkspaceService ws) =>
 
     try
     {
-        var history = req.History?.Select(m => new ChatMessage(
-            string.Equals(m.Role, "assistant", StringComparison.OrdinalIgnoreCase) ? "assistant" : "user",
-            m.Content ?? "")).ToList();
-
         var (maxTokens, temperature) = TuningFor(task, p, req.TargetChapter);
+
+        // ── 万能聊天的对话记忆放在服务器侧 ──
+        // 与桌面端共用同一个 ChatSessionStore 和同一份 <项目目录>/.chat/session.json：
+        // 刷新页面不丢、换个设备打开还在，长对话也有压缩兜底。
+        // （此前是前端自己扛一个数组，刷新即失忆、也没有任何预算控制。）
+        IReadOnlyList<ChatMessage>? history;
+        if (task == "chat" && ws.Chat != null)
+        {
+            var compactor = new ChatContextCompactor(
+                ws.Chat,
+                () => cfg.Model,
+                new CompactPolicyConfig { MaxOutputTokens = ChatContextCompactor.DefaultMaxOutputTokens })
+            {
+                OnStatus = msg => { _ = Send("notice", msg); },
+            };
+
+            // 发之前过一遍上下文预算：装不下就先本地省略旧回复（免费），
+            // 再把更早的对话交给模型写成摘要。摘要写回了 store，
+            // 所以摘要块必须在**这一步之后**才拼进 system，否则用的是旧摘要。
+            var outcome = await compactor.EnsureBudgetAsync(
+                system.Flatten(), prompt,
+                (pr, sy, op, _) => service.CompleteTextAsync(pr, sy, op),
+                ctx.RequestAborted);
+
+            history = outcome.History;
+
+            var summaryBlock = ws.Chat.BuildSummaryBlock();
+            if (!string.IsNullOrWhiteSpace(summaryBlock))
+                system = system.Append(summaryBlock, cacheable: false);
+        }
+        else
+        {
+            history = req.History?.Select(m => new ChatMessage(
+                string.Equals(m.Role, "assistant", StringComparison.OrdinalIgnoreCase) ? "assistant" : "user",
+                m.Content ?? "")).ToList();
+        }
 
         var result = await service.CompleteTextAsync(prompt, system, new CompletionOptions
         {
@@ -364,6 +406,15 @@ app.MapPost("/api/ai", async (HttpContext ctx, WorkspaceService ws) =>
             OnStreamText = text => { _ = Send("text", text); },
         }, history);
 
+        // 记进历史的必须是**用户的原始输入**，不是包了当前章正文的 prompt：
+        // 正文每轮都会重新带一份，历史里再存一份等于白烧一遍 token，
+        // 而且章节改过之后，历史里那份旧正文还会跟新正文打架（桌面版同样的取舍）。
+        if (task == "chat" && result.IsUsable && ws.Chat != null)
+        {
+            ws.Chat.Add(req.Prompt ?? "", result.Text);
+            await Send("chatinfo", ws.ChatInfo(cfg.Model));
+        }
+
         // 上下文类生成（大纲/人物/背景/文风/视角）在桌面端是**自动写回设定**的，
         // 这里保持一致；续写/润色改的是正文缓冲区，由用户在网页上确认后追加。
         string? applied = null;
@@ -372,7 +423,7 @@ app.MapPost("/api/ai", async (HttpContext ctx, WorkspaceService ws) =>
             ApplySettingField(p, built.ApplyField, result.Text);
             p.Save();
             applied = built.ApplyLabel;
-            await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+            await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
         }
 
         await Send("done", new { text = result.Text, ok = result.IsUsable, applied });
@@ -1048,7 +1099,7 @@ app.MapPost("/api/prompts/set", (PromptSlotReq req) =>
 
     store.Set(req.PresetId!, req.Key!, req.Value, AiPrompts.DefaultFor(req.PresetId!, req.Key!));
     store.Save();
-    return Results.Ok(new { ok = true, text = AiPrompts.TextFor(req.PresetId, req.Key) });
+    return Results.Ok(new { ok = true, text = AiPrompts.TextFor(req.PresetId!, req.Key!) });
 });
 
 // 恢复默认：单条（key）或整个方案（all = true）
@@ -1108,14 +1159,14 @@ app.MapGet("/api/literature", (WorkspaceService ws) => Results.Ok(new { entries 
 app.MapPost("/api/literature", async (WorkspaceService ws, LiteratureEntry e) =>
 {
     ws.UpsertLiterature(e);
-    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
     return Results.Ok(new { ok = true });
 });
 
 app.MapDelete("/api/literature/{id}", async (WorkspaceService ws, string id) =>
 {
     var ok = ws.DeleteLiterature(id);
-    if (ok) await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    if (ok) await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
     return ok ? Results.Ok(new { ok = true }) : Results.NotFound(new { error = "没有这条文献" });
 });
 
@@ -1123,7 +1174,7 @@ app.MapPost("/api/literature/import-bibtex", async (WorkspaceService ws, BibReq 
 {
     var n = ws.ImportBibtex(req.Text ?? "");
     if (n == 0) return Results.BadRequest(new { error = "没解析出任何条目（检查 .bib 内容）" });
-    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
     return Results.Ok(new { ok = true, imported = n });
 });
 
@@ -1161,7 +1212,7 @@ app.MapPost("/api/chapter/{n:int}/summary", async (WorkspaceService ws, int n, B
 {
     var ok = ws.SetChapterSummary(n, req.Name ?? "");
     if (!ok) return Results.NotFound(new { error = "没有这一章" });
-    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
     return Results.Ok(new { ok = true });
 });
 
@@ -1170,7 +1221,7 @@ app.MapGet("/api/world", (WorkspaceService ws) => Results.Ok(ws.WorldSetting() ?
 app.MapPost("/api/world", async (WorkspaceService ws, JsonElement req) =>
 {
     ws.UpdateWorldSetting(req);
-    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
     return Results.Ok(new { ok = true });
 });
 
@@ -1390,6 +1441,101 @@ app.MapGet("/api/settingsbook/export", (WorkspaceService ws, string? format) =>
     finally { try { if (File.Exists(path)) File.Delete(path); } catch { } }
 });
 
+// ══════════════════════════════════════════════════════════════════
+// Agent 接入清单 —— 把编辑器接进 Codex / Claude / Cursor 等客户端
+// ══════════════════════════════════════════════════════════════════
+
+/// <summary>
+/// 客户端表只维护在 install-mcp.py 一处，这里跑它拿 JSON ——
+/// 免得网页端再抄一份路径，两边早晚漂移（这正是本项目踩过的坑）。
+/// 拿不到就诚实降级，让用户去跑 install-mcp.bat。
+/// </summary>
+app.MapGet("/api/mcp/clients", () =>
+{
+    var root = RepoRoot();
+    if (root == null)
+        return Results.Ok(new
+        {
+            available = false, reason = "no-repo",
+            hint = "没找到 install-mcp.py（从仓库根启动服务器即可），也可以直接双击 install-mcp.bat。",
+            clients = Array.Empty<object>(),
+        });
+
+    var py = FindPython();
+    if (py == null)
+        return Results.Ok(new
+        {
+            available = false, reason = "no-python",
+            hint = "本机没找到 Python。装一个 Python 3，或直接双击仓库根的 install-mcp.bat。",
+            clients = Array.Empty<object>(),
+        });
+
+    try
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo(py, "install-mcp.py --json")
+        {
+            WorkingDirectory = root,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
+        };
+        using var proc = System.Diagnostics.Process.Start(psi)!;
+        var stdout = proc.StandardOutput.ReadToEnd();
+        var stderr = proc.StandardError.ReadToEnd();
+        if (!proc.WaitForExit(20000))
+        {
+            try { proc.Kill(true); } catch { }
+            return Results.Ok(new
+            {
+                available = false, reason = "timeout",
+                hint = "install-mcp.py 跑超时了，请在命令行手动执行。",
+                clients = Array.Empty<object>(),
+            });
+        }
+        if (proc.ExitCode != 0 || !stdout.TrimStart().StartsWith("{"))
+            return Results.Ok(new
+            {
+                available = false, reason = "failed",
+                hint = $"install-mcp.py 执行失败：{stderr.Trim().Split('\n').LastOrDefault()}",
+                clients = Array.Empty<object>(),
+            });
+
+        using var doc = JsonDocument.Parse(stdout);
+        var r = doc.RootElement;
+        return Results.Ok(new
+        {
+            available = true,
+            serverName = r.GetProperty("serverName").GetString(),
+            exe = r.GetProperty("exe").GetString(),
+            exeExists = r.GetProperty("exeExists").GetBoolean(),
+            repoRoot = root,
+            clients = r.GetProperty("clients").EnumerateArray().Select(c => new
+            {
+                id = c.GetProperty("id").GetString(),
+                name = c.GetProperty("name").GetString(),
+                kind = c.GetProperty("kind").GetString(),
+                configPath = c.GetProperty("configPath").GetString(),
+                detected = c.GetProperty("detected").GetBoolean(),
+                status = c.GetProperty("status").GetString(),
+                note = c.GetProperty("note").GetString(),
+                snippet = c.GetProperty("snippet").GetString(),
+                installCommand = c.GetProperty("installCommand").GetString(),
+            }).ToArray(),
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Ok(new
+        {
+            available = false, reason = "error", hint = ex.Message,
+            clients = Array.Empty<object>(),
+        });
+    }
+});
+
 app.Run();
 
 // ══════════════════════════════════════════════════════════════════
@@ -1397,7 +1543,55 @@ app.Run();
 static string ConfigDir() => Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TdxClaw");
 
-/// <summary>网页版上传的背景图（服务器上只留一个）。没有则返回 null。</summary>
+/// <summary>从运行目录往上找仓库根（认 install-mcp.py）。找不到返回 null。</summary>
+static string? RepoRoot()
+{
+    var dir = new DirectoryInfo(AppContext.BaseDirectory);
+    while (dir != null)
+    {
+        if (File.Exists(Path.Combine(dir.FullName, "install-mcp.py"))) return dir.FullName;
+        dir = dir.Parent;
+    }
+    return null;
+}
+
+/// <summary>找一个能跑的 Python：PATH 上的 py/python，或本机托管的那份。</summary>
+static string? FindPython()
+{
+    var candidates = new List<string> { "py", "python" };
+    var managed = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        ".workbuddy", "binaries", "python", "versions");
+    try
+    {
+        if (Directory.Exists(managed))
+            candidates.AddRange(Directory.GetDirectories(managed)
+                .Select(d => Path.Combine(d, "python.exe"))
+                .Where(File.Exists)
+                .OrderByDescending(p => p));   // 版本号大的排前面
+    }
+    catch { /* 目录不可读就当没有 */ }
+
+    foreach (var cand in candidates)
+    {
+        try
+        {
+            using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(cand, "--version")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            });
+            if (p == null) continue;
+            p.WaitForExit(4000);
+            if (p.HasExited && p.ExitCode == 0) return cand;
+        }
+        catch { /* 不是有效解释器，试下一个 */ }
+    }
+    return null;
+}
+
 static string? WebBgFile()
 {
     var dir = ConfigDir();
@@ -1424,7 +1618,7 @@ public record NameReq([property: JsonPropertyName("name")] string? Name);
 public record MoveReq([property: JsonPropertyName("delta")] int Delta);
 public record SaveChapterReq(
     [property: JsonPropertyName("content")] string? Content,
-    [property: JsonPropertyName("stamp")] long? Stamp);
+    [property: JsonPropertyName("stamp")] string? Stamp);
 public record BibReq([property: JsonPropertyName("text")] string? Text);
 
 public record ProfileSaveReq(

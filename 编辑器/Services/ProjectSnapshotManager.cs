@@ -31,8 +31,38 @@ namespace 编辑器.Services
         public ProjectSnapshotManager(string projectFilePath)
         {
             _projectFilePath = projectFilePath;
-            var projectDir = Path.GetDirectoryName(Path.GetFullPath(projectFilePath))!;
-            _snapshotsDir = Path.Combine(projectDir, ".snapshots");
+            var full = Path.GetFullPath(projectFilePath);
+            var projectDir = Path.GetDirectoryName(full)!;
+
+            // ★ 快照按**书名**分子目录，不按目录混在一起。
+            //   以前所有 .tdxproj 共用一个 .snapshots/ —— 一个目录只放一本书时
+            //   看不出区别，但网页版所有书稿都躺在同一个 books/ 目录下，那样
+            //   「快照」列表里会混进别的书的快照，点「恢复」就是把**另一本书**
+            //   的内容盖进当前这本。这已经不是"看着乱"，是能毁稿子的。
+            _snapshotsDir = Path.Combine(projectDir, ".snapshots", Path.GetFileName(full));
+            MigrateLegacySnapshots(projectDir);
+        }
+
+        /// <summary>
+        /// 把旧版「目录级 .snapshots/」里的快照搬进本项目自己的子目录。
+        ///
+        /// 只有这个目录里确实只有一本书时才搬：有多本书时无法判断旧快照属于谁，
+        /// 搬错等于把别人的稿子当成本书的快照摆出来让人恢复 —— 比丢掉旧快照
+        /// 危险得多。判断不了就原样留着（用户还能自己去 .snapshots/ 里翻）。
+        /// </summary>
+        private void MigrateLegacySnapshots(string projectDir)
+        {
+            var legacy = Path.Combine(projectDir, ".snapshots");
+            if (Directory.Exists(_snapshotsDir)) return;
+            if (!File.Exists(Path.Combine(legacy, "index.json"))) return;
+            try
+            {
+                if (Directory.GetFiles(projectDir, "*.tdxproj").Length > 1) return;
+                Directory.CreateDirectory(_snapshotsDir);
+                foreach (var f in Directory.GetFiles(legacy, "*.json"))
+                    File.Move(f, Path.Combine(_snapshotsDir, Path.GetFileName(f)));
+            }
+            catch { /* 搬不动就当没有历史快照，不影响以后新拍的 */ }
         }
 
         public List<SnapshotEntry> LoadIndex()

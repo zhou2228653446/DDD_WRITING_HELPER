@@ -25,6 +25,7 @@
   <button id="aiSetBtn" title="AI 服务商 / API Key">AI 设置</button>
   <button id="promptBtn" title="提示词方案与覆写">提示词</button>
   <button id="skillBtn" title="写作技能管理">技能</button>
+  <button id="helpBtn" title="关于、快捷键、把编辑器接进 Codex 等 agent 客户端">帮助</button>
   <div class="tabs">
     <button class="tab active" data-view="write">写作</button>
     <button class="tab" data-view="outline">大纲</button>
@@ -34,6 +35,8 @@
     <button class="tab" data-view="snapshots">快照</button>
     <button class="tab" data-view="settings">设定</button>
   </div>
+  <button id="toggleChapters" class="vt-btn" title="显示 / 隐藏左侧章节栏（对应桌面端「视图 ▸ 项目管理器」）">章节栏</button>
+  <button id="toggleRight" class="vt-btn" title="显示 / 隐藏右侧 AI 面板（对应桌面端「视图 ▸ AI助手面板」）">AI面板</button>
 </header>
 
 <main>
@@ -80,7 +83,18 @@
     </div>
 
     <div id="view-outline" class="view hidden">
-      <div class="outline-stats" id="outlineStats"></div>
+      <div class="outline-stats">
+        <span id="outlineStats"></span>
+        <span class="grow"></span>
+        <label class="inline-filter">只看
+          <select id="outlineFilter" title="按状态筛章节（与桌面端大纲窗口的「只看」一致）">
+            <option value="all">全部章节</option>
+            <option value="unwritten">还没写的</option>
+            <option value="nosummary">缺梗概的</option>
+            <option value="done">已写完的</option>
+          </select>
+        </label>
+      </div>
       <div id="outlineCards" class="cards"></div>
     </div>
 
@@ -163,7 +177,9 @@
 
   <!-- 右：AI 与 agent 活动 -->
   <aside id="right">
-    <div class="panel-head"><span>AI</span></div>
+    <div class="panel-head" id="aiPanelHead"><span>AI</span>
+      <button id="floatAiBtn" class="mini" title="把 AI 面板变成可拖动的浮层，正文区就能占满宽度（对应桌面端的独立浮窗）">浮动</button>
+    </div>
     <div class="ai-box">
       <select id="aiPreset" title="提示词方案（与桌面版共用，切了桌面端也跟着变）"></select>
       <select id="aiTask">
@@ -205,7 +221,10 @@
         <button id="aiGoBtn" class="primary">生成</button>
         <button id="aiStopBtn" class="danger" disabled>停止</button>
       </div>
-      <span id="chatInfo" class="muted"></span>
+      <div class="chat-meta">
+        <span id="chatInfo" class="muted"></span>
+        <button id="chatClearBtn" class="mini-btn" title="清除与 AI 的对话记忆（已经写进章节的正文不受影响）">清空对话</button>
+      </div>
       <div id="aiOut" class="ai-out"></div>
       <div class="ai-ops">
         <button id="aiAppendBtn" class="mini-btn" title="把结果追加到当前章末尾">追加到正文</button>
@@ -259,6 +278,64 @@
     </div>
     <div id="testResult" class="muted" style="margin-top:8px"></div>
   </form>
+</dialog>
+
+<!-- 帮助：关于 / 快捷键 / 接入 Agent -->
+<dialog id="helpDlg">
+  <h3>帮助</h3>
+  <div class="help-tabs">
+    <button type="button" class="mini-btn active" data-htab="about">关于</button>
+    <button type="button" class="mini-btn" data-htab="keys">快捷键</button>
+    <button type="button" class="mini-btn" data-htab="agents">接入 Agent</button>
+  </div>
+
+  <div id="ht-about" class="help-pane">
+    <p class="help-p">
+      <b>TdxClaw AI 写作助手 · 网页版</b><br>
+      面向长篇小说的写作工具。装不下的上下文先省再压，AI 失败绝不写回正文，
+      章节梗概成链、设定集当事实基准。<br>
+      做得最多的事：把一个想法写成几十万字还不崩结构。
+    </p>
+    <p class="help-p">
+      这一版是<b>人机共用工作区</b>：你在网页上写，agent 通过 MCP 也能读写同一本书，
+      两边看到的是同一份稿子、同一套设定与外观配置（都在服务器上）。
+    </p>
+    <p class="help-p">
+      仓库：<a id="repoLink" href="#" target="_blank" rel="noopener"></a>
+    </p>
+    <p class="help-p muted">
+      桌面壳层的东西这里都换了形式：AI 面板能点「浮动」拖成浮层（对应独立浮窗）、
+      关页面时若有没存上的字会拦一下（对应退出确认）。仍然没有的是「首启欢迎」
+      和「路径设置」——网页版的稿子都在服务器上，没有「本机路径」这个概念。
+      自动保存改成停手 1.2 秒即存（桌面是 60 秒 + 失焦），比桌面更勤。
+    </p>
+  </div>
+
+  <div id="ht-keys" class="help-pane hidden">
+    <table class="key-table">
+      <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>立即保存（平时停手 1.2 秒自动存）</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>F</kbd></td><td>查找替换（可切全书范围）</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Enter</kbd></td><td>AI 生成</td></tr>
+      <tr><td><kbd>Enter</kbd> / <kbd>Shift</kbd>+<kbd>Enter</kbd></td><td>查找框里：下一个 / 上一个</td></tr>
+    </table>
+    <p class="help-p muted">编辑框内的撤销、重做、剪切、复制、粘贴沿用浏览器自身的快捷键。</p>
+  </div>
+
+  <div id="ht-agents" class="help-pane hidden">
+    <p class="help-p">
+      这里列出的是<b>把编辑器接进 agent 客户端</b>（Codex / Claude / Cursor…）的配置。
+      接上之后，你在 agent 里说一句「打开某某书稿，给第 3 章续写 800 字」，
+      它就能直接读写你的稿子；网页此时会实时跟着切章、同步设定。
+    </p>
+    <div id="agentHint" class="muted"></div>
+    <div id="agentList" class="agent-list"></div>
+    <p class="help-p muted" id="httpMcpHint"></p>
+  </div>
+
+  <div class="dlg-btns">
+    <span class="grow"></span>
+    <button type="button" onclick="this.closest('dialog').close()">关闭</button>
+  </div>
 </dialog>
 
 <!-- 统计对话框 -->

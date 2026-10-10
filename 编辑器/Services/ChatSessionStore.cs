@@ -26,7 +26,7 @@ namespace 编辑器.Services
     }
 
     /// <summary>
-    /// 「万能聊天」的对话记忆，按项目保存在 &lt;项目目录&gt;/.chat/session.json。
+    /// 「万能聊天」的对话记忆，按项目保存在 &lt;项目目录&gt;/.chat/&lt;书名&gt;.session.json。
     ///
     /// ★ 为什么需要它：大模型 API 是**无状态**的，服务端不记得上一轮说过什么。
     ///   所谓"连续对话"，本质是客户端每次请求都把此前所有轮次重发一遍。
@@ -77,10 +77,31 @@ namespace 编辑器.Services
 
         public ChatSessionStore(string projectFilePath)
         {
-            var projectDir = Path.GetDirectoryName(Path.GetFullPath(projectFilePath))!;
+            var full = Path.GetFullPath(projectFilePath);
+            var projectDir = Path.GetDirectoryName(full)!;
             var chatDir = Path.Combine(projectDir, ".chat");
             Directory.CreateDirectory(chatDir);
-            _file = Path.Combine(chatDir, "session.json");
+
+            // ★ 会话文件按**书名**分开，不按目录分。
+            //   以前是写死的 session.json —— 一个目录里只放一本书时看不出问题，
+            //   但网页版所有书稿都躺在同一个 books/ 目录下，那样等于全书共用一份
+            //   对话记忆：换一本书，AI 还记得上一本书的情节。
+            _file = Path.Combine(chatDir, Path.GetFileName(full) + ".session.json");
+
+            // 迁移旧文件。**只有这个目录里确实只有一本书时才认领它**：
+            // 有多本书时"这段旧对话该归谁"没有正确答案，猜错等于把 B 的对话
+            // 灌进 A 的书里，比丢掉一段旧对话糟糕得多。
+            var legacy = Path.Combine(chatDir, "session.json");
+            if (!File.Exists(_file) && File.Exists(legacy))
+            {
+                try
+                {
+                    if (Directory.GetFiles(projectDir, "*.tdxproj").Length <= 1)
+                        File.Move(legacy, _file);
+                }
+                catch { /* 迁移失败就当没有旧记录，不影响新会话 */ }
+            }
+
             Load();
         }
 

@@ -8,7 +8,7 @@ let current = null;       // 当前章节号
 let stamp = null;         // 打开时的版本号，用来发现"书被别处改过"
 let saveTimer = null;
 let dirty = false;
-let chatHistory = [];     // 万能写作的对话记忆（本轮会话内）
+let chatInfo = null;      // 聊天记忆的规模（服务器侧 <项目目录>/.chat/session.json，与桌面端同一份）
 
 const api = async (url, opt) => {
   const r = await fetch(url, opt);
@@ -74,7 +74,7 @@ async function refresh() {
     });
   renderWorld(book.world);
   renderCtxChapters();
-  await Promise.all([loadCharacters(), loadSnapshots(), loadMemory(), loadLiterature()]);
+  await Promise.all([loadCharacters(), loadSnapshots(), loadMemory(), loadLiterature(), loadChatInfo()]);
 }
 
 function renderChapters() {
@@ -147,7 +147,15 @@ $('#editor').addEventListener('input', () => {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(flushSave, 1200);
 });
-window.addEventListener('beforeunload', () => { if (dirty) flushSave(); });
+// 关页面 / 刷新时：先抢救一次保存；没存上就跟用户确认再走
+//（对应桌面端的「退出确认」窗口）。平时停手 1.2 秒就自动存，
+// 真会拦到的只有"刚敲完字立刻关掉"那一刻——那正是最该拦的。
+window.addEventListener('beforeunload', e => {
+  if (!dirty) return;
+  flushSave();                 // 尽力而为：本地服务器通常来不及返回，所以不能只靠它
+  e.preventDefault();
+  e.returnValue = '';
+});
 
 // 章节标题：失焦即改名
 $('#chTitle').addEventListener('change', async () => {
@@ -301,13 +309,28 @@ $('#replaceAll').onclick = () => doReplace(false);
 function renderOutline() {
   const cards = $('#outlineCards');
   cards.innerHTML = '';
-  const list = book?.chapters || [];
+  const all = book?.chapters || [];
   let unwritten = 0, noSummary = 0;
+  all.forEach(c => {
+    if (c.words === 0) unwritten++;
+    else if (!(c.summary || '').trim()) noSummary++;
+  });
+
+  // 「只看」筛选：与桌面端 OutlineWindow 的四个选项一一对应。
+  // 统计数字始终按全书算，不受筛选影响——否则切一下筛选，数字也跟着变，就看不出全书状况了。
+  const filter = $('#outlineFilter').value;
+  const list = all.filter(c => {
+    const empty = c.words === 0;
+    const noSum = !empty && !(c.summary || '').trim();
+    if (filter === 'unwritten') return empty;
+    if (filter === 'nosummary') return noSum;
+    if (filter === 'done') return !empty;
+    return true;
+  });
+
   list.forEach(c => {
     const empty = c.words === 0;
     const noSum = !empty && !(c.summary || '').trim();
-    if (empty) unwritten++;
-    if (noSum) noSummary++;
     const color = empty ? '#b4b2a9' : (noSum ? '#a0742f' : '#5f8f62');
     const d = document.createElement('div');
     d.className = 'card';
@@ -328,9 +351,17 @@ function renderOutline() {
     });
     cards.appendChild(d);
   });
+
+  if (!list.length && all.length) {
+    cards.innerHTML = '<div class="muted" style="padding:8px 2px">没有符合条件的章节。</div>';
+  }
+
   $('#outlineStats').textContent =
-    `共 ${list.length} 章 · 未写 ${unwritten} 章 · 缺梗概 ${noSummary} 章`;
+    `共 ${all.length} 章 · 未写 ${unwritten} 章 · 缺梗概 ${noSummary} 章` +
+    (filter === 'all' ? '' : ` · 当前显示 ${list.length} 章`);
 }
+
+$('#outlineFilter').onchange = () => renderOutline();
 
 let summaryChapter = null;
 function openSummaryDlg(c) {
@@ -903,7 +934,6 @@ async function runAi(task, extra = {}) {
     maxTokens: 0,                       // 0 = 由服务器按任务给上限（与桌面端各生成方法一致）
     skillId: $('#aiSkill').value || null,
     relatedChapterIds: selectedCtxIds(),
-    history: isChat ? chatHistory : null,
     targetChapter: current,
     polishStyle: task === 'polish' ? ($('#polishStyle').value || null) : null,
     scaleHint: extra.scaleHint || null,
@@ -937,14 +967,10 @@ async function runAi(task, extra = {}) {
           lastTokens = `${ev.payload.inTok} in / ${ev.payload.outTok} out`;
           updateChatInfo();
         }
+        else if (ev.type === 'chatinfo') { chatInfo = ev.payload; updateChatInfo(); }
         else if (ev.type === 'done') {
           out.textContent = ev.payload.text;
-          if (isChat) {
-            chatHistory.push({ role: 'user', content: body.prompt || '' });
-            chatHistory.push({ role: 'assistant', content: ev.payload.text });
-            if (chatHistory.length > 12) chatHistory = chatHistory.slice(-12);
-            updateChatInfo();
-          }
+          if (isChat) updateChatInfo();
           if (ev.payload.applied) {
             log(`AI 已写入「${ev.payload.applied}」`);
             await refresh();
@@ -964,18 +990,116 @@ async function runAi(task, extra = {}) {
   }
 }
 
+// 聊天记忆规模：轮数 /（被摘要掉的轮数）/ 估算占用 / 模型窗口。
+// 不显示出来，用户就分不清「AI 忘了」和「本来没记」。
 function updateChatInfo() {
-  const rounds = Math.floor(chatHistory.length / 2);
   const parts = [];
-  if (rounds) parts.push(`聊天记忆：${rounds} 轮`);
-  if (lastTokens) parts.push(`约 ${lastTokens}`);
+  const c = chatInfo;
+  if (c?.rounds) {
+    let s = `聊天记忆：${c.rounds} 轮`;
+    if (c.summarizedRounds) s += `（更早 ${c.summarizedRounds} 轮已摘要）`;
+    parts.push(s);
+  }
+  if (c?.used) {
+    const pct = c.window ? Math.round(c.used / c.window * 100) : 0;
+    parts.push(`占用约 ${c.used}${c.window ? ` / ${c.window}（${pct}%）` : ''}`);
+  }
+  if (lastTokens) parts.push(`上轮 ${lastTokens}`);
   $('#chatInfo').textContent = parts.join(' · ');
+  $('#chatClearBtn').disabled = !c?.rounds && !c?.summary;
 }
+
+async function loadChatInfo() {
+  try { chatInfo = await api('/api/chat'); } catch { chatInfo = null; }
+  updateChatInfo();
+}
+
+$('#chatClearBtn').onclick = async () => {
+  if (!chatInfo?.rounds && !chatInfo?.summary) return;
+  if (!confirm(`确定清空与 AI 的对话记忆吗？（当前 ${chatInfo?.rounds || 0} 轮）\n已经写进章节的正文不受影响。`)) return;
+  try {
+    await post('/api/chat/clear', {});
+    chatInfo = await api('/api/chat');
+    updateChatInfo();
+    log('已清空与 AI 的对话记忆');
+  } catch (e) { alert('清空失败：' + e.message); }
+};
 
 $('#aiGoBtn').onclick = () => runAi($('#aiTask').value);
 $('#aiStopBtn').onclick = () => { if (aiAbort) aiAbort.abort(); };
 $('#aiTask').onchange = () =>
   $('#polishRow').classList.toggle('hidden', $('#aiTask').value !== 'polish');
+
+// ---------- AI 面板浮动（对应桌面端的「AI 助手独立浮窗」） ----------
+// 桌面版能把这个面板弹成独立窗口、拖到任意位置；网页版就在同一个页面里
+// 把它变成可拖动浮层 —— 效果一样（正文区占满宽度、面板悬在上面）。
+
+const rightPanel = $('#right');
+const floatBtn = $('#floatAiBtn');
+
+function setFloat(on, pos) {
+  rightPanel.classList.toggle('floating', on);
+  floatBtn.textContent = on ? '停靠' : '浮动';
+  floatBtn.title = on
+    ? '把 AI 面板收回右侧栏'
+    : '把 AI 面板变成可拖动的浮层，正文区就能占满宽度（对应桌面端的独立浮窗）';
+  if (on && pos) {
+    rightPanel.style.left = pos.left + 'px';
+    rightPanel.style.top = pos.top + 'px';
+    rightPanel.style.right = 'auto';
+    rightPanel.style.bottom = 'auto';
+  } else {
+    ['left', 'top', 'right', 'bottom'].forEach(k => { rightPanel.style[k] = ''; });
+  }
+  try {
+    localStorage.setItem('aiPanelFloat', on ? '1' : '0');
+    if (on && pos) localStorage.setItem('aiPanelPos', JSON.stringify(pos));
+  } catch { /* 隐私模式禁 localStorage，不影响功能 */ }
+}
+
+floatBtn.onclick = () => setFloat(!rightPanel.classList.contains('floating'), null);
+
+let aiDragOff = null;
+// ⚠ 这里**不能**叫 clamp：appearance.js 已经在顶层声明了同名的 clamp，
+//   两个文件都是普通 <script>，共用同一个全局作用域 —— 重名会让 app.js
+//   整个文件在**解析期**就报 SyntaxError，后面所有初始化一行都不跑，
+//   表现是"页面能打开、但书列表颜色主题全是空的"，极难往这上面想。
+const clampUi = (v, max) => Math.min(Math.max(0, v), Math.max(0, max));
+$('#aiPanelHead').addEventListener('pointerdown', e => {
+  // 抓手只在浮动模式生效，且不能把「浮动/停靠」按钮的点击吃掉
+  if (!rightPanel.classList.contains('floating') || e.target.closest('button')) return;
+  const r = rightPanel.getBoundingClientRect();
+  aiDragOff = { x: e.clientX - r.left, y: e.clientY - r.top };
+  $('#aiPanelHead').setPointerCapture?.(e.pointerId);
+  e.preventDefault();
+});
+$('#aiPanelHead').addEventListener('pointermove', e => {
+  if (!aiDragOff) return;
+  const r = rightPanel.getBoundingClientRect();
+  rightPanel.style.left = clampUi(e.clientX - aiDragOff.x, window.innerWidth - r.width) + 'px';
+  rightPanel.style.top = clampUi(e.clientY - aiDragOff.y, window.innerHeight - r.height) + 'px';
+  rightPanel.style.right = 'auto';
+  rightPanel.style.bottom = 'auto';
+});
+const endAiDrag = () => {
+  if (!aiDragOff) return;
+  aiDragOff = null;
+  try {
+    const r = rightPanel.getBoundingClientRect();
+    localStorage.setItem('aiPanelPos', JSON.stringify({ left: Math.round(r.left), top: Math.round(r.top) }));
+  } catch { }
+};
+$('#aiPanelHead').addEventListener('pointerup', endAiDrag);
+$('#aiPanelHead').addEventListener('pointercancel', endAiDrag);
+
+// 恢复上次的浮动状态。窄屏不自动浮动 —— 浮层会盖住大半屏幕，反而更没法写。
+(function restoreFloat() {
+  try {
+    if (localStorage.getItem('aiPanelFloat') !== '1' || window.innerWidth < 1100) return;
+    const raw = localStorage.getItem('aiPanelPos');
+    setFloat(true, raw ? JSON.parse(raw) : null);
+  } catch { }
+})();
 
 // ---------- 生成上下文（与桌面端 AI 面板那组按钮同一批任务） ----------
 // 服务器侧按"已有内容是否为空"决定用生成还是扩写提示词，成功后自动写回设定。
@@ -1548,6 +1672,93 @@ const sbExport = fmt => async () => {
 $('#sbExportDocx').onclick = sbExport('docx');
 $('#sbExportPdf').onclick = sbExport('pdf');
 $('#sbExportTxt').onclick = sbExport('txt');
+
+// ---------- 帮助：关于 / 快捷键 / 接入 Agent ----------
+
+const REPO_URL = 'https://github.com/zhou2228653446/DDD_WRITING_HELPER';
+$('#repoLink').textContent = REPO_URL;
+$('#repoLink').href = REPO_URL;
+
+$$('#helpDlg .help-tabs button').forEach(b => {
+  b.onclick = () => {
+    $$('#helpDlg .help-tabs button').forEach(x => x.classList.toggle('active', x === b));
+    ['about', 'keys', 'agents'].forEach(k =>
+      $('#ht-' + k).classList.toggle('hidden', k !== b.dataset.htab));
+    if (b.dataset.htab === 'agents') loadAgentClients();
+  };
+});
+$('#helpBtn').onclick = () => $('#helpDlg').showModal();
+
+// 网页版工作区本身就是一个 HTTP MCP 端点。写清楚用哪种：装了 exe 的走 stdio 最稳，
+// 这条路只对"能走 Streamable HTTP 的客户端"有意义，且必须服务器开着。
+$('#httpMcpHint').innerHTML =
+  `另一个选择：当前网页工作区本身就是一个 HTTP MCP 端点 ` +
+  `<code>${location.origin}/mcp</code>（免装 exe，改的就是网页上正开着的这本书）。` +
+  `只在客户端支持 Streamable HTTP、且这个网页服务器开着时可用；` +
+  `没在 Codex 客户端里实测过，求稳还是用上面 stdio 那份配置。`;
+
+let agentClientsLoaded = false;
+async function loadAgentClients() {
+  if (agentClientsLoaded) return;
+  const list = $('#agentList');
+  list.innerHTML = '<div class="muted" style="font-size:13px">正在检测本机装了哪些 agent 客户端…</div>';
+  try {
+    const d = await api('/api/mcp/clients');
+    if (!d.available) {
+      // 拿不到清单时要说人话，并给出第二条路（GUI 装不了就让人跑脚本）
+      $('#agentHint').textContent = (d.hint || '读不到客户端清单。') + ' 也可以直接双击仓库根的 install-mcp.bat。';
+      list.innerHTML = '';
+      return;
+    }
+    agentClientsLoaded = true;
+    $('#agentHint').innerHTML =
+      `服务器：<code>${escapeHtml(d.exe || '')}</code>` +
+      (d.exeExists ? '' : ' —— <b>还没发布</b>，先在仓库根双击 deploy.bat；否则客户端连上也会失败。');
+    renderAgentClients(d.clients || []);
+  } catch (e) {
+    $('#agentHint').textContent = '读取失败：' + e.message;
+    list.innerHTML = '';
+  }
+}
+
+function renderAgentClients(clients) {
+  const list = $('#agentList');
+  list.innerHTML = '';
+  // 检测到的排前面——用户最想先确认的是"我装的那家接上了没"
+  clients.slice().sort((a, b) => (b.detected ? 1 : 0) - (a.detected ? 1 : 0)).forEach(c => {
+    const d = document.createElement('div');
+    d.className = 'agent-item';
+    d.innerHTML =
+      `<div class="agent-head"><b>${escapeHtml(c.name)}</b>` +
+      `<span class="badge ${c.detected ? 'on' : ''}">${c.detected ? '已检测到' : '未检测到'}</span>` +
+      `<span class="grow"></span>` +
+      `<button type="button" class="mini-btn" data-copy="1">复制配置片段</button></div>` +
+      `<div class="agent-path">${escapeHtml(c.configPath)}</div>` +
+      (c.note ? `<div class="agent-note">${escapeHtml(c.note)}</div>` : '') +
+      `<pre>${escapeHtml(c.snippet)}</pre>`;
+    d.querySelector('[data-copy]').onclick = async () => {
+      await navigator.clipboard.writeText(c.snippet);
+      log(`已复制「${c.name}」的 MCP 配置片段`);
+    };
+    list.appendChild(d);
+  });
+}
+
+// ---------- 视图开关（对应桌面端「视图」菜单的项目管理器 / AI助手面板） ----------
+
+[['#toggleChapters', '#chapters', 'showChapters'],
+ ['#toggleRight', '#right', 'showRightPanel']].forEach(([btn, panel, key]) => {
+  const el = $(panel);
+  const apply = on => {
+    el.classList.toggle('hidden', !on);
+    $(btn).classList.toggle('off', !on);
+    try { localStorage.setItem(key, on ? '1' : '0'); } catch { /* 隐私模式 */ }
+  };
+  $(btn).onclick = () => apply(el.classList.contains('hidden'));
+  let saved = null;
+  try { saved = localStorage.getItem(key); } catch { }
+  if (saved === '0') apply(false);
+});
 
 // 键盘：Ctrl+S 保存，Ctrl+F 查找，Ctrl+Enter 生成
 document.addEventListener('keydown', e => {

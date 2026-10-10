@@ -13,7 +13,7 @@ namespace 编辑器.Mcp;
 /// </summary>
 internal static class SelfTest
 {
-    private static int _pass, _fail;
+    private static int _pass, _fail, _skip;
 
     public static async Task<int> RunAsync()
     {
@@ -175,15 +175,18 @@ internal static class SelfTest
             // ---- 回归：改稿前必须留快照 ----
             // MCP 是 agent **自动**改稿的场景，一次覆盖错章就是几千字没了，比界面里手点
             // 更容易出事。界面每次 AI 操作前都 TakeSnapshot，MCP 也必须存，否则没有后悔药。
-            var snapDir = Path.Combine(Path.GetDirectoryName(projPath)!, ".snapshots");
-            var snapFiles = Directory.Exists(snapDir)
-                ? Directory.GetFiles(snapDir, "*.json")
+            // ★ 快照按**书名**分子目录（产品有意如此：网页版所有书稿同处一个 books/ 目录，
+            //   平铺会让 A 书的快照出现在 B 书的「恢复」列表里）。这里递归找，既不去猜
+            //   具体层级，也能逮到「快照写到别处去了」这种真问题。
+            var snapRoot = Path.Combine(Path.GetDirectoryName(projPath)!, ".snapshots");
+            var snapFiles = Directory.Exists(snapRoot)
+                ? Directory.GetFiles(snapRoot, "*.json", SearchOption.AllDirectories)
                            .Where(f => !string.Equals(Path.GetFileName(f), "index.json", StringComparison.OrdinalIgnoreCase))
                            .ToList()
                 : new List<string>();
             Assert("改稿前存了快照（agent 改坏能回滚）", snapFiles.Count > 0,
-                Directory.Exists(snapDir)
-                    ? string.Join(",", snapFiles.Select(Path.GetFileName))
+                Directory.Exists(snapRoot)
+                    ? string.Join(",", snapFiles.Select(f => Path.GetRelativePath(snapRoot, f)))
                     : "(.snapshots 目录不存在)");
             // ⚠ 不能直接搜文件文本：System.Text.Json 默认把非 ASCII 转成 \uXXXX，
             // 快照里的「霜降」实际写作 \u971C\u964D，文本 Contains 必然落空。要反序列化再看。
@@ -259,6 +262,8 @@ internal static class SelfTest
             var key = TryReadActiveKey();
             if (!string.IsNullOrWhiteSpace(key))
                 Assert("H4 ai_config_check 不泄露 Key", !chk.Contains(key), "");
+            else
+                Skip("H4 ai_config_check 不泄露 Key", "当前未配置 API Key，无从比对；配好后再跑一次");
         }
 
         // ==================================================================
@@ -417,7 +422,8 @@ internal static class SelfTest
         }
 
         Console.Error.WriteLine();
-        Console.Error.WriteLine($"自检结果：{_pass} 通过 / {_fail} 失败");
+        Console.Error.WriteLine($"自检结果：{_pass} 通过 / {_fail} 失败" +
+            (_skip > 0 ? $" / {_skip} 跳过（前提不具备，非通过）" : ""));
         return _fail == 0 ? 0 : 1;
     }
 
@@ -455,14 +461,17 @@ internal static class SelfTest
     /// <summary>
     /// 读当前启用配置的 Key —— **唯一用途**是断言「自检输出里不含它」，防止以后有人在
     /// ai_config_check 里多打一行把密钥漏给 agent。读完即判，绝不打印。
+    ///
+    /// 必须走 <see cref="NovelTools.ResolveConfigDirectory"/>，不能自己拼 %APPDATA%\TdxClaw：
+    /// 那个方法认 paths.json 里的目录重定向，产品读的是重定向后的位置。自己拼的话，
+    /// 用户一旦改过配置目录，这里读到的就是另一处，Key 恒为空 → 断言被跳过，
+    /// 于是又变成"看着全绿、其实少查一条"。
     /// </summary>
     private static string TryReadActiveKey()
     {
         try
         {
-            var path = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "TdxClaw", "api_profiles.json");
+            var path = Path.Combine(NovelTools.ResolveConfigDirectory(), "api_profiles.json");
             var mgr = new ApiProfileManager(path);
             mgr.Load();
             return mgr.ActiveProfile?.ApiKey ?? "";
@@ -474,5 +483,15 @@ internal static class SelfTest
     {
         if (ok) { _pass++; Console.Error.WriteLine($"  ✓ {name}"); }
         else { _fail++; Console.Error.WriteLine($"  ✗ {name}{(string.IsNullOrEmpty(detail) ? "" : "  → " + detail)}"); }
+    }
+
+    /// <summary>
+    /// 因为环境不具备前提而**没跑**的检查。必须显式打出来 —— 否则「全绿」会被读成
+    /// 「全跑过了」，实际少了一条，而恰恰是那条只在配了 Key 的机器上才有意义。
+    /// </summary>
+    private static void Skip(string name, string reason)
+    {
+        _skip++;
+        Console.Error.WriteLine($"  - {name}  （跳过：{reason}）");
     }
 }

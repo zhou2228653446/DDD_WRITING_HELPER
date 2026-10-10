@@ -35,6 +35,60 @@ public sealed class WorkspaceService
     public NovelProject? Current => _project;
 
     // ==================================================================
+    // 万能聊天的对话记忆
+    // ==================================================================
+
+    private ChatSessionStore? _chat;
+
+    /// <summary>
+    /// 当前书的对话记忆。与桌面端**共用同一个 ChatSessionStore 与同一份落盘文件**
+    /// （&lt;项目目录&gt;/.chat/session.json），所以两边看到的是同一段对话。
+    /// </summary>
+    public ChatSessionStore? Chat => _chat;
+
+    /// <summary>
+    /// 重挂对话记忆。跟着 _project 一起换 —— 换了书还留着上一本的对话，
+    /// AI 会把上一本的情节当成本书的上下文，这是最糟的一种"记忆出错"。
+    /// </summary>
+    private void AttachChat(NovelProject p)
+    {
+        try { _chat = new ChatSessionStore(p.FilePath); }
+        catch { _chat = null; }   // 记忆文件读坏了不该让整个工作区打不开
+    }
+
+    public bool ClearChat()
+    {
+        if (_chat == null) return false;
+        _chat.Clear();
+        return true;
+    }
+
+    /// <summary>
+    /// 对话记忆的规模提示：轮数 / 被摘要掉的轮数 / 估算占用 / 该模型的窗口。
+    /// 桌面端面板上那行「聊天记忆：N 轮…」读的就是同一批数字。
+    /// </summary>
+    public object ChatInfo(string model)
+    {
+        var config = new CompactPolicyConfig
+        {
+            MaxOutputTokens = ChatContextCompactor.DefaultMaxOutputTokens,
+        };
+        int window = CompactPolicy.ResolveContextWindow(config, model);
+        var summary = _chat?.BuildSummaryBlock() ?? "";
+        int used = (_chat?.EstimatedTokens ?? 0) + TokenEstimator.Estimate(summary);
+        return new
+        {
+            rounds = _chat?.RoundCount ?? 0,
+            summarizedRounds = _chat?.SummarizedRounds ?? 0,
+            used,
+            window,
+            summary,
+            empty = _chat?.IsEmpty ?? true,
+            lastActivity = _chat?.LastActivityUtc,
+        };
+    }
+
+    // ==================================================================
     // 书目
     // ==================================================================
 
@@ -97,7 +151,9 @@ public sealed class WorkspaceService
 
         lock (_gate)
         {
-            _project = NovelProject.Load(path);
+            var loaded = NovelProject.Load(path);
+            _project = loaded;
+            AttachChat(loaded);
         }
     }
 
@@ -141,7 +197,11 @@ public sealed class WorkspaceService
         {
             var path = _project?.FilePath;
             if (path != null && File.Exists(path))
-                _project = NovelProject.Load(path);
+            {
+                var loaded = NovelProject.Load(path);
+                _project = loaded;
+                AttachChat(loaded);
+            }
         }
     }
 
@@ -249,6 +309,7 @@ public sealed class WorkspaceService
             snap.FilePath = path;
             snap.Save();
             _project = snap;
+            AttachChat(snap);
             return true;
         }
     }

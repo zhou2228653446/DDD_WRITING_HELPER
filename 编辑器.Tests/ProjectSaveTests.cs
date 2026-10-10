@@ -119,8 +119,16 @@ public class ProjectSaveTests : IDisposable
         p.Save();
         new ProjectSnapshotManager(_file).SaveSnapshot(p, "s1");
 
+        // 复制成另一个名字，并把这本书的快照目录一起带过去 —— 这样快照里记的
+        // FilePath 仍指向原来的文件名，对副本来说就是"过期路径"。
+        // ⚠ 快照是按**书名**分目录存的（见 ProjectSnapshotManager 的注释），
+        //   所以不能再靠"同目录下另存一个副本自动共用快照"来搭这个场景。
         var moved = _dir.File("moved.tdxproj");
         File.Copy(_file, moved, true);
+        var snapRoot = Path.Combine(_dir.Path, ".snapshots");
+        var from = Path.Combine(snapRoot, Path.GetFileName(_file));
+        var to = Path.Combine(snapRoot, Path.GetFileName(moved));
+        if (Directory.Exists(from)) Directory.Move(from, to);
 
         var session = new Mcp.Session();
         Assert.False(session.Open(moved).IsError);

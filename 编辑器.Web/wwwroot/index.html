@@ -67,6 +67,8 @@
   <select id="bookSel" title="选择一本书"></select>
   <button id="newBookBtn">新建</button>
   <span class="grow"></span>
+  <span id="meBadge" class="muted" title="当前登录身份">自用</span>
+  <button id="logoutBtn" class="hidden" title="退出登录">退出</button>
   <span id="mcpBadge" class="mcp-badge hidden" title="agent 正在通过 MCP 操作这本书">MCP 执行中</span>
   <span id="stats" class="muted" title="点击看最近 14 天"></span>
   <select id="themeSel" title="配色（与桌面版同名的 8 套）"></select>
@@ -467,15 +469,26 @@
     <div id="agentList" class="agent-list"></div>
     <p class="help-p muted" id="httpMcpHint"></p>
 
-    <div class="help-p" style="margin-top:12px">
-      <b>访问口令（对公网 / 局域网开放时的门槛）</b>
-      <div class="key-set">
-        <input id="accessKeyInput" type="password" placeholder="留空 = 关闭口令（仅建议本机使用时）">
-        <button id="accessKeySave" class="mini-btn" type="button">保存</button>
-        <span id="accessKeyState" class="muted"></span>
+    <div class="help-p" style="margin-top:12px" id="accountBox">
+      <b>账号</b>
+      <div id="accountSelf" class="hidden">
+        <div class="muted" style="margin:4px 0">试用账号的密码（每 <span id="trialDays"></span> 天自动轮换，发给试用的人即可；个人码由试用者自己定四位数字）：</div>
+        <div class="key-set">
+          <input id="trialPwdView" type="text" readonly title="当前试用密码">
+          <button id="trialRotateBtn" class="mini-btn" type="button">立刻换一个</button>
+          <span id="trialRotateState" class="muted"></span>
+        </div>
+        <div class="key-set">
+          <input id="selfOldPwd" type="password" placeholder="原密码">
+          <input id="selfNewPwd" type="password" placeholder="新密码（至少 6 位）">
+          <button id="selfPwdSave" class="mini-btn" type="button">改自用密码</button>
+          <span id="selfPwdState" class="muted"></span>
+        </div>
+        <span class="muted">自用与试用（按个人码）的作品库、AI 配置完全隔离；试用者看不到你的书和 Key。</span>
       </div>
-      <span class="muted">只能在本机上设置（外部设备改不了）。设置后，非本机访问页面/API/MCP
-      都要带这串口令；agent 走 HTTP 时在请求头加 <code>Authorization: Bearer 口令</code>。</span>
+      <div id="accountTrial" class="hidden muted">
+        你是试用账号（个人码 <span id="trialCodeView"></span>）。自己的书和配置都是独立的，管理员看不到内容。
+      </div>
     </div>
   </div>
 
@@ -483,6 +496,43 @@
     <span class="grow"></span>
     <button type="button" onclick="this.closest('dialog').close()">关闭</button>
   </div>
+</dialog>
+
+<!-- 登录（非本机访问时；本机回环自动以「自用」工作） -->
+<dialog id="loginDlg">
+  <form method="dialog" onsubmit="return false">
+    <h3 id="loginTitle">登录</h3>
+    <div id="loginInitRow" class="hidden">
+      <label>设置自用密码（至少 6 位；这是管理员账号）
+        <input id="loginInitPwd" type="password" autocomplete="new-password">
+      </label>
+      <p class="muted">试用账号的密码会在初始化后自动生成（每 10 天轮换一次），在「帮助 → 接入 Agent」里查看。</p>
+    </div>
+    <div id="loginFields">
+      <div id="loginUserRow">
+        <label>账号
+          <select id="loginUser">
+            <option value="self">自用</option>
+            <option value="trial">试用</option>
+          </select>
+        </label>
+      </div>
+      <label>密码
+        <input id="loginPassword" type="password" autocomplete="current-password">
+      </label>
+      <div id="loginCodeRow" class="hidden">
+        <label>个人码（试用账号必填，四位数字，用来区分不同试用者）
+          <input id="loginCode" inputmode="numeric" maxlength="4" placeholder="如 0731">
+        </label>
+      </div>
+    </div>
+    <div id="loginErr" class="muted" style="color:#c0392b"></div>
+    <div class="dlg-btns">
+      <button type="button" id="loginCancel">取消</button>
+      <span class="grow"></span>
+      <button type="button" id="loginGo" class="primary">进入</button>
+    </div>
+  </form>
 </dialog>
 
 <!-- 统计对话框 -->

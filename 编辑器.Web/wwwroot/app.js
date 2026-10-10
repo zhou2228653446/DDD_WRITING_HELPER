@@ -10,23 +10,19 @@ let saveTimer = null;
 let dirty = false;
 let chatInfo = null;      // 聊天记忆的规模（服务器侧 <项目目录>/.chat/session.json，与桌面端同一份）
 
-// ---------- 访问口令（外网/局域网访问时的门槛；本机回环不需要） ----------
-// 服务器配了 auth.conf 的 DASHBOARD_TOKEN 之后，非本机请求要带口令；
-// 401 时问一次、存 localStorage，之后所有请求自动带上。手机浏览器另有一条
-// 服务端种的 Cookie 兜底（就算这里没存上也能用）。
-const accessKey = () => localStorage.getItem('tdxKey') || '';
-const authHeaders = () => accessKey() ? { 'Authorization': 'Bearer ' + accessKey() } : {};
-function askAccessKey() {
-  const k = prompt('这个地址需要访问口令：', accessKey());
-  if (k !== null) localStorage.setItem('tdxKey', k.trim());
-  return accessKey();
-}
+// ---------- 登录会话（多账户：自用 + 试用）----------
+// 服务端：本机回环免登录（自动以「自用」工作）；其他设备必须登录，
+// 试用账号还要四位个人码（区分试用者，作品库按码隔离）。
+// 401 → 弹登录框 → 成功后把 token 存 localStorage 并自动重试原请求。
+const sessionToken = () => localStorage.getItem('tdxSession') || '';
+const authHeaders = () => sessionToken() ? { 'Authorization': 'Bearer ' + sessionToken() } : {};
 
 const api = async (url, opt) => {
   const merged = { ...opt, headers: { ...authHeaders(), ...(opt?.headers || {}) } };
   let r = await fetch(url, merged);
-  if (r.status === 401) {                       // 口令缺失/失效 → 问一次再试一遍
-    askAccessKey();
+  if (r.status === 401) {                       // 未登录/会话失效 → 登录后重试
+    const ok = await showLoginDlg(r);
+    if (!ok) throw new Error('未登录');
     r = await fetch(url, { ...merged, headers: { ...merged.headers, ...authHeaders() } });
   }
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
@@ -38,6 +34,85 @@ const post = (url, body) => api(url, {
   body: JSON.stringify(body || {}),
 });
 const del = url => api(url, { method: 'DELETE' });
+
+let loggingIn = null;   // 同一时段多个 401 只弹一个登录框
+function showLoginDlg(resp) {
+  if (loggingIn) return loggingIn;
+  loggingIn = (async () => {
+    let needInit = false;
+    try { needInit = (await resp.clone().json()).needInit === true; } catch { }
+    const dlg = $('#loginDlg');
+    $('#loginTitle').textContent = needInit ? '初始化账号' : '登录';
+    $('#loginInitRow').classList.toggle('hidden', !needInit);
+    $('#loginFields').classList.toggle('hidden', needInit);
+    if (needInit) $('#loginUserRow').classList.add('hidden');
+    else $('#loginUserRow').classList.remove('hidden');
+    $('#loginCodeRow').classList.toggle('hidden', true);   // 选了试用再显示
+    $('#loginErr').textContent = '';
+    $('#loginPassword').value = '';
+    $('#loginCode').value = '';
+    dlg.showModal();
+    const ok = await new Promise(resolve => {
+      dlg.addEventListener('close', () => resolve(dlg.returnValue === 'ok'), { once: true });
+    });
+    loggingIn = null;
+    return ok;
+  })();
+  return loggingIn;
+}
+
+async function doLogin() {
+  const needInit = !$('#loginFields').classList.contains('hidden');
+  const err = $('#loginErr');
+  err.textContent = '';
+  try {
+    if (needInit) {
+      const pwd = $('#loginInitPwd').value.trim();
+      await post('/api/auth/initialize', { selfPassword: pwd });
+      $('#loginDlg').close('ok');
+      log('账号系统已初始化，本机直接以「自用」工作');
+      await loadMe();
+      return true;
+    }
+    const user = $('#loginUser').value;
+    const body = { user, password: $('#loginPassword').value };
+    if (user === 'trial') body.code = $('#loginCode').value.trim();
+    const d = await post('/api/auth/login', body);
+    localStorage.setItem('tdxSession', d.token);
+    $('#loginDlg').close('ok');
+    log(user === 'self' ? '已登录：自用' : `已登录：试用 #${d.subject.split(':')[1]}`);
+    await loadMe();
+    return true;
+  } catch (e) {
+    err.textContent = errMsg(e);
+    return false;
+  }
+}
+
+$('#loginUser').onchange = () =>
+  $('#loginCodeRow').classList.toggle('hidden', $('#loginUser').value !== 'trial');
+$('#loginGo').onclick = () => doLogin();
+$('#loginCancel').onclick = () => $('#loginDlg').close('');
+
+async function loadMe() {
+  try {
+    const me = await api('/api/auth/me');
+    const badge = $('#meBadge');
+    if (me.isSelf) {
+      badge.textContent = me.initialized === false ? '自用（未初始化）' : '自用';
+      $('#logoutBtn').classList.toggle('hidden', me.initialized === false);
+    } else {
+      badge.textContent = `试用 #${me.code}`;
+      $('#logoutBtn').classList.remove('hidden');
+    }
+    window.__me = me;
+  } catch { /* 未登录状态由首个 api() 调用触发登录框 */ }
+}
+$('#logoutBtn').onclick = async () => {
+  try { await post('/api/auth/logout', {}); } catch { }
+  localStorage.removeItem('tdxSession');
+  location.reload();
+};
 
 // ---------- 外观（配色 × 材质，见 appearance.js；服务器上的 appearance.json 是唯一权威） ----------
 
@@ -1769,7 +1844,7 @@ function connect() {
     .withUrl('/hub/live', {
       // 外网/局域网访问时服务器开了口令校验：WebSocket 走 access_token 参数、
       // negotiate 走 Authorization 头，服务器两种都认
-      accessTokenFactory: () => accessKey(),
+      accessTokenFactory: () => sessionToken(),
     }).withAutomaticReconnect().build();
 
   conn.on('live', e => {
@@ -2082,7 +2157,7 @@ $$('#helpDlg .help-tabs button').forEach(b => {
     $$('#helpDlg .help-tabs button').forEach(x => x.classList.toggle('active', x === b));
     ['about', 'keys', 'agents'].forEach(k =>
       $('#ht-' + k).classList.toggle('hidden', k !== b.dataset.htab));
-    if (b.dataset.htab === 'agents') { loadAgentClients(); loadAccessKeyState(); }
+    if (b.dataset.htab === 'agents') { loadAgentClients(); loadAccountBox(); }
   };
 });
 $('#helpBtn').onclick = () => $('#helpDlg').showModal();
@@ -2101,24 +2176,39 @@ $('#httpMcpHint').innerHTML =
   `前提：TDXCLAW_LAN=1 启动、防火墙放行 5280、<b>必须设置下方访问口令</b>（公网裸奔 = 任何人可改稿烧 Key）。` +
   `手机浏览器看稿：第一次打开时输一次口令即可（服务端会种 Cookie）。`;
 
-// ---- 访问口令的设置入口（仅本机回环可用；外部设备请求会被 403） ----
-async function loadAccessKeyState() {
-  const st = $('#accessKeyState');
-  try {
-    const d = await api('/api/access-key');
-    st.textContent = d.enabled ? '已启用口令' : '未设置（鉴权关闭）';
-  } catch { st.textContent = '（仅本机可查看）'; }
+// ---- 账号管理（帮助 → 接入 Agent 底部；自用可见试用密码，试用只见提示） ----
+async function loadAccountBox() {
+  const me = window.__me;
+  if (!me) return;
+  $('#accountSelf').classList.toggle('hidden', !me.isSelf);
+  $('#accountTrial').classList.toggle('hidden', me.isSelf);
+  if (me.isSelf && me.trialPassword) {
+    $('#trialPwdView').value = me.trialPassword;
+    $('#trialDays').textContent = String(me.trialDaysLeft);
+  }
+  if (!me.isSelf) $('#trialCodeView').textContent = me.code || '';
 }
-$('#accessKeySave').onclick = async () => {
-  const st = $('#accessKeyState');
-  const k = $('#accessKeyInput').value.trim();
-  if (!k && !confirm('留空保存 = 关闭口令校验，确定？')) return;
+$('#trialRotateBtn').onclick = async () => {
+  const st = $('#trialRotateState');
   try {
-    const d = await post('/api/access-key/set', { key: k });
-    st.textContent = d.enabled ? '已启用口令' : '已关闭（未设置）';
-    $('#accessKeyInput').value = '';
-    log(d.enabled ? '访问口令已设置：非本机访问需要带上它' : '访问口令已关闭');
-  } catch (e) { st.textContent = '保存失败：' + errMsg(e); }
+    const d = await post('/api/accounts/trial-rotate', {});
+    $('#trialPwdView').value = d.trialPassword;
+    st.textContent = '已换';
+    log('试用密码已手动轮换，旧密码即刻失效');
+    setTimeout(() => st.textContent = '', 3000);
+  } catch (e) { st.textContent = '失败：' + errMsg(e); }
+};
+$('#selfPwdSave').onclick = async () => {
+  const st = $('#selfPwdState');
+  try {
+    await post('/api/accounts/self-password', {
+      old: $('#selfOldPwd').value, new: $('#selfNewPwd').value,
+    });
+    st.textContent = '已修改';
+    $('#selfOldPwd').value = $('#selfNewPwd').value = '';
+    log('自用密码已修改');
+    setTimeout(() => st.textContent = '', 3000);
+  } catch (e) { st.textContent = '失败：' + errMsg(e); }
 };
 
 let agentClientsLoaded = false;
@@ -2329,4 +2419,5 @@ loadPresetSelect();
 loadPolishPresets();
 loadAppearance().catch(e => console.error(e));
 loadStatusApi();
+loadMe();          // 顶栏身份徽标（未登录时静默，由首个 api() 调用触发登录框）
 connect();

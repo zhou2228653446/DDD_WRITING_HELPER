@@ -11,7 +11,9 @@ namespace 编辑器.Web;
 /// 设计前提（用户明确）：**单人分时**——同一时间只有一边在写。
 /// 所以不做多人权限、不做实时合并，只用一把锁保证"人写"和"agent 写"不会同时落盘。
 ///
-/// 书库目录与 MCP / 桌面端**同一个**（见 <see cref="ResolveBooksDir"/>）。
+/// 多账户：每个「主体」（自用 / 试用+个人码）一个实例（见 <see cref="WorkspaceRegistry"/>），
+/// 作品库、聊天记忆、快照、AI API 配置随主体隔离，互不可见。
+/// 自用主体的书库与 MCP / 桌面端**同一个**（见 <see cref="ResolveBooksDir"/>）。
 /// </summary>
 public sealed class WorkspaceService
 {
@@ -20,27 +22,50 @@ public sealed class WorkspaceService
 
     private NovelProject? _project;
 
-    public WorkspaceService(IHubContext<LiveHub> hub)
+    public WorkspaceService(IHubContext<LiveHub> hub, string subject)
     {
         _hub = hub;
-        BooksDir = ResolveBooksDir();
+        Subject = subject;
+        BooksDir = ResolveBooksDir(subject);
         Directory.CreateDirectory(BooksDir);
     }
+
+    /// <summary>主体标识："self" 或 "trial:&lt;四位码&gt;"。</summary>
+    public string Subject { get; }
+
+    public bool IsSelf => Subject == "self";
 
     public string BooksDir { get; }
 
     /// <summary>
-    /// 书库目录。**必须与 MCP / 桌面端解析出同一个目录**——否则网页版的书在
-    /// %LOCALAPPDATA%\TdxClaw.Web\books，agent 的书在 文档\TdxClaw\Projects，
-    /// 两边各写各的，「你在网页上写、agent 通过 MCP 改同一本书」这个核心场景
-    /// 根本无从谈起：界面永远看不到 agent 动的是哪本书（甚至一本都看不到）。
-    ///
-    /// 直接调用 MCP 侧同一份实现（InternalsVisibleTo），不再复刻——
-    /// 复刻版此前没有的 CreateDirectory 保留在下面。
+    /// 主体的工作区根目录（书库在其下 books\）。API 配置等按主体隔离的文件也放这里。
+    /// 自用：D:\TdxClaw\self（书库即 MCP / 桌面端的 ProjectsDirectory，paths.json 指向它）；
+    /// 试用：D:\TdxClaw\trial-&lt;码&gt;（agent 看不到）。
     /// </summary>
-    private static string ResolveBooksDir()
+    public static string RootDirOf(string subject)
     {
-        var dir = 编辑器.Mcp.NovelTools.ResolveProjectsDirectory();
+        var baseDir = Path.Combine("D:\\", "TdxClaw");
+        // "trial:1234" → 目录 "trial-1234"（码外层已校验为四位数字，无路径注入）
+        var dir = subject == "self"
+            ? Path.Combine(baseDir, "self")
+            : Path.Combine(baseDir, "trial-" + subject.Split(':').Last());
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    /// <summary>
+    /// 书库目录。**自用主体必须与 MCP / 桌面端解析出同一个目录**——否则网页版的书在
+    /// 一处，agent 的书在另一处，两边各写各的，「你在网页上写、agent 通过 MCP 改
+    /// 同一本书」这个核心场景根本无从谈起：界面永远看不到 agent 动的是哪本书。
+    ///
+    /// 自用走 MCP 侧同一份实现（paths.json 的 ProjectsDirectory 指到 D:\TdxClaw\self\books）；
+    /// 试用主体是自己的独立目录，agent 本来就不该看到。
+    /// </summary>
+    private static string ResolveBooksDir(string subject)
+    {
+        var dir = subject == "self"
+            ? 编辑器.Mcp.NovelTools.ResolveProjectsDirectory()
+            : Path.Combine(RootDirOf(subject), "books");
         Directory.CreateDirectory(dir);   // 首次运行时目录可能还不存在
         return dir;
     }

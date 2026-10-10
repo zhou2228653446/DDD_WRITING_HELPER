@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -5,12 +6,29 @@ using 编辑器;
 using 编辑器.Mcp;
 using 编辑器.Services;
 using 编辑器.Web;
+using 编辑器.Web.Services;
 using Microsoft.AspNetCore.SignalR;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSignalR();
-builder.Services.AddSingleton<WorkspaceService>();
+builder.Services.AddHttpContextAccessor();
+
+// ── 多账户（自用 + 试用）：每个主体一个独立工作区 ──
+// 主体 = "self" 或 "trial:<四位码>"。隔离：作品库、聊天记忆、快照、AI API 配置；
+// 共享：提示词方案、技能、外观、口令与账号定义。
+builder.Services.AddSingleton(new AccountStore(ConfigDir()));
+builder.Services.AddSingleton<AuthSessions>();
+builder.Services.AddSingleton<WorkspaceRegistry>();
+// 端点里照旧注入 WorkspaceService——由当前会话的主体决定拿到哪一个实例
+//（中间件把 subject 塞进 HttpContext.Items，这里据此取对应实例）
+builder.Services.AddScoped<WorkspaceService>(sp =>
+{
+    var ctx = sp.GetRequiredService<IHttpContextAccessor>().HttpContext
+              ?? throw new InvalidOperationException("无 HttpContext");
+    var subject = ctx.Items["subject"] as string ?? "self";
+    return sp.GetRequiredService<WorkspaceRegistry>().For(subject);
+});
 
 // 「其他设备的 agent」只能通过 HTTP 连这台机器的 /mcp（stdio 要求那台机器上有 exe）。
 // 默认只绑回环——个人工具，绑出去 = 别的设备都能改你的稿子、烧你的 API；
@@ -43,60 +61,190 @@ app.UseStaticFiles(new StaticFileOptions
 });
 
 // ══════════════════════════════════════════════════════════════════
-// 访问口令 —— 公网暴露（No-IP IPv6 直连 / 局域网）的底线
+// 访问认证 —— 账户系统（自用 + 试用），公网/局域网暴露的门槛
 // ══════════════════════════════════════════════════════════════════
-// 与 bili 看板同一套约定：配置目录放 auth.conf 填 DASHBOARD_TOKEN=xxx。
-// 留空/没有 = 不鉴权（本机与局域网的现状不受影响）；配了之后，**非回环**
-// 请求访问 /api /mcp /hub 必须带口令。必须做的原因：/mcp 能调 AI 烧 Key、
-// /api 能改稿删稿——公网上裸奔等于把 API Key 和全部书稿交给所有人。
+// · 本机回环 = 「自用」身份，免登录（本机 agent / 脚本 / 桌面端习惯照旧）
+// · 非本机：登录会话（Cookie tdx_session / Bearer / ?access_token= 三通道）
+// · 隔离：每个主体一套书库与 AI API 配置（试用：D:\TdxClaw\trial-<码>）
+// · 试用密码每 10 天自动轮换，登录附四位个人码区分试用者
 app.Use(async (ctx, next) =>
 {
-    var token = LoadAccessToken();
     var path = ctx.Request.Path;
+
+    // 登录/初始化端点放行（否则鸡生蛋：没登录连登录接口都调不了）
+    if (path.StartsWithSegments("/api/auth"))
+    {
+        await next();
+        return;
+    }
+
+    // 本机回环 = 自用，免登录
+    if (IsLoopback(ctx))
+    {
+        ctx.Items["subject"] = "self";
+        await next();
+        return;
+    }
+
+    // 静态页面放行（不含数据；数据全走 /api）——未登录时由前端弹登录框
     var needsAuth = path.StartsWithSegments("/api") || path.StartsWithSegments("/mcp")
                  || path.StartsWithSegments("/hub");
-    if (needsAuth && !string.IsNullOrEmpty(token))
+    if (!needsAuth)
     {
-        var loopback = IsLoopback(ctx);
-        if (!loopback)
-        {
-            if (!TokenMatches(ctx, token))
-            {
-                ctx.Response.StatusCode = 401;
-                ctx.Response.Headers.WWWAuthenticate = "Bearer";
-                await ctx.Response.WriteAsJsonAsync(new
-                { error = "需要访问口令（Authorization: Bearer <token>，或 ?access_token=）" });
-                return;
-            }
-            // 口令对了：种一个长期 Cookie，浏览器（手机看稿）之后自动携带
-            ctx.Response.Headers["Set-Cookie"] =
-                $"tdx_token={Uri.EscapeDataString(token)}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax";
-        }
+        await next();
+        return;
     }
+
+    var accounts = ctx.RequestServices.GetRequiredService<AccountStore>();
+    if (!accounts.Initialized)
+    {
+        ctx.Response.StatusCode = 401;
+        await ctx.Response.WriteAsJsonAsync(new
+        { error = "账号系统未初始化：请先在本机打开页面完成初始化", needInit = true });
+        return;
+    }
+
+    var sessions = ctx.RequestServices.GetRequiredService<AuthSessions>();
+    var subject = sessions.SubjectOf(TokenFrom(ctx));
+    if (subject == null)
+    {
+        ctx.Response.StatusCode = 401;
+        ctx.Response.Headers.WWWAuthenticate = "Bearer";
+        await ctx.Response.WriteAsJsonAsync(new { error = "请登录", needLogin = true });
+        return;
+    }
+    ctx.Items["subject"] = subject;
     await next();
 });
 
-// 口令管理：**仅限本机回环**——公网上谁都不许读、也不许改口令。
-app.MapGet("/api/access-key", (HttpContext ctx) =>
-    IsLoopback(ctx)
-        ? Results.Ok(new { enabled = !string.IsNullOrEmpty(LoadAccessToken()) })
-        : Results.StatusCode(403));
+// ── 登录与账号端点 ──────────────────────────────────────────────
+// 登录限速：同一 IP 连错 5 次 → 锁 10 分钟（公网暴露后的爆破底线）
+var loginFails = new ConcurrentDictionary<string, (int Fails, DateTime LockedUntil)>();
 
-app.MapPost("/api/access-key/set", async (HttpContext ctx) =>
+app.MapPost("/api/auth/login", async (HttpContext ctx, AccountStore accounts, AuthSessions sessions) =>
+{
+    var ip = ctx.Connection.RemoteIpAddress?.ToString() ?? "?";
+    if (loginFails.TryGetValue(ip, out var l) && l.LockedUntil > DateTime.Now)
+        return Results.Json(new { error = $"失败次数太多，约 {(int)Math.Ceiling((l.LockedUntil - DateTime.Now).TotalMinutes)} 分钟后再试" },
+            statusCode: 429);
+
+    var req = await ctx.Request.ReadFromJsonAsync<LoginReq>();
+    var user = (req.User ?? "").Trim().ToLowerInvariant();
+    string subject;
+    if (user == "self")
+    {
+        if (!accounts.VerifySelf(req.Password ?? ""))
+        {
+            MarkFail(ip);
+            return Results.Json(new { error = "账号或密码不对" }, statusCode: 401);
+        }
+        subject = "self";
+    }
+    else if (user == "trial")
+    {
+        var code = (req.Code ?? "").Trim();
+        // 四位数字：既是目录名也是试用者标识，格式先卡死
+        if (!System.Text.RegularExpressions.Regex.IsMatch(code, @"^\d{4}$"))
+            return Results.Json(new { error = "试用账号需要四位数字的个人码" }, statusCode: 400);
+        if (!accounts.VerifyTrial(req.Password ?? ""))
+        {
+            MarkFail(ip);
+            return Results.Json(new { error = "账号或密码不对" }, statusCode: 401);
+        }
+        subject = "trial:" + code;
+    }
+    else
+    {
+        return Results.Json(new { error = "账号类型不对" }, statusCode: 400);
+    }
+
+    loginFails.TryRemove(ip, out _);
+    var token = sessions.Issue(subject);
+    ctx.Response.Headers["Set-Cookie"] =
+        $"tdx_session={token}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax";
+    return Results.Ok(new { token, subject });
+
+    IResult MarkFail(string ip)
+    {
+        int n = loginFails.TryGetValue(ip, out var v) ? v.Fails : 0;
+        var until = n + 1 >= 5 ? DateTime.Now.AddMinutes(10)
+                  : (v.LockedUntil > DateTime.MinValue ? v.LockedUntil : DateTime.MinValue);
+        loginFails[ip] = (n + 1, until);
+        return Results.Json(new { error = $"账号或密码不对（{n + 1}/5）" }, statusCode: 401);
+    }
+});
+
+app.MapPost("/api/auth/logout", (HttpContext ctx, AuthSessions sessions) =>
+{
+    var t = TokenFrom(ctx);
+    if (t != null) sessions.Revoke(t);
+    ctx.Response.Headers["Set-Cookie"] = "tdx_session=; Path=/; Max-Age=0";
+    return Results.Ok(new { ok = true });
+});
+
+// 当前身份。自用账号顺带拿到试用密码与剩余天数（要转发给试用者的就是它）。
+// ⚠ 本端点在 /api/auth 放行段里，中间件不会设置 subject——自己解析 token。
+app.MapGet("/api/auth/me", (HttpContext ctx, AccountStore accounts, AuthSessions sessions) =>
+{
+    var subject = ctx.Items["subject"] as string
+                  ?? sessions.SubjectOf(TokenFrom(ctx))
+                  ?? (IsLoopback(ctx) ? "self" : null);
+    if (subject == null) return Results.StatusCode(401);
+    if (subject == "self")
+    {
+        if (accounts.Initialized)
+        {
+            var (pwd, next) = accounts.CurrentTrial();
+            return Results.Ok(new
+            {
+                subject,
+                isSelf = true,
+                trialPassword = pwd,
+                trialNextRotate = next,
+                trialDaysLeft = Math.Max(0, (int)Math.Ceiling((next - DateTime.Now).TotalDays)),
+            });
+        }
+        return Results.Ok(new { subject, isSelf = true, initialized = false });
+    }
+    return Results.Ok(new { subject, isSelf = false, code = subject.Split(':').Last() });
+});
+
+// 初始化：**仅限本机**——公网上谁都不许创建/重置账号
+app.MapPost("/api/auth/initialize", async (HttpContext ctx, AccountStore accounts) =>
 {
     if (!IsLoopback(ctx)) return Results.StatusCode(403);
-    var req = await ctx.Request.ReadFromJsonAsync<AccessKeyReq>();
-    var key = (req.Key ?? "").Trim();
-    var file = Path.Combine(编辑器.Mcp.NovelTools.ResolveConfigDirectory(), "auth.conf");
-    if (key.Length == 0)
+    if (accounts.Initialized) return Results.Json(new { error = "已初始化" }, statusCode: 400);
+    var req = await ctx.Request.ReadFromJsonAsync<InitReq>();
+    var pwd = (req.SelfPassword ?? "").Trim();
+    if (pwd.Length < 6) return Results.Json(new { error = "自用密码至少 6 位" }, statusCode: 400);
+    accounts.Initialize(pwd);
+    return Results.Ok(new { ok = true });
+});
+
+// 自用账号管理：改密码 / 手动轮换试用密码（仅 self 主体）
+app.MapPost("/api/accounts/self-password", async (HttpContext ctx, AccountStore accounts) =>
+{
+    if ((ctx.Items["subject"] as string ?? (IsLoopback(ctx) ? "self" : "")) != "self")
+        return Results.StatusCode(403);
+    var req = await ctx.Request.ReadFromJsonAsync<SelfPwdReq>();
+    try
     {
-        if (File.Exists(file)) File.Delete(file);   // 留空 = 关闭鉴权
-        return Results.Ok(new { enabled = false });
+        accounts.ChangeSelfPassword(req.Old ?? "", req.New ?? "");
+        return Results.Ok(new { ok = true });
     }
-    await File.WriteAllTextAsync(file,
-        "# 访问口令（与 bili 看板同款约定）——配了之后，非本机访问 /api /mcp /hub 必须带上它\n" +
-        "DASHBOARD_TOKEN=" + key + "\n");
-    return Results.Ok(new { enabled = true });
+    catch (InvalidOperationException e)
+    {
+        return Results.Json(new { error = e.Message }, statusCode: 400);
+    }
+});
+
+app.MapPost("/api/accounts/trial-rotate", (HttpContext ctx, AccountStore accounts) =>
+{
+    if ((ctx.Items["subject"] as string ?? (IsLoopback(ctx) ? "self" : "")) != "self")
+        return Results.StatusCode(403);
+    var pwd = accounts.RotateTrialNow();
+    var (p, next) = accounts.CurrentTrial();
+    return Results.Ok(new { trialPassword = p, trialNextRotate = next });
 });
 
 app.MapHub<LiveHub>("/hub/live");
@@ -403,7 +551,7 @@ app.MapPost("/api/memory", async (WorkspaceService ws, BookNameReq req) =>
 // ══════════════════════════════════════════════════════════════════
 
 app.MapGet("/api/chat", (WorkspaceService ws) =>
-    Results.Ok(ws.ChatInfo(LoadApiConfig()?.Model ?? "")));
+    Results.Ok(ws.ChatInfo(LoadApiConfig(ws.Subject)?.Model ?? "")));
 
 app.MapPost("/api/chat/clear", (WorkspaceService ws) =>
     Results.Ok(new { ok = ws.ClearChat() }));
@@ -417,7 +565,7 @@ app.MapPost("/api/ai", async (HttpContext ctx, WorkspaceService ws) =>
     var req = await ctx.Request.ReadFromJsonAsync<AiReq>()
               ?? new AiReq(null, null, 0, null, null, null, null, null, null, null);
 
-    var cfg = LoadApiConfig();
+    var cfg = LoadApiConfig(ws.Subject);
     if (cfg == null)
     {
         ctx.Response.StatusCode = 400;
@@ -878,9 +1026,9 @@ static (string task, string? contract) ResolveTask(string? key, NovelSkill? skil
 
 // ── API 方案管理（与桌面版共用 api_profiles.json）──
 
-app.MapGet("/api/ai/profiles", () =>
+app.MapGet("/api/ai/profiles", (WorkspaceService ws) =>
 {
-    var mgr = new ApiProfileManager(Path.Combine(ConfigDir(), "api_profiles.json"));
+    var mgr = new ApiProfileManager(ApiProfilesPath(ws.Subject));
     mgr.Load();
     return Results.Ok(new
     {
@@ -902,9 +1050,9 @@ app.MapGet("/api/ai/profiles", () =>
 
 // 新建方案。可以给一个「蓝本」from——新建多半是"同一家换个模型"，
 // 所以连 Key 一起复制过去，不让人重粘一遍。
-app.MapPost("/api/ai/profiles/new", (ProfileNewReq req) =>
+app.MapPost("/api/ai/profiles/new", (ProfileNewReq req, WorkspaceService ws) =>
 {
-    var mgr = new ApiProfileManager(Path.Combine(ConfigDir(), "api_profiles.json"));
+    var mgr = new ApiProfileManager(ApiProfilesPath(ws.Subject));
     mgr.Load();
 
     var name = (req.Name ?? "").Trim();
@@ -939,7 +1087,7 @@ app.MapPost("/api/ai/profiles/new", (ProfileNewReq req) =>
 // 保存（新增或覆盖）一个方案。Key 传空字符串表示清空；不传（null）表示保留原 Key。
 app.MapPost("/api/ai/profiles/save", async (WorkspaceService ws, ProfileSaveReq req) =>
 {
-    var mgr = new ApiProfileManager(Path.Combine(ConfigDir(), "api_profiles.json"));
+    var mgr = new ApiProfileManager(ApiProfilesPath(ws.Subject));
     mgr.Load();
 
     var name = (req.Name ?? "").Trim();
@@ -967,9 +1115,9 @@ app.MapPost("/api/ai/profiles/save", async (WorkspaceService ws, ProfileSaveReq 
     return Results.Ok(new { ok = true });
 });
 
-app.MapPost("/api/ai/profiles/active", (NameReq req) =>
+app.MapPost("/api/ai/profiles/active", (NameReq req, WorkspaceService ws) =>
 {
-    var mgr = new ApiProfileManager(Path.Combine(ConfigDir(), "api_profiles.json"));
+    var mgr = new ApiProfileManager(ApiProfilesPath(ws.Subject));
     mgr.Load();
     if (!mgr.Profiles.ContainsKey(req.Name ?? "")) return Results.NotFound(new { error = "没有这个方案" });
     mgr.SetActive(req.Name!);
@@ -977,9 +1125,9 @@ app.MapPost("/api/ai/profiles/active", (NameReq req) =>
     return Results.Ok(new { ok = true, active = mgr.ActiveProfileName });
 });
 
-app.MapPost("/api/ai/profiles/delete", (NameReq req) =>
+app.MapPost("/api/ai/profiles/delete", (NameReq req, WorkspaceService ws) =>
 {
-    var mgr = new ApiProfileManager(Path.Combine(ConfigDir(), "api_profiles.json"));
+    var mgr = new ApiProfileManager(ApiProfilesPath(ws.Subject));
     mgr.Load();
 
     // 与桌面端一致：至少留一个。删光之后界面上就再也没有可编辑的方案了，
@@ -1048,7 +1196,7 @@ app.MapPost("/api/settings/mcp-live-sync", (EnabledReq req) =>
 
 // 从服务商现拉真实模型名（与桌面版 ApiSettingsWindow.FetchModelsAsync 同一个 ModelCatalog）。
 // 拉回来的清单只用于填下拉，不缓存——缓存文件在桌面端那边管。
-app.MapPost("/api/ai/models", async (ProfileSaveReq req) =>
+app.MapPost("/api/ai/models", async (ProfileSaveReq req, WorkspaceService ws) =>
 {
     var config = new ApiConfig
     {
@@ -1061,7 +1209,7 @@ app.MapPost("/api/ai/models", async (ProfileSaveReq req) =>
     // 表单里没有明文 Key 时，借用已保存方案里的 Key（本地地址不鉴权，允许无 Key）
     if (string.IsNullOrWhiteSpace(config.ApiKey))
     {
-        var mgr = new ApiProfileManager(Path.Combine(ConfigDir(), "api_profiles.json"));
+        var mgr = new ApiProfileManager(ApiProfilesPath(ws.Subject));
         mgr.Load();
         config.ApiKey = mgr.Profiles.TryGetValue(req.Name ?? "", out var saved) ? saved.ApiKey : "";
     }
@@ -1087,9 +1235,9 @@ app.MapPost("/api/ai/models", async (ProfileSaveReq req) =>
 
 // 配置文件的原始 JSON（桌面版 API 设置里的「JSON 编辑」Tab）：直接读写 api_profiles.json，
 // 保存前先试着 Load 一次，写坏了不让落盘。
-app.MapGet("/api/ai/profiles/raw", () =>
+app.MapGet("/api/ai/profiles/raw", (WorkspaceService ws) =>
 {
-    var path = Path.Combine(ConfigDir(), "api_profiles.json");
+    var path = ApiProfilesPath(ws.Subject);
     string text;
     if (File.Exists(path))
     {
@@ -1108,9 +1256,9 @@ app.MapGet("/api/ai/profiles/raw", () =>
     return Results.Ok(new { path, text, exists = File.Exists(path) });
 });
 
-app.MapPost("/api/ai/profiles/raw", (NameReq req) =>
+app.MapPost("/api/ai/profiles/raw", (NameReq req, WorkspaceService ws) =>
 {
-    var path = Path.Combine(ConfigDir(), "api_profiles.json");
+    var path = ApiProfilesPath(ws.Subject);
     var text = req.Name ?? "";
 
     // 严格校验：⚠ 不能拿 ApiProfileManager.Load() 当校验——它内部 try/catch 吞掉
@@ -1629,7 +1777,7 @@ app.MapPost("/api/settingsbook/generate", async (HttpContext ctx, WorkspaceServi
     var chapter = p.SettingsBook.Chapters.FirstOrDefault(c => c.ChapterId == req.ChapterId);
     if (chapter == null) { ctx.Response.StatusCode = 404; await ctx.Response.WriteAsync("章节不存在"); return; }
 
-    var cfg = LoadApiConfig();
+    var cfg = LoadApiConfig(ws.Subject);
     if (cfg == null) { ctx.Response.StatusCode = 400; await ctx.Response.WriteAsync("还没配置 AI 服务商。"); return; }
 
     var tpl = SettingsBookTemplates.Find(chapter.SourceKey);
@@ -1833,57 +1981,29 @@ app.Run();
 // 读的就不是同一份文件了——又是「两条路只对了一条」。
 static string ConfigDir() => 编辑器.Mcp.NovelTools.ResolveConfigDirectory();
 
-// ── 访问口令（公网暴露的底线；约定与 bili 看板同款）──────────────────
-
-/// <summary>读访问口令（配置目录 auth.conf 的 DASHBOARD_TOKEN=）。没有/留空 = 未启用鉴权。</summary>
-static string? LoadAccessToken()
-{
-    try
-    {
-        var file = Path.Combine(ConfigDir(), "auth.conf");
-        if (!File.Exists(file)) return null;
-        foreach (var raw in File.ReadAllLines(file))
-        {
-            var i = raw.IndexOf('=');
-            if (i <= 0) continue;
-            if (!raw[..i].Trim().Equals("DASHBOARD_TOKEN", StringComparison.OrdinalIgnoreCase)) continue;
-            var v = raw[(i + 1)..].Trim();
-            return v.Length > 0 ? v : null;
-        }
-    }
-    catch { }
-    return null;
-}
+// ── 登录会话的令牌提取 ────────────────────────────────────────────
 
 static bool IsLoopback(HttpContext ctx) =>
     ctx.Connection.RemoteIpAddress is { } ip && System.Net.IPAddress.IsLoopback(ip);
 
 /// <summary>
-/// 取请求携带的口令并比对（恒时比较，防止计时侧信道）。
-/// 来源顺序：Authorization: Bearer → ?access_token=（SignalR 的
-/// accessTokenFactory 走这个）→ Cookie（口令对了之后服务端种下的那份）。
+/// 取请求携带的会话令牌。来源顺序：Authorization: Bearer（外部 agent 用）→
+/// ?access_token=（SignalR 的 accessTokenFactory 走这个）→ Cookie（登录时种下的）。
 /// </summary>
-static bool TokenMatches(HttpContext ctx, string token)
+static string? TokenFrom(HttpContext ctx)
 {
-    var supplied = ctx.Request.Headers["Authorization"].ToString();
-    if (supplied.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-        supplied = supplied["Bearer ".Length..].Trim();
-    if (string.IsNullOrEmpty(supplied))
-        supplied = ctx.Request.Query["access_token"].ToString();
-    if (string.IsNullOrEmpty(supplied))
+    var h = ctx.Request.Headers["Authorization"].ToString();
+    if (h.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        return h["Bearer ".Length..].Trim();
+    var q = ctx.Request.Query["access_token"].ToString();
+    if (!string.IsNullOrEmpty(q)) return q;
+    foreach (var part in ctx.Request.Headers.Cookie.ToString().Split(';'))
     {
-        foreach (var part in ctx.Request.Headers.Cookie.ToString().Split(';'))
-        {
-            var p = part.Trim();
-            if (p.StartsWith("tdx_token=", StringComparison.OrdinalIgnoreCase))
-                supplied = Uri.UnescapeDataString(p["tdx_token=".Length..]);
-        }
+        var p = part.Trim();
+        if (p.StartsWith("tdx_session=", StringComparison.OrdinalIgnoreCase))
+            return Uri.UnescapeDataString(p["tdx_session=".Length..]);
     }
-    if (string.IsNullOrEmpty(supplied)) return false;
-    return supplied.Length == token.Length &&
-           System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
-               System.Text.Encoding.UTF8.GetBytes(supplied),
-               System.Text.Encoding.UTF8.GetBytes(token));
+    return null;
 }
 
 /// <summary>从运行目录往上找仓库根（认 install-mcp.py）。找不到返回 null。</summary>
@@ -1942,11 +2062,11 @@ static string? WebBgFile()
     return Directory.GetFiles(dir, "web_bg.*").FirstOrDefault();
 }
 
-static ApiConfig? LoadApiConfig()
+static ApiConfig? LoadApiConfig(string subject)
 {
     try
     {
-        var mgr = new ApiProfileManager(Path.Combine(ConfigDir(), "api_profiles.json"));
+        var mgr = new ApiProfileManager(ApiProfilesPath(subject));
         mgr.Load();
         return mgr.ActiveProfile;
     }
@@ -1955,6 +2075,15 @@ static ApiConfig? LoadApiConfig()
         return null;
     }
 }
+
+/// <summary>
+/// 主体专属的 AI API 配置文件路径。自用与桌面端**共享同一份**（现状不变，
+/// 桌面端配的 Key 网页版直接能用）；试用各一份——试用者怎么折腾都影响不到自用。
+/// </summary>
+static string ApiProfilesPath(string subject) =>
+    subject == "self"
+        ? Path.Combine(ConfigDir(), "api_profiles.json")
+        : Path.Combine(WorkspaceService.RootDirOf(subject), "api_profiles.json");
 
 public record BookNameReq([property: JsonPropertyName("name")] string? Name);
 public record NameReq([property: JsonPropertyName("name")] string? Name);
@@ -2064,3 +2193,14 @@ public record AppearanceReq(
     [property: JsonPropertyName("intensity")] double? Intensity);
 
 public record AccessKeyReq([property: JsonPropertyName("key")] string? Key);
+
+public record LoginReq(
+    [property: JsonPropertyName("user")] string? User,
+    [property: JsonPropertyName("password")] string? Password,
+    [property: JsonPropertyName("code")] string? Code);
+
+public record InitReq([property: JsonPropertyName("selfPassword")] string? SelfPassword);
+
+public record SelfPwdReq(
+    [property: JsonPropertyName("old")] string? Old,
+    [property: JsonPropertyName("new")] string? New);

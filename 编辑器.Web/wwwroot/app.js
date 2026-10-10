@@ -1748,6 +1748,22 @@ function connect() {
     if (t === 'start') {
       mcpBadgeShow('MCP 执行中', true, false);
       if (ev.summary) log(ev.summary, true);
+
+      // ★ 跟着 agent 切书：它换了项目，界面还停在上本书的话，
+      //   用户看到的就是「agent 在动、但界面纹丝不动」。
+      //   桌面端 SyncProjectFromDisk 做的就是这件事。
+      if (ev.projectPath) {
+        const want = ev.projectPath.split(/[\\/]/).pop();
+        if (want && book?.fileName && book.fileName !== want) {
+          try {
+            await post('/api/books/open', { name: want });
+            await loadBooks();
+            await refresh();
+            log(`已跟着 agent 切到《${want.replace(/\.tdxproj$/i, '')}》`, true);
+          } catch (e) { log('跟随切书失败：' + errMsg(e), true); }
+        }
+      }
+
       // 切到 agent 正在操作的那一章（章节可能刚被建出来，失败就算了）
       if (ev.chapterNumber > 0 && current !== ev.chapterNumber) {
         try { await openChapter(ev.chapterNumber); } catch { /* 忽略 */ }
@@ -1793,7 +1809,7 @@ function connect() {
     mcpStreamChapter = null;
     mcpStreamBase = '';
     mcpBadgeShow(t === 'error' ? 'MCP 出错' : 'MCP 已同步', false, true);
-    if (ev.summary) log(ev.summary, t === 'error');
+    if (ev.summary) log(ev.summary, true);   // MCP 的消息都是 agent 发的，别标成「你」
     if (ev.previewText) $('#aiOut').textContent = ev.previewText;
     if (ev.projectModified) {
       await refresh();           // 从磁盘把 agent 改的内容拉回来（含新的 stamp）

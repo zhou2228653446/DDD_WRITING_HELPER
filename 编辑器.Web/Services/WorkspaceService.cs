@@ -11,8 +11,7 @@ namespace 编辑器.Web;
 /// 设计前提（用户明确）：**单人分时**——同一时间只有一边在写。
 /// 所以不做多人权限、不做实时合并，只用一把锁保证"人写"和"agent 写"不会同时落盘。
 ///
-/// 数据一律存服务器（默认 %LOCALAPPDATA%\TdxClaw.Web\books），不存在本地/服务器两份，
-/// 因此也就没有同步分叉的问题。
+/// 书库目录与 MCP / 桌面端**同一个**（见 <see cref="ResolveBooksDir"/>）。
 /// </summary>
 public sealed class WorkspaceService
 {
@@ -24,13 +23,48 @@ public sealed class WorkspaceService
     public WorkspaceService(IHubContext<LiveHub> hub)
     {
         _hub = hub;
-        BooksDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "TdxClaw.Web", "books");
+        BooksDir = ResolveBooksDir();
         Directory.CreateDirectory(BooksDir);
     }
 
     public string BooksDir { get; }
+
+    /// <summary>
+    /// 书库目录。**必须与 MCP / 桌面端解析出同一个目录**——否则网页版的书在
+    /// %LOCALAPPDATA%\TdxClaw.Web\books，agent 的书在 文档\TdxClaw\Projects，
+    /// 两边各写各的，「你在网页上写、agent 通过 MCP 改同一本书」这个核心场景
+    /// 根本无从谈起：界面永远看不到 agent 动的是哪本书（甚至一本都看不到）。
+    ///
+    /// 解析顺序照抄 <c>NovelTools.ResolveProjectsDirectory</c>：
+    /// paths.json 里的 ProjectsDirectory（桌面端「路径设置」写的）→ 文档\TdxClaw\Projects。
+    /// </summary>
+    private static string ResolveBooksDir()
+    {
+        try
+        {
+            var pathsFile = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "TdxClaw", "paths.json");
+            if (File.Exists(pathsFile))
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(pathsFile));
+                if (doc.RootElement.TryGetProperty("ProjectsDirectory", out var p) &&
+                    p.ValueKind == JsonValueKind.String &&
+                    !string.IsNullOrWhiteSpace(p.GetString()))
+                {
+                    var dir = p.GetString()!;
+                    Directory.CreateDirectory(dir);
+                    return dir;
+                }
+            }
+        }
+        catch { /* 配置坏了就用默认位置，不能让工作区起不来 */ }
+
+        var fallback = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "TdxClaw", "Projects");
+        Directory.CreateDirectory(fallback);
+        return fallback;
+    }
 
     public NovelProject? Current => _project;
 

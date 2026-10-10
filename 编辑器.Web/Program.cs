@@ -130,6 +130,9 @@ app.MapGet("/api/book", (WorkspaceService ws) =>
     {
         open = true,
         name = p.ProjectName,
+        // 文件名要给出来：前端靠它判断「agent 正在操作的是不是另一本书」，
+        // 是的话得跟着切过去（桌面端 SyncProjectFromDisk 干的就是这件事）
+        fileName = Path.GetFileName(p.FilePath ?? ""),
         stamp = StampToken.From(ws.Stamp()),
         chapters = p.Chapters.OrderBy(c => c.ChapterNumber).Select(c => new
         {

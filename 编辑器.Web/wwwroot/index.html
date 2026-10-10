@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>写作 · 网页版</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">写作</div>
+  <select id="bookSel" title="选择一本书"></select>
+  <button id="newBookBtn">新建</button>
+  <span class="grow"></span>
+  <span id="stats" class="muted" title="点击看最近 14 天"></span>
+  <select id="themeSel" title="配色（与桌面版同名的 8 套）"></select>
+  <button id="appearanceBtn" title="配色 / 材质 / 材质强度 / 背景图">外观</button>
+  <div class="export">
+    <span class="muted">导出</span>
+    <button data-fmt="docx" title="Word 文档">Word</button>
+    <button data-fmt="pdf" title="PDF 文档">PDF</button>
+    <button data-fmt="txt" title="纯文本">TXT</button>
+  </div>
+  <button id="aiSetBtn" title="AI 服务商 / API Key">AI 设置</button>
+  <button id="promptBtn" title="提示词方案与覆写">提示词</button>
+  <button id="skillBtn" title="写作技能管理">技能</button>
+  <div class="tabs">
+    <button class="tab active" data-view="write">写作</button>
+    <button class="tab" data-view="outline">大纲</button>
+    <button class="tab" data-view="characters">人物</button>
+    <button class="tab" data-view="literature">文献</button>
+    <button class="tab" data-view="sbook">设定集</button>
+    <button class="tab" data-view="snapshots">快照</button>
+    <button class="tab" data-view="settings">设定</button>
+  </div>
+</header>
+
+<main>
+  <!-- 左：章节 -->
+  <aside id="chapters">
+    <div class="panel-head">
+      <span>章节</span>
+      <button id="addChBtn" class="mini">+</button>
+    </div>
+    <ul id="chList"></ul>
+  </aside>
+
+  <!-- 中：编辑器 / 大纲 / 人物 / 文献 / 快照 / 设定 -->
+  <section id="center">
+    <div id="view-write" class="view">
+      <div class="editor-bar">
+        <input id="chTitle" placeholder="章节标题">
+        <span id="chWords" class="muted"></span>
+        <span class="grow"></span>
+        <span id="saveState" class="muted"></span>
+      </div>
+      <div id="findBar" class="hidden">
+        <div class="fb-row">
+          <input id="findInput" placeholder="查找">
+          <select id="findScope" title="查找范围">
+            <option value="chapter">单章</option>
+            <option value="book">全书</option>
+          </select>
+          <label class="chk" title="区分大小写"><input type="checkbox" id="findCase">Aa</label>
+          <span id="findCount" class="muted"></span>
+          <span class="grow"></span>
+          <button id="findPrev" class="mini-btn" title="上一个">↑</button>
+          <button id="findNext" class="mini-btn" title="下一个">↓</button>
+          <button id="findClose" class="mini-btn" title="关闭">✕</button>
+        </div>
+        <div class="fb-row">
+          <input id="replaceInput" placeholder="替换为">
+          <button id="replaceOne" class="mini-btn">替换</button>
+          <button id="replaceAll" class="mini-btn">全部替换</button>
+        </div>
+      </div>
+      <div id="findResults" class="hidden"></div>
+      <textarea id="editor" placeholder="开始写…（Ctrl+F 查找替换）" spellcheck="false"></textarea>
+    </div>
+
+    <div id="view-outline" class="view hidden">
+      <div class="outline-stats" id="outlineStats"></div>
+      <div id="outlineCards" class="cards"></div>
+    </div>
+
+    <div id="view-characters" class="view hidden">
+      <div class="outline-stats">
+        <button id="newCharBtn" class="mini-btn">+ 新建人物</button>
+        <span id="charStats"></span>
+      </div>
+      <div id="charCards" class="cards"></div>
+      <div class="sub-head">出场统计 <span class="muted">（按名字在正文中的出现次数，连续缺席多章的角色可能被写丢了）</span></div>
+      <div id="appearList" class="appear-list"></div>
+    </div>
+
+    <div id="view-literature" class="view hidden">
+      <div class="outline-stats">
+        <button id="newLitBtn" class="mini-btn">+ 手动添加</button>
+        <button id="bibImportBtn" class="mini-btn">导入 BibTeX</button>
+        <button id="litSearchBtn" class="mini-btn">在线检索</button>
+        <button id="gbtCopyBtn" class="mini-btn">复制 GB/T 文献表</button>
+        <span id="litStats"></span>
+      </div>
+      <div id="litList" class="lit-list"></div>
+    </div>
+
+    <div id="view-sbook" class="view hidden">
+      <div class="outline-stats">
+        <span id="sbBookTitle"></span>
+        <span class="grow"></span>
+        <button id="sbExportDocx" class="mini-btn">导出 Word</button>
+        <button id="sbExportPdf" class="mini-btn">导出 PDF</button>
+        <button id="sbExportTxt" class="mini-btn">导出 TXT</button>
+      </div>
+      <div class="sb-layout">
+        <ul id="sbChapters" class="sb-chapters"></ul>
+        <div class="sb-editor">
+          <div class="editor-bar">
+            <input id="sbChTitle" disabled>
+            <label class="chk" title="导出设定集时是否包含本章"><input type="checkbox" id="sbInclude">入导出</label>
+            <span class="grow"></span>
+            <span id="sbState" class="muted"></span>
+            <button id="sbAiBtn" class="mini-btn" title="按本章主题，基于全书设定 AI 生成/完善">AI 生成/完善</button>
+          </div>
+          <textarea id="sbContent" spellcheck="false"
+            placeholder="本章内容。可直接编辑；点「AI 生成/完善」会基于全书设定在此基础上完善。"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-snapshots" class="view hidden">
+      <div class="outline-stats">快照在 AI 生成前自动生成，恢复会覆盖当前正文（编辑器里未保存的内容会丢）。</div>
+      <div id="snapList" class="snap-list"></div>
+    </div>
+
+    <div id="view-settings" class="view hidden">
+      <label>总纲<textarea id="setOutline" rows="6"></textarea></label>
+      <label>分章梗概<textarea id="setChapterOutline" rows="5"></textarea></label>
+      <label>人物设定<textarea id="setCharacters" rows="5"></textarea></label>
+      <label>背景设定<textarea id="setBackground" rows="4"></textarea></label>
+      <label>文风<textarea id="setStyle" rows="3"></textarea></label>
+      <label>叙事视角<input id="setViewpoint"></label>
+      <button id="saveSetBtn" class="primary">保存设定</button>
+      <hr>
+      <div class="sub-head">世界设定 <span class="muted">（结构化六要素，AI 生成时会并入上下文）</span></div>
+      <div class="grid">
+        <label>世界名称<input id="wName"></label>
+        <label>时代背景<input id="wTime"></label>
+        <label>地理环境<input id="wLocation"></label>
+        <label>魔法/力量体系<input id="wMagic"></label>
+        <label>科技水平<input id="wTech"></label>
+      </div>
+      <label>世界背景综述<textarea id="wBackground" rows="3"></textarea></label>
+      <button id="saveWorldBtn" class="primary">保存世界设定</button>
+      <hr>
+      <label>AI 写作记忆（agent 长期遵守的约定，与桌面版共用同一份）
+        <textarea id="setMemory" rows="6" placeholder="例：主角的左撇子设定不能忘；全书视角只用第一人称…"></textarea>
+      </label>
+      <button id="saveMemBtn" class="primary">保存记忆</button>
+    </div>
+  </section>
+
+  <!-- 右：AI 与 agent 活动 -->
+  <aside id="right">
+    <div class="panel-head"><span>AI</span></div>
+    <div class="ai-box">
+      <select id="aiPreset" title="提示词方案（与桌面版共用，切了桌面端也跟着变）"></select>
+      <select id="aiTask">
+        <option value="continue">续写</option>
+        <option value="polish">润色</option>
+        <option value="expand">扩写</option>
+        <option value="outline">生成大纲</option>
+        <option value="character">人物设定</option>
+        <option value="name">人名生成</option>
+        <option value="chat">万能写作</option>
+        <option value="review">AI 审稿（一致性检查）</option>
+      </select>
+      <select id="aiSkill"><option value="">技能：无</option></select>
+      <div id="polishRow" class="hidden">
+        <select id="polishStyle" title="润色风格预设（与桌面版共用 polish_presets.json）">
+          <option value="">风格：无</option>
+        </select>
+        <button id="polishAdd" class="mini-btn" title="把输入框里的文字存为风格预设">＋</button>
+        <button id="polishDel" class="mini-btn danger" title="删除选中的风格（内置不可删）">－</button>
+      </div>
+      <details id="ctxBox">
+        <summary>上下文章节 <span id="ctxCount" class="muted"></span></summary>
+        <div id="ctxChapters" class="ctx-chapters"></div>
+        <div class="ctx-ops"><button id="ctxAll" class="mini-btn" type="button">全选</button><button id="ctxNone" class="mini-btn" type="button">全不选</button></div>
+      </details>
+      <div class="ctx-gen">
+        <span class="muted">生成上下文</span>
+        <div class="ctx-gen-btns">
+          <button class="mini-btn" data-ctx="outline" title="生成全文大纲（已有则改成在原文上扩写）">全文大纲</button>
+          <button class="mini-btn" data-ctx="chapterOutline">章节大纲</button>
+          <button class="mini-btn" data-ctx="character">人物</button>
+          <button class="mini-btn" data-ctx="background">背景</button>
+          <button class="mini-btn" data-ctx="style">文风</button>
+          <button class="mini-btn" data-ctx="viewpoint">视角</button>
+        </div>
+      </div>
+      <textarea id="aiPrompt" rows="3" placeholder="补充说明（可留空）"></textarea>
+      <div class="ai-run">
+        <button id="aiGoBtn" class="primary">生成</button>
+        <button id="aiStopBtn" class="danger" disabled>停止</button>
+      </div>
+      <span id="chatInfo" class="muted"></span>
+      <div id="aiOut" class="ai-out"></div>
+      <div class="ai-ops">
+        <button id="aiAppendBtn" class="mini-btn" title="把结果追加到当前章末尾">追加到正文</button>
+        <select id="aiApplyTo" title="把结果写入某一项设定（写入前会确认是否覆盖）">
+          <option value="">应用到…</option>
+          <option value="FullOutline">全文大纲</option>
+          <option value="ChapterOutline">章节大纲</option>
+          <option value="CharacterSettings">人物设定</option>
+          <option value="BackgroundSettings">背景设定</option>
+          <option value="WritingStyle">文风设定</option>
+          <option value="NarrativeViewpoint">叙事视角</option>
+        </select>
+        <button id="aiCopyBtn" class="mini-btn">复制</button>
+      </div>
+    </div>
+    <div class="panel-head"><span>Agent 活动</span><button id="clearLog" class="mini">清</button></div>
+    <div id="live" class="live"></div>
+  </aside>
+</main>
+
+<!-- AI 设置对话框 -->
+<dialog id="aiDlg">
+  <form id="aiDlgForm" method="dialog">
+    <h3>AI 设置</h3>
+    <div class="grid">
+      <label>方案<select id="profSel"></select></label>
+      <label>服务商<select id="provSel"></select></label>
+    </div>
+    <div class="prov-ops">
+      <button type="button" id="provConsole" class="mini-btn" title="去服务商控制台申请 Key">获取 API Key</button>
+      <span id="provNote" class="muted"></span>
+    </div>
+    <label>API 地址（BaseURL）<input id="profUrl" placeholder="选服务商后自动填"></label>
+    <div class="grid">
+      <label>模型名称<input id="profModel" list="modelList" placeholder="区分大小写！">
+        <datalist id="modelList"></datalist>
+      </label>
+      <label>API Key（留空保留原 Key）<input id="profKey" type="password" autocomplete="off"></label>
+    </div>
+    <div class="prov-ops">
+      <button type="button" id="fetchModels" class="mini-btn" title="向服务商现拉真实模型名（需先填 Key）">拉取模型列表</button>
+      <button type="button" id="rawEditBtn" class="mini-btn" title="直接编辑 api_profiles.json（与桌面版同一份）">编辑 JSON</button>
+      <span id="modelStatus" class="muted"></span>
+    </div>
+    <div class="dlg-btns">
+      <button type="button" id="profDelete" class="danger">删除方案</button>
+      <span class="grow"></span>
+      <button type="button" id="profTest">测试连接</button>
+      <button type="button" id="profSave" class="primary">保存并启用</button>
+      <button type="button" id="aiDlgClose">关闭</button>
+    </div>
+    <div id="testResult" class="muted" style="margin-top:8px"></div>
+  </form>
+</dialog>
+
+<!-- 统计对话框 -->
+<dialog id="statsDlg">
+  <h3>写作统计</h3>
+  <div id="statsSummary" class="stats-summary"></div>
+  <div id="statsBars" class="stats-bars"></div>
+  <div class="dlg-btns"><span class="grow"></span><button type="button" onclick="this.closest('dialog').close()">关闭</button></div>
+</dialog>
+
+<!-- 梗概编辑对话框 -->
+<dialog id="summaryDlg">
+  <h3 id="summaryTitle">章节梗概</h3>
+  <textarea id="summaryText" rows="8" placeholder="这一章要发生什么…（大纲卡与 AI 上下文都会用它）"></textarea>
+  <div class="dlg-btns">
+    <span class="grow"></span>
+    <button type="button" onclick="this.closest('dialog').close()">取消</button>
+    <button type="button" id="summarySave" class="primary">保存</button>
+  </div>
+</dialog>
+
+<!-- 人物编辑对话框 -->
+<dialog id="charDlg">
+  <form id="charForm" method="dialog">
+    <h3 id="charDlgTitle">编辑人物</h3>
+    <div class="grid">
+      <label>姓名<input id="cName" required></label>
+      <label>定位<input id="cRole" placeholder="主角 / 配角 / 反派…"></label>
+      <label>性别<input id="cGender"></label>
+      <label>年龄<input id="cAge" type="number" min="0" max="9999"></label>
+      <label>职业<input id="cOccupation"></label>
+      <label>能力<input id="cAbilities"></label>
+    </div>
+    <label>外貌<textarea id="cAppearance" rows="2"></textarea></label>
+    <label>性格<textarea id="cPersonality" rows="2"></textarea></label>
+    <label>背景经历<textarea id="cBackground" rows="2"></textarea></label>
+    <label>人物关系<textarea id="cRelationships" rows="2"></textarea></label>
+    <label>备注<textarea id="cNotes" rows="2"></textarea></label>
+    <div class="dlg-btns">
+      <button type="button" id="charDelete" class="danger">删除</button>
+      <span class="grow"></span>
+      <button type="button" id="charCancel">取消</button>
+      <button type="submit" id="charSave" class="primary">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 文献编辑对话框 -->
+<dialog id="litDlg">
+  <form id="litForm" method="dialog">
+    <h3 id="litDlgTitle">编辑文献</h3>
+    <div class="grid">
+      <label>题名<input id="lTitle" required></label>
+      <label>年份<input id="lYear"></label>
+    </div>
+    <label>作者<input id="lAuthors" placeholder="原样字符串，如 Zhang S, Li M 或 张三, 李四"></label>
+    <div class="grid">
+      <label>来源（期刊/出版社）<input id="lVenue"></label>
+      <label>类型标识<input id="lEntryType" placeholder="J=期刊 C=会议 M=专著"></label>
+    </div>
+    <div class="grid">
+      <label>DOI<input id="lDoi"></label>
+      <label>页码<input id="lPages" placeholder="268-277"></label>
+    </div>
+    <label>URL<input id="lUrl"></label>
+    <label>摘要<textarea id="lAbstract" rows="2"></textarea></label>
+    <label>备注<textarea id="lNote" rows="2"></textarea></label>
+    <div class="dlg-btns">
+      <button type="button" id="litDelete" class="danger">删除</button>
+      <span class="grow"></span>
+      <button type="button" id="litCancel">取消</button>
+      <button type="submit" id="litSave" class="primary">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- BibTeX 导入对话框 -->
+<dialog id="bibDlg">
+  <h3>导入 BibTeX</h3>
+  <div class="muted" style="margin-bottom:8px">粘贴 Zotero / 知网导出的 .bib 内容（同 DOI / 同 CitationKey 自动去重）：</div>
+  <textarea id="bibText" rows="10" style="width:100%" placeholder="@article{...&#10;}"></textarea>
+  <div class="dlg-btns">
+    <span class="grow"></span>
+    <button type="button" onclick="this.closest('dialog').close()">取消</button>
+    <button type="button" id="bibGo" class="primary">导入</button>
+  </div>
+</dialog>
+
+<!-- 提示词方案对话框 -->
+<dialog id="promptDlg">
+  <h3>提示词方案 <span class="muted" style="font-size:.8em">（与桌面版共用 system_prompts.json）</span></h3>
+  <div class="grid">
+    <label>方案<select id="pPresetSel"></select></label>
+    <label>依据<input id="pBasedOn" disabled></label>
+  </div>
+  <div class="dlg-btns" style="margin-bottom:8px">
+    <button type="button" id="pActivate" class="mini-btn">启用此方案</button>
+    <button type="button" id="pNewCustom" class="mini-btn">新建自定义方案</button>
+    <button type="button" id="pRename" class="mini-btn">重命名</button>
+    <button type="button" id="pDelete" class="mini-btn danger">删除</button>
+    <span class="grow"></span>
+    <button type="button" id="pResetAll" class="mini-btn">本方案全部恢复默认</button>
+  </div>
+  <div id="pEntries" class="p-entries"></div>
+  <div class="dlg-btns"><span class="grow"></span><button type="button" id="pClose" class="primary">关闭</button></div>
+</dialog>
+
+<!-- 技能管理对话框 -->
+<dialog id="skillDlg">
+  <h3>写作技能 <span class="muted" style="font-size:.8em">（技能可整包替换任务提示词与输出契约；内置技能只读）</span></h3>
+  <div class="skill-layout">
+    <ul id="skillList" class="sb-chapters"></ul>
+    <div>
+      <div class="grid">
+        <label>名称<input id="sName" placeholder="例：黄金三章"></label>
+        <label>适用的方案（逗号分隔 presetId，留空 = 全部）<input id="sPresets" placeholder="novel, academic"></label>
+      </div>
+      <label>说明<input id="sDesc"></label>
+      <label>适用的任务（逗号分隔：continue, polish, expand, name, character, outline, background, chapterOutline, style, chat, review）<input id="sApplies"></label>
+      <label>输入提示（期望用户在补充说明里给什么）<input id="sHint"></label>
+      <label>任务提示词（命中任务时整段替换内置说明）<textarea id="sTask" rows="7"></textarea></label>
+      <label>输出契约覆盖（留空跟随任务默认）<textarea id="sContract" rows="3"></textarea></label>
+    </div>
+  </div>
+  <div class="dlg-btns">
+    <button type="button" id="sNew" class="mini-btn">新建</button>
+    <button type="button" id="sDelete" class="mini-btn danger">删除</button>
+    <span class="grow"></span>
+    <button type="button" id="sExport" class="mini-btn" title="复制当前技能 JSON">导出</button>
+    <button type="button" id="sImport" class="mini-btn" title="粘贴技能 JSON 导入">导入</button>
+    <button type="button" id="sSave" class="primary">保存</button>
+    <button type="button" id="skillClose">关闭</button>
+  </div>
+</dialog>
+
+<!-- 外观设置对话框（实时预览；取消即还原，与桌面版 AppearanceSettingsWindow 同款交互） -->
+<dialog id="appearanceDlg">
+  <h3>外观设置 <span class="muted" style="font-size:.8em">（与桌面版共用 appearance.json，改了两边都变）</span></h3>
+
+  <div class="ap-section">配色</div>
+  <div id="apSchemes" class="ap-grid"></div>
+
+  <div class="ap-section">材质 <span class="muted">（只改质感，与配色自由组合，共 8 × 6 = 48 种）</span></div>
+  <div id="apMaterials" class="ap-grid two"></div>
+
+  <div class="ap-section">材质强度</div>
+  <div class="ap-slider">
+    <input type="range" id="apIntensity" min="0" max="2" step="0.1">
+    <span id="apIntensityText" class="muted">1.0</span>
+  </div>
+  <div class="muted">0 = 完全关掉质感（等同纯色），1 = 材质调好的默认观感，2 = 加倍。颗粒太重会显脏，建议 0.6～1.4。</div>
+
+  <div class="ap-section">自定义背景图片</div>
+  <div class="ap-bg">
+    <span id="apBgPreview" class="ap-bg-preview"></span>
+    <label class="mini-btn">选择图片<input type="file" id="apBgFile" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label>
+    <button type="button" id="apBgRemove" class="mini-btn">移除</button>
+    <span id="apBgState" class="muted"></span>
+  </div>
+  <div class="muted">毛玻璃 / 液态玻璃这类透光材质配上背景图效果最明显——透出来的就是真实画面。图片存在服务器上（≤8MB），上传即生效。</div>
+
+  <div class="dlg-btns">
+    <button type="button" id="apCancel">取消</button>
+    <span class="grow"></span>
+    <button type="button" id="apOk" class="primary">确定</button>
+  </div>
+</dialog>
+
+<!-- 文献在线检索对话框 -->
+<dialog id="litSearchDlg">
+  <h3>在线检索文献</h3>
+  <div class="grid">
+    <label>关键词<input id="litSearchQ" placeholder="标题 / DOI / 关键词"></label>
+    <label>来源<select id="litSearchSrc">
+      <option value="openalex">OpenAlex（覆盖广）</option>
+      <option value="semantic">Semantic Scholar</option>
+    </select></label>
+  </div>
+  <div class="dlg-btns" style="margin-top:0"><button type="button" id="litSearchGo" class="primary">搜索</button></div>
+  <div id="litSearchResults" class="lit-search-results"></div>
+  <div class="dlg-btns"><span class="grow"></span><button type="button" onclick="this.closest('dialog').close()">关闭</button></div>
+</dialog>
+
+<!-- 小说规模选择（生成全文大纲前，仅在还没有大纲时弹） -->
+<dialog id="scaleDlg">
+  <h3>小说规模</h3>
+  <div class="muted" style="margin-bottom:8px">AI 会据此规划章节数量、情节复杂度与人物数量。</div>
+  <div id="scaleList" class="scale-list"></div>
+  <div class="dlg-btns">
+    <button type="button" id="scaleSkip">跳过</button>
+    <span class="grow"></span>
+    <button type="button" id="scaleOk" class="primary">确定</button>
+  </div>
+</dialog>
+
+<!-- 配置文件原始 JSON（桌面版 API 设置的 JSON Tab 同款） -->
+<dialog id="rawDlg">
+  <h3>api_profiles.json <span class="muted" style="font-size:.75em" id="rawPath"></span></h3>
+  <textarea id="rawJson" rows="18" spellcheck="false" style="width:100%"></textarea>
+  <div id="rawResult" class="muted"></div>
+  <div class="dlg-btns">
+    <button type="button" id="rawFormat" class="mini-btn">格式化</button>
+    <span class="grow"></span>
+    <button type="button" id="rawReload" class="mini-btn">重新载入</button>
+    <button type="button" id="rawSave" class="primary">保存</button>
+    <button type="button" id="rawClose">关闭</button>
+  </div>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@8.0.7/dist/browser/signalr.min.js"></script>
+<script src="/appearance.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

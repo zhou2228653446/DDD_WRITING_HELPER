@@ -157,10 +157,15 @@ $('#chTitle').addEventListener('change', async () => {
   await refresh();
 });
 
-// ---------- 查找替换 ----------
+// ---------- 查找替换（单章 / 全书，可区分大小写） ----------
 
 const findBar = $('#findBar');
-let findHits = [], findPos = -1;
+const findResults = $('#findResults');
+let findHits = [], findPos = -1, findTimer = null;
+
+const isCase = () => $('#findCase').checked;
+const isBookScope = () => $('#findScope').value === 'book';
+const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function findOpen() {
   findBar.classList.remove('hidden');
@@ -169,17 +174,24 @@ function findOpen() {
 }
 function findClose() {
   findBar.classList.add('hidden');
-  findHits = []; $('#findCount').textContent = '';
+  findResults.classList.add('hidden');
+  findResults.innerHTML = '';
+  findHits = []; findPos = -1;
+  $('#findCount').textContent = '';
   $('#editor').focus();
 }
+
+// 单章命中定位（大小写不敏感时用小写串找位置，与原文索引一一对应）
 function findCompute() {
-  const text = $('#editor').value, q = $('#findInput').value;
+  const raw = $('#editor').value, qRaw = $('#findInput').value;
   findHits = [];
-  if (q) {
+  if (qRaw) {
+    const text = isCase() ? raw : raw.toLowerCase();
+    const q = isCase() ? qRaw : qRaw.toLowerCase();
     let i = 0;
     while ((i = text.indexOf(q, i)) !== -1) { findHits.push(i); i += q.length; }
   }
-  $('#findCount').textContent = findHits.length ? `${findHits.length} 处` : (q ? '无结果' : '');
+  $('#findCount').textContent = findHits.length ? `${findHits.length} 处` : (qRaw ? '无结果' : '');
   findPos = -1;
 }
 function findJump(delta) {
@@ -192,31 +204,93 @@ function findJump(delta) {
   ed.scrollTop = ratio * ed.scrollHeight - ed.clientHeight / 2;
   $('#findCount').textContent = `${findHits.length} 处 · 第 ${findPos + 1} 个`;
 }
-$('#findInput').addEventListener('input', () => { findPos = -1; findCompute(); });
+
+// 全书查找：交给服务器扫（同一份章节数据），结果按章列出
+async function runBookFind() {
+  const q = $('#findInput').value;
+  if (!q) { findResults.classList.add('hidden'); findResults.innerHTML = ''; $('#findCount').textContent = ''; return; }
+  try {
+    const d = await api(`/api/find?q=${encodeURIComponent(q)}&caseSensitive=${isCase()}`);
+    const list = d.chapters || [];
+    const total = list.reduce((a, c) => a + c.count, 0);
+    $('#findCount').textContent = total ? `全书 ${total} 处` : '无结果';
+    findResults.innerHTML = list.length
+      ? list.map(c =>
+          `<div class="fr-ch"><div class="fr-head" data-n="${c.n}">第 ${c.n} 章 ${escapeHtml(c.title)} · ${c.count} 处</div>` +
+          c.hits.map(h => `<div class="fr-hit">${escapeHtml(h)}</div>`).join('') + `</div>`).join('')
+      : '<div class="muted" style="padding:6px 10px">没有找到。</div>';
+    findResults.classList.remove('hidden');
+    findResults.querySelectorAll('.fr-head').forEach(el => {
+      el.onclick = async () => { switchView('write'); await openChapter(parseInt(el.dataset.n, 10)); };
+    });
+  } catch (e) {
+    findResults.innerHTML = `<div class="muted" style="padding:6px 10px">查找失败：${escapeHtml(e.message)}</div>`;
+    findResults.classList.remove('hidden');
+  }
+}
+function scheduleFind() {
+  clearTimeout(findTimer);
+  if (isBookScope()) { findTimer = setTimeout(runBookFind, 250); findHits = []; findPos = -1; }
+  else { findResults.classList.add('hidden'); findPos = -1; findCompute(); }
+}
+
+$('#findInput').addEventListener('input', scheduleFind);
 $('#findInput').addEventListener('keydown', e => { if (e.key === 'Enter') findJump(e.shiftKey ? -1 : 1); });
+$('#findCase').addEventListener('change', scheduleFind);
+$('#findScope').addEventListener('change', scheduleFind);
 $('#findPrev').onclick = () => findJump(-1);
 $('#findNext').onclick = () => findJump(1);
 $('#findClose').onclick = findClose;
 
-function doReplace(one) {
-  const ed = $('#editor'), q = $('#findInput').value, r = $('#replaceInput').value;
-  if (!q) return;
-  findCompute();
-  if (one) {
-    if (!findHits.length) return;
-    const selStart = ed.selectionStart;
-    const hit = findHits.find(h => h === selStart) ?? findHits[findPos >= 0 ? findPos : 0];
-    ed.value = ed.value.slice(0, hit) + r + ed.value.slice(hit + q.length);
-  } else {
-    const n = findHits.length;
+// 单章替换：区分大小写走字符串，不区分走正则（用函数式替换，避免 $1 被当反向引用）
+function chapterReplaceAll(q, r) {
+  const ed = $('#editor');
+  if (isCase()) {
+    const n = ed.value.split(q).length - 1;
     ed.value = ed.value.split(q).join(r);
-    $('#findCount').textContent = `已替换 ${n} 处`;
+    return n;
   }
+  const re = new RegExp(escapeRe(q), 'gi');
+  const n = (ed.value.match(re) || []).length;
+  ed.value = ed.value.replace(re, () => r);
+  return n;
+}
+
+function markDirtyAfterReplace() {
   dirty = true;
   $('#saveState').textContent = '未保存';
   updateWords();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(flushSave, 1200);
+}
+
+async function doReplace(one) {
+  const q = $('#findInput').value, r = $('#replaceInput').value;
+  if (!q) return;
+
+  if (isBookScope()) {
+    if (!confirm(`把全书的「${q}」替换为「${r}」？替换前会自动存一份快照。`)) return;
+    await flushSave();
+    const res = await post('/api/replace-all', { q, r, caseSensitive: isCase() });
+    log(`全书替换：${res.replaced} 处`);
+    await refresh();
+    if (current != null) await openChapter(current);
+    await runBookFind();
+    return;
+  }
+
+  findCompute();
+  if (one) {
+    if (!findHits.length) return;
+    const ed = $('#editor');
+    const selStart = ed.selectionStart;
+    const hit = findHits.find(h => h === selStart) ?? findHits[findPos >= 0 ? findPos : 0];
+    ed.value = ed.value.slice(0, hit) + r + ed.value.slice(hit + q.length);
+  } else {
+    const n = chapterReplaceAll(q, r);
+    $('#findCount').textContent = `已替换 ${n} 处`;
+  }
+  markDirtyAfterReplace();
   findCompute();
 }
 $('#replaceOne').onclick = () => doReplace(true);
@@ -713,6 +787,58 @@ $('#profTest').onclick = async () => {
   out.textContent = r.ok ? '✓ ' + r.message : '✗ ' + r.message;
 };
 
+// 服务商控制台（一键去申请 Key，与桌面版那个按钮同一个 consoleUrl）
+$('#provConsole').onclick = () => {
+  const p = providers.find(x => x.id === $('#provSel').value);
+  if (p?.consoleUrl) window.open(p.consoleUrl, '_blank');
+  else alert('这家服务商没有登记控制台地址。');
+};
+
+// 拉取真实模型名（与桌面版 ApiSettingsWindow.FetchModelsAsync 同一个 ModelCatalog）
+$('#fetchModels').onclick = async () => {
+  const st = $('#modelStatus');
+  st.textContent = '拉取中…';
+  try {
+    const r = await post('/api/ai/models', {
+      name: $('#profSel').value,
+      provider: $('#provSel').value,
+      apiUrl: $('#profUrl').value.trim(),
+      model: $('#profModel').value.trim(),
+      apiKey: $('#profKey').value || undefined,
+    });
+    if (!r.ok) { st.textContent = '✗ ' + (r.error || '拉取失败'); return; }
+    $('#modelList').innerHTML = (r.models || [])
+      .map(m => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.displayName || '')}</option>`).join('');
+    st.textContent = `✓ 拉到 ${r.models.length} 个模型` + (r.nonChat ? `（${r.nonChat} 个非对话模型已收起）` : '');
+  } catch (e) { st.textContent = '✗ ' + e.message; }
+};
+
+// JSON 编辑（桌面版 API 设置的「JSON 编辑」Tab）
+$('#rawEditBtn').onclick = async () => {
+  const d = await api('/api/ai/profiles/raw');
+  $('#rawPath').textContent = d.path;
+  $('#rawJson').value = d.text || '';
+  $('#rawResult').textContent = '';
+  $('#rawDlg').showModal();
+};
+$('#rawReload').onclick = async () => {
+  const d = await api('/api/ai/profiles/raw');
+  $('#rawJson').value = d.text || '';
+  $('#rawResult').textContent = '已重新载入';
+};
+$('#rawFormat').onclick = () => {
+  try {
+    $('#rawJson').value = JSON.stringify(JSON.parse($('#rawJson').value), null, 2);
+    $('#rawResult').textContent = '已格式化';
+  } catch (e) { $('#rawResult').textContent = 'JSON 不合法：' + e.message; }
+};
+$('#rawSave').onclick = async () => {
+  const r = await post('/api/ai/profiles/raw', { name: $('#rawJson').value });
+  $('#rawResult').textContent = r.error || '已保存';
+  if (!r.error) log('API 配置文件已保存');
+};
+$('#rawClose').onclick = () => $('#rawDlg').close();
+
 // ---------- AI 生成 ----------
 
 async function loadSkills() {
@@ -752,29 +878,44 @@ $('#ctxChapters').addEventListener('change', updateCtxCount);
 $('#ctxAll').onclick = () => { $$('#ctxChapters input').forEach(i => i.checked = true); updateCtxCount(); };
 $('#ctxNone').onclick = () => { $$('#ctxChapters input').forEach(i => i.checked = false); updateCtxCount(); };
 
-$('#aiGoBtn').onclick = async () => {
+// ---------- AI 生成（续写/润色/上下文/人名/聊天/审稿，全部走 /api/ai） ----------
+
+let aiAbort = null;
+let lastTokens = '';
+
+async function runAi(task, extra = {}) {
   const out = $('#aiOut');
   out.textContent = '';
-  const btn = $('#aiGoBtn');
-  btn.disabled = true; btn.textContent = '生成中…';
+  const go = $('#aiGoBtn'), stop = $('#aiStopBtn');
+  go.disabled = true; go.textContent = '生成中…';
+  stop.disabled = false;
+  lastTokens = '';
+  updateChatInfo();
 
-  const task = $('#aiTask').value;
+  // 续写/润色吃服务器上的正文，先把编辑器里未保存的字落盘
+  // （顺带保证服务器在生成前拍的那张快照是最新的）
+  await flushSave();
+
   const isChat = task === 'chat';
-  const userPrompt = $('#aiPrompt').value ||
-    (['review'].includes(task) ? '' : $('#editor').value.slice(-1500));
+  const body = {
+    task,
+    prompt: $('#aiPrompt').value,
+    maxTokens: 0,                       // 0 = 由服务器按任务给上限（与桌面端各生成方法一致）
+    skillId: $('#aiSkill').value || null,
+    relatedChapterIds: selectedCtxIds(),
+    history: isChat ? chatHistory : null,
+    targetChapter: current,
+    polishStyle: task === 'polish' ? ($('#polishStyle').value || null) : null,
+    scaleHint: extra.scaleHint || null,
+  };
 
+  aiAbort = new AbortController();
   try {
     const res = await fetch('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        task,
-        prompt: userPrompt,
-        maxTokens: 4096,
-        skillId: $('#aiSkill').value || null,
-        relatedChapterIds: selectedCtxIds(),
-        history: isChat ? chatHistory : null,
-      }),
+      body: JSON.stringify(body),
+      signal: aiAbort.signal,
     });
     if (!res.ok) { out.textContent = await res.text(); return; }
 
@@ -791,38 +932,179 @@ $('#aiGoBtn').onclick = async () => {
         if (!p.startsWith('data: ')) continue;
         const ev = JSON.parse(p.slice(6));
         if (ev.type === 'text') out.textContent = ev.payload;
-        else if (ev.type === 'progress') out.textContent += `\n[${ev.payload.inTok} in / ${ev.payload.outTok} out]`;
+        else if (ev.type === 'notice') out.textContent = `[${ev.payload}]\n` + out.textContent;
+        else if (ev.type === 'progress') {
+          lastTokens = `${ev.payload.inTok} in / ${ev.payload.outTok} out`;
+          updateChatInfo();
+        }
         else if (ev.type === 'done') {
           out.textContent = ev.payload.text;
           if (isChat) {
-            chatHistory.push({ role: 'user', content: userPrompt });
+            chatHistory.push({ role: 'user', content: body.prompt || '' });
             chatHistory.push({ role: 'assistant', content: ev.payload.text });
             if (chatHistory.length > 12) chatHistory = chatHistory.slice(-12);
+            updateChatInfo();
+          }
+          if (ev.payload.applied) {
+            log(`AI 已写入「${ev.payload.applied}」`);
+            await refresh();
           }
         }
+        else if (ev.type === 'stopped') log('生成已停止，保留已生成的部分');
         else if (ev.type === 'error') out.textContent = '出错：' + ev.payload;
       }
     }
   } catch (e) {
-    out.textContent = '出错：' + e.message;
+    if (e.name === 'AbortError') log('已停止生成（保留已出来的部分）');
+    else out.textContent = '出错：' + e.message;
   } finally {
-    btn.disabled = false; btn.textContent = '生成';
+    aiAbort = null;
+    go.disabled = false; go.textContent = '生成';
+    stop.disabled = true;
   }
+}
+
+function updateChatInfo() {
+  const rounds = Math.floor(chatHistory.length / 2);
+  const parts = [];
+  if (rounds) parts.push(`聊天记忆：${rounds} 轮`);
+  if (lastTokens) parts.push(`约 ${lastTokens}`);
+  $('#chatInfo').textContent = parts.join(' · ');
+}
+
+$('#aiGoBtn').onclick = () => runAi($('#aiTask').value);
+$('#aiStopBtn').onclick = () => { if (aiAbort) aiAbort.abort(); };
+$('#aiTask').onchange = () =>
+  $('#polishRow').classList.toggle('hidden', $('#aiTask').value !== 'polish');
+
+// ---------- 生成上下文（与桌面端 AI 面板那组按钮同一批任务） ----------
+// 服务器侧按"已有内容是否为空"决定用生成还是扩写提示词，成功后自动写回设定。
+
+$$('.ctx-gen-btns button').forEach(b => {
+  b.onclick = async () => {
+    const task = b.dataset.ctx;
+    let scaleHint = null;
+    // 首次生成全文大纲前问规模（与桌面版 NovelScaleDialog 同一时机）
+    if (task === 'outline' && !(book?.outline || '').trim()) {
+      const s = await askScale();
+      if (s === null) return;      // 用户取消
+      scaleHint = s || null;       // 跳过 → 不传
+    }
+    await runAi(task, { scaleHint });
+  };
+});
+
+const SCALES = [
+  ['short', '短篇小说', '1~5 万字，5~15 章，单线叙事'],
+  ['medium', '中篇小说', '5~20 万字，15~40 章，双线叙事'],
+  ['long', '长篇小说', '20~50 万字，40~100 章，多线叙事'],
+  ['extralong', '超长篇小说', '50 万字以上，100 章以上，宏大世界观'],
+];
+let scalePick = 'medium';
+function askScale() {
+  return new Promise(resolve => {
+    const box = $('#scaleList');
+    box.innerHTML = '';
+    SCALES.forEach(([id, name, desc]) => {
+      const el = document.createElement('label');
+      el.className = 'scale-item' + (id === scalePick ? ' on' : '');
+      el.innerHTML = `<input type="radio" name="scale" value="${id}" ${id === scalePick ? 'checked' : ''}>` +
+        `<span class="scale-name">${name}</span><span class="ap-desc">${desc}</span>`;
+      el.querySelector('input').onchange = () => {
+        scalePick = id;
+        $$('#scaleList .scale-item').forEach(x => x.classList.toggle('on', x.querySelector('input').checked));
+      };
+      box.appendChild(el);
+    });
+    function cleanup() {
+      $('#scaleOk').removeEventListener('click', onOk);
+      $('#scaleSkip').removeEventListener('click', onSkip);
+      $('#scaleDlg').removeEventListener('cancel', onCancel);
+    }
+    const done = v => { $('#scaleDlg').close(); cleanup(); resolve(v); };
+    const onOk = () => done(SCALES.find(s => s[0] === scalePick)[2]);
+    const onSkip = () => done('');
+    const onCancel = () => done(null);
+    $('#scaleOk').addEventListener('click', onOk);
+    $('#scaleSkip').addEventListener('click', onSkip);
+    $('#scaleDlg').addEventListener('cancel', onCancel);
+    $('#scaleDlg').showModal();
+  });
+}
+
+// ---------- 润色风格预设（与桌面版共用 polish_presets.json） ----------
+
+async function loadPolishPresets() {
+  try {
+    const d = await api('/api/polish-presets');
+    const sel = $('#polishStyle');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">风格：无</option>';
+    (d.presets || []).forEach(p => {
+      const o = document.createElement('option');
+      o.value = p; o.textContent = '风格：' + p;
+      sel.appendChild(o);
+    });
+    if (cur) sel.value = cur;
+  } catch { /* 静默 */ }
+}
+
+$('#polishAdd').onclick = async () => {
+  const box = $('#aiPrompt');
+  const name = (prompt('新风格名称？（润色时作为要求附加）') || '').trim();
+  if (!name) return;
+  const r = await post('/api/polish-presets', { name });
+  if (r.error) return alert(r.error);
+  await loadPolishPresets();
+  $('#polishStyle').value = name;
+  log('润色风格已新增：' + name);
+};
+$('#polishDel').onclick = async () => {
+  const name = $('#polishStyle').value;
+  if (!name) return alert('先选中一个风格');
+  const r = await post('/api/polish-presets', { name, delete: true });
+  if (r.error) return alert(r.error);
+  await loadPolishPresets();
+  $('#polishStyle').value = '';
+  log('润色风格已删除：' + name);
 };
 
-// 结果应用：追加到正文 / 复制
+// ---------- AI 结果应用：追加到正文 / 应用到设定 / 复制 ----------
+
 $('#aiAppendBtn').onclick = () => {
   const text = $('#aiOut').textContent.trim();
   if (!text || current == null) return;
   const ed = $('#editor');
   ed.value = ed.value.replace(/\s+$/, '') + '\n\n' + text + '\n';
-  dirty = true;
-  $('#saveState').textContent = '未保存';
-  updateWords();
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(flushSave, 1200);
+  markDirtyAfterReplace();
   log('AI 结果已追加到本章末尾');
 };
+
+const APPLY_LABELS = {
+  FullOutline: '全文大纲', ChapterOutline: '章节大纲', CharacterSettings: '人物设定',
+  BackgroundSettings: '背景设定', WritingStyle: '文风设定', NarrativeViewpoint: '叙事视角',
+};
+const APPLY_KEYS = {
+  FullOutline: 'outline', ChapterOutline: 'chapterOutline', CharacterSettings: 'characters',
+  BackgroundSettings: 'background', WritingStyle: 'style', NarrativeViewpoint: 'viewpoint',
+};
+$('#aiApplyTo').onchange = async () => {
+  const field = $('#aiApplyTo').value;
+  $('#aiApplyTo').value = '';
+  if (!field) return;
+  const text = $('#aiOut').textContent.trim();
+  if (!text) { log('AI 回复为空，请先生成内容'); return; }
+
+  if ((book?.[APPLY_KEYS[field]] || '').trim()
+      && !confirm(`「${APPLY_LABELS[field]}」已有内容，是否覆盖？`)) return;
+
+  const payload = {};
+  payload[APPLY_KEYS[field]] = text;
+  await post('/api/settings', payload);
+  log(`已应用到「${APPLY_LABELS[field]}」`);
+  await refresh();
+};
+
 $('#aiCopyBtn').onclick = async () => {
   const t = $('#aiOut').textContent.trim();
   if (t) { await navigator.clipboard.writeText(t); log('AI 结果已复制'); }
@@ -1279,5 +1561,6 @@ document.addEventListener('keydown', e => {
 loadBooks().catch(e => console.error(e));
 loadSkills();
 loadPresetSelect();
+loadPolishPresets();
 loadAppearance().catch(e => console.error(e));
 connect();

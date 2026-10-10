@@ -209,6 +209,17 @@ app.MapPost("/api/snapshot/restore", async (WorkspaceService ws, BookNameReq req
     return Results.Ok(new { ok = true });
 });
 
+// 全书查找 / 替换（桌面版 FindReplaceWindow 的"全书"范围）
+app.MapGet("/api/find", (WorkspaceService ws, string? q, bool? caseSensitive) =>
+    Results.Ok(new { chapters = ws.FindAll(q ?? "", caseSensitive == true) }));
+
+app.MapPost("/api/replace-all", async (WorkspaceService ws, ReplaceAllReq req) =>
+{
+    var n = ws.ReplaceAll(req.Q ?? "", req.R ?? "", req.CaseSensitive == true);
+    await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+    return Results.Ok(new { ok = true, replaced = n });
+});
+
 // 导出：直接复用桌面版那三个服务（Word / PDF / TXT），排版规则只有一份
 app.MapGet("/api/export", (WorkspaceService ws, string? format) =>
 {
@@ -278,7 +289,7 @@ app.MapPost("/api/memory", async (WorkspaceService ws, BookNameReq req) =>
 app.MapPost("/api/ai", async (HttpContext ctx, WorkspaceService ws) =>
 {
     var req = await ctx.Request.ReadFromJsonAsync<AiReq>()
-              ?? new AiReq(null, null, 0, null, null, null, null);
+              ?? new AiReq(null, null, 0, null, null, null, null, null, null, null);
 
     var cfg = LoadApiConfig();
     if (cfg == null)
@@ -290,18 +301,34 @@ app.MapPost("/api/ai", async (HttpContext ctx, WorkspaceService ws) =>
 
     var service = ApiProviders.CreateService(cfg);
     var p = ws.Current;
+    var task = req.Task ?? "continue";
 
-    // 任务键 → 任务提示词文本（桌面版同源：先取默认，再让技能覆盖）
+    // 生成前先拍快照——与桌面端同一批时机（续写前/润色前/人名生成前/万能写作前）。
+    // 前端在调用前会 flushSave，所以快照里包含用户刚敲的字。
+    if (task is "continue" or "polish" or "name" or "chat")
+        ws.TakeSnapshot(task switch
+        {
+            "polish" => "润色前备份",
+            "name" => "人名生成前备份",
+            "chat" => "万能写作前备份",
+            _ => "续写前备份",
+        });
+
+    // user prompt 在服务器侧构造，与桌面端 MainWindow 的各生成入口逐条同源
+    var built = BuildAiPrompt(task, p, req.TargetChapter, req.Prompt ?? "",
+                              req.PolishStyle, req.ScaleHint);
+
     var skill = ResolveSkill(req.SkillId);
-    var (taskText, contract) = ResolveTask(req.Task, skill, req.OutputContract);
+    var (taskText, contract) = ResolveTask(built.TaskKey, skill, req.OutputContract);
 
     // 与桌面版同源：同一个 PromptContextBuilder（设定集/文献库/参考章节全部生效）
     var system = PromptContextBuilder.BuildSystemPrompt(
         p, taskText, ws.Memory(), req.RelatedChapterIds, contract);
 
+    var prompt = built.UserPrompt;
+
     // 审稿：把全书正文放进 user 侧（桌面版 RunAiReview 的做法）
-    var prompt = req.Prompt ?? "";
-    if ((req.Task ?? "") == "review" && p != null)
+    if (task == "review" && p != null)
     {
         var book = string.Join("\n\n", p.Chapters.OrderBy(c => c.ChapterNumber)
             .Select(c => $"── 第{c.ChapterNumber}章 {c.Title} ──\n{c.Content}"));
@@ -324,23 +351,238 @@ app.MapPost("/api/ai", async (HttpContext ctx, WorkspaceService ws) =>
             string.Equals(m.Role, "assistant", StringComparison.OrdinalIgnoreCase) ? "assistant" : "user",
             m.Content ?? "")).ToList();
 
+        var (maxTokens, temperature) = TuningFor(task, p, req.TargetChapter);
+
         var result = await service.CompleteTextAsync(prompt, system, new CompletionOptions
         {
-            MaxTokens = req.MaxTokens > 0 ? req.MaxTokens : 4096,
-            Temperature = 0.7,
+            MaxTokens = req.MaxTokens > 0 ? req.MaxTokens : maxTokens,
+            Temperature = temperature,
             Model = cfg.Model,
+            CancellationToken = ctx.RequestAborted,   // 用户点「停止」→ 前端 abort → 这里断
             OnNotice = msg => { _ = Send("notice", msg); },
             OnProgress = (inTok, outTok) => { _ = Send("progress", new { inTok, outTok }); },
             OnStreamText = text => { _ = Send("text", text); },
         }, history);
 
-        await Send("done", new { text = result.Text, ok = result.IsUsable });
+        // 上下文类生成（大纲/人物/背景/文风/视角）在桌面端是**自动写回设定**的，
+        // 这里保持一致；续写/润色改的是正文缓冲区，由用户在网页上确认后追加。
+        string? applied = null;
+        if (result.IsUsable && built.ApplyField != null && p != null)
+        {
+            ApplySettingField(p, built.ApplyField, result.Text);
+            p.Save();
+            applied = built.ApplyLabel;
+            await ws.BroadcastAsync("project-changed", new { stamp = ws.Stamp() });
+        }
+
+        await Send("done", new { text = result.Text, ok = result.IsUsable, applied });
+    }
+    catch (OperationCanceledException)
+    {
+        // 用户主动停止：已经流出去的部分留在前端，不再补发
+        try { await Send("stopped", new { }); } catch { /* 连接已断，忽略 */ }
     }
     catch (Exception ex)
     {
-        await Send("error", ex.Message);
+        try { await Send("error", ex.Message); } catch { /* 连接已断，忽略 */ }
     }
 });
+
+// ── 生成参数（与桌面端各生成方法的 MaxTokens / Temperature 对齐）──
+
+static (int MaxTokens, double Temperature) TuningFor(string task, NovelProject? p, int? targetChapter)
+{
+    var content = targetChapter == null
+        ? ""
+        : p?.Chapters.FirstOrDefault(c => c.ChapterNumber == targetChapter.Value)?.Content ?? "";
+    return task switch
+    {
+        "continue" => (16384, 0.7),
+        "polish" => (CompletionOptions.BudgetForRewrite(content), 0.7),
+        "outline" => (8192, 0.5),
+        "chapterOutline" => (8192, 0.5),
+        "character" => (8192, 0.5),
+        "background" => (8192, 0.4),
+        "style" => (8192, 0.5),
+        "viewpoint" => (4096, 0.4),
+        "chat" => (16384, 0.7),
+        "name" => (8192, 0.7),
+        _ => (4096, 0.7),
+    };
+}
+
+/// <summary>
+/// 与桌面端同源的 user prompt 构造。返回要用的任务键（上下文类在"已有内容非空"时
+/// 改用 Expand 提示词）、拼好的 user prompt，以及生成成功后的自动落点。
+/// </summary>
+static (string TaskKey, string UserPrompt, string? ApplyField, string? ApplyLabel) BuildAiPrompt(
+    string task, NovelProject? p, int? targetChapter, string requirement, string? polishStyle, string? scaleHint)
+{
+    var chapter = targetChapter == null
+        ? null
+        : p?.Chapters.FirstOrDefault(c => c.ChapterNumber == targetChapter.Value);
+    var chapterLabel = chapter == null ? "" : $"（第{chapter.ChapterNumber}章 {chapter.Title}）";
+    var chapterContent = chapter?.Content ?? "";
+    var input = requirement.Trim();
+
+    switch (task)
+    {
+        case "continue":
+        {
+            var user = AiPrompts.Section($"待续写的正文{chapterLabel}", chapterContent);
+            var prior = p == null || chapter == null ? "" : p.BuildPriorChapterBrief(chapter.ChapterNumber, true);
+            if (!string.IsNullOrWhiteSpace(prior))
+                user += "\n" + AiPrompts.Section("前情梗概与上章末尾（供衔接）", prior);
+            if (input.Length > 0) user += $"\n{input}";
+            return ("continue", user, null, null);
+        }
+
+        case "polish":
+        {
+            var style = string.IsNullOrWhiteSpace(polishStyle) ? null : polishStyle!.Trim();
+            string? combined = style != null && input.Length > 0 ? $"{style}，{input}"
+                            : style ?? (input.Length > 0 ? input : null);
+            var user = AiPrompts.Section($"待润色的正文{chapterLabel}", chapterContent);
+            user += combined == null ? "\n请润色这段正文。" : $"\n请按以下要求润色：{combined}";
+            return ("polish", user, null, null);
+        }
+
+        case "outline":
+        {
+            var existing = (p?.FullOutline ?? "").Trim();
+            if (existing.Length > 0)
+            {
+                var u = AiPrompts.Section("已有的全文大纲", existing);
+                if (input.Length > 0) u += $"\n修改要求：{input}";
+                return ("expand", u, "FullOutline", "全文大纲");
+            }
+            var s = "";
+            if (chapter != null && !string.IsNullOrWhiteSpace(chapterContent))
+                s += AiPrompts.Section("当前章节内容", chapterContent) + "\n";
+            if (!string.IsNullOrWhiteSpace(scaleHint))
+                s += $"小说规模：{scaleHint}\n请据此合理规划章节数量、情节复杂度与人物数量。\n\n";
+            s += "请为这部小说生成一份详细的全文大纲。";
+            if (input.Length > 0) s += $"\n额外要求：{input}";
+            return ("outline", s, "FullOutline", "全文大纲");
+        }
+
+        case "chapterOutline":
+        {
+            var existing = (p?.ChapterOutline ?? "").Trim();
+            if (existing.Length > 0)
+            {
+                var u = AiPrompts.Section("已有的章节大纲", existing);
+                if (input.Length > 0) u += $"\n修改要求：{input}";
+                return ("expand", u, "ChapterOutline", "章节大纲");
+            }
+            var s = "";
+            if (chapter != null && !string.IsNullOrWhiteSpace(chapterContent))
+                s += AiPrompts.Section($"当前章节{chapterLabel}", chapterContent) + "\n";
+            s += "请为这部小说生成详细的章节大纲。";
+            if (input.Length > 0) s += $"\n额外要求：{input}";
+            return ("chapterOutline", s, "ChapterOutline", "章节大纲");
+        }
+
+        case "character":
+        {
+            var existing = (p?.CharacterSettings ?? "").Trim();
+            if (existing.Length > 0)
+            {
+                var u = AiPrompts.Section("已有的人物设定", existing);
+                if (input.Length > 0) u += $"\n修改要求：{input}";
+                return ("expand", u, "CharacterSettings", "人物设定");
+            }
+            var s = "请为这部小说生成主要角色设定。";
+            if (input.Length > 0) s += $"\n额外要求：{input}";
+            return ("character", s, "CharacterSettings", "人物设定");
+        }
+
+        case "background":
+        {
+            var existing = (p?.BackgroundSettings ?? "").Trim();
+            if (existing.Length > 0)
+            {
+                var u = AiPrompts.Section("已有的背景设定", existing);
+                if (input.Length > 0) u += $"\n修改要求：{input}";
+                return ("expand", u, "BackgroundSettings", "背景设定");
+            }
+            var s = "请为这部小说生成世界观和背景设定。";
+            if (input.Length > 0) s += $"\n额外要求：{input}";
+            return ("background", s, "BackgroundSettings", "背景设定");
+        }
+
+        case "style":
+        {
+            var existing = (p?.WritingStyle ?? "").Trim();
+            if (existing.Length > 0)
+            {
+                var u = AiPrompts.Section("已有的文风设定", existing);
+                if (input.Length > 0) u += $"\n修改要求：{input}";
+                return ("expand", u, "WritingStyle", "文风设定");
+            }
+            var s = "";
+            if (chapter != null && !string.IsNullOrWhiteSpace(chapterContent))
+                s += AiPrompts.Section("作者已有的文字（风格样本）", chapterContent) + "\n";
+            s += "请据此提炼这部小说的文风设定。";
+            if (input.Length > 0) s += $"\n额外要求：{input}";
+            return ("style", s, "WritingStyle", "文风设定");
+        }
+
+        case "viewpoint":
+        {
+            var existing = (p?.NarrativeViewpoint ?? "").Trim();
+            if (existing.Length > 0)
+            {
+                var u = AiPrompts.Section("已有的叙事视角声明", existing);
+                if (input.Length > 0) u += $"\n修改要求：{input}";
+                return ("expand", u, "NarrativeViewpoint", "叙事视角");
+            }
+            var s = "请为这部作品拟定「叙事视角」声明，格式如："
+                + "「第三人称限知·跟随主角〈姓名〉（个别回忆段切主角视角）」。"
+                + "要有明确的：人称、限知/全知、跟随对象；有例外场景就括注说明。";
+            if (chapter != null && !string.IsNullOrWhiteSpace(chapterContent))
+                s += "\n" + AiPrompts.Section("作者已有的文字（判断实际视角的依据）", chapterContent);
+            var style = (p?.WritingStyle ?? "").Trim();
+            if (style.Length > 0)
+                s += "\n" + AiPrompts.Section("文风设定（其中的视角描述优先采纳）", style);
+            if (input.Length > 0) s += $"\n额外要求：{input}";
+            return ("viewpoint", s, "NarrativeViewpoint", "叙事视角");
+        }
+
+        case "name":
+        {
+            var s = input.Length == 0
+                ? "请为这部小说生成一批角色名字。"
+                : $"请为这部小说生成一批角色名字。要求：{input}";
+            return ("name", s, null, null);
+        }
+
+        case "chat":
+        {
+            var s = chapter != null && !string.IsNullOrWhiteSpace(chapterContent)
+                ? AiPrompts.Section($"当前章节{chapterLabel}", chapterContent) + "\n" + input
+                : input;
+            return ("chat", s, null, null);
+        }
+
+        default:
+            return (task, input, null, null);   // expand / review …
+    }
+}
+
+/// <summary>把生成结果写回某一项设定（与桌面版 SetSettingValue 同一份字段表）。</summary>
+static void ApplySettingField(NovelProject p, string field, string text)
+{
+    switch (field)
+    {
+        case "FullOutline": p.FullOutline = text; break;
+        case "ChapterOutline": p.ChapterOutline = text; break;
+        case "CharacterSettings": p.CharacterSettings = text; break;
+        case "BackgroundSettings": p.BackgroundSettings = text; break;
+        case "WritingStyle": p.WritingStyle = text; break;
+        case "NarrativeViewpoint": p.NarrativeViewpoint = text; break;
+    }
+}
 
 // ── 任务解析：与桌面版 MainWindow.ResolveTaskText / ResolveContractText 同一套规则 ──
 
@@ -471,6 +713,99 @@ app.MapGet("/api/ai/providers", () => Results.Ok(new
         note = p.Note,
     }),
 }));
+
+// 从服务商现拉真实模型名（与桌面版 ApiSettingsWindow.FetchModelsAsync 同一个 ModelCatalog）。
+// 拉回来的清单只用于填下拉，不缓存——缓存文件在桌面端那边管。
+app.MapPost("/api/ai/models", async (ProfileSaveReq req) =>
+{
+    var config = new ApiConfig
+    {
+        Provider = req.Provider ?? ApiProviders.IdOpenAi,
+        ApiUrl = req.ApiUrl ?? "",
+        Model = req.Model ?? "",
+        AuthOverride = req.AuthOverride ?? "",
+        ApiKey = req.ApiKey ?? "",
+    };
+    // 表单里没有明文 Key 时，借用已保存方案里的 Key（本地地址不鉴权，允许无 Key）
+    if (string.IsNullOrWhiteSpace(config.ApiKey))
+    {
+        var mgr = new ApiProfileManager(Path.Combine(ConfigDir(), "api_profiles.json"));
+        mgr.Load();
+        config.ApiKey = mgr.Profiles.TryGetValue(req.Name ?? "", out var saved) ? saved.ApiKey : "";
+    }
+
+    try
+    {
+        var result = await ModelCatalog.FetchAsync(config);
+        return Results.Ok(new
+        {
+            ok = result.Ok,
+            url = result.Url,
+            error = result.Error,
+            nonChat = result.Ok ? ModelCatalog.NonChatCount(result.Models) : 0,
+            models = ModelCatalog.SortForDisplay(result.Models)
+                .Select(m => new { id = m.Id, displayName = m.DisplayName, isChatLike = m.IsChatLike }),
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Ok(new { ok = false, error = ex.Message, models = Array.Empty<object>() });
+    }
+});
+
+// 配置文件的原始 JSON（桌面版 API 设置里的「JSON 编辑」Tab）：直接读写 api_profiles.json，
+// 保存前先试着 Load 一次，写坏了不让落盘。
+app.MapGet("/api/ai/profiles/raw", () =>
+{
+    var path = Path.Combine(ConfigDir(), "api_profiles.json");
+    string text;
+    if (File.Exists(path))
+    {
+        text = File.ReadAllText(path);
+    }
+    else
+    {
+        // 文件还不存在（用户从未保存过方案）：给一份与 ApiProfileManager 首次保存
+        // 形状一致的骨架，否则 JSON Tab 是一片空白、连"格式化"都点不动。
+        text = JsonSerializer.Serialize(new
+        {
+            ActiveProfile = "默认配置",
+            Profiles = new Dictionary<string, ApiConfig> { ["默认配置"] = new ApiConfig() },
+        }, new JsonSerializerOptions { WriteIndented = true });
+    }
+    return Results.Ok(new { path, text, exists = File.Exists(path) });
+});
+
+app.MapPost("/api/ai/profiles/raw", (NameReq req) =>
+{
+    var path = Path.Combine(ConfigDir(), "api_profiles.json");
+    var text = req.Name ?? "";
+
+    // 严格校验：⚠ 不能拿 ApiProfileManager.Load() 当校验——它内部 try/catch 吞掉
+    // 解析异常并回落到默认配置，坏 JSON 照样能"加载成功"（踩过）。
+    try
+    {
+        using var doc = JsonDocument.Parse(text);
+        if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            return Results.BadRequest(new { error = "JSON 根节点必须是对象" });
+
+        if (doc.RootElement.TryGetProperty("Profiles", out var profiles)
+            && profiles.ValueKind is not JsonValueKind.Object and not JsonValueKind.Null)
+            return Results.BadRequest(new { error = "Profiles 必须是对象" });
+
+        if (doc.RootElement.TryGetProperty("ActiveProfile", out var active)
+            && active.ValueKind is not JsonValueKind.String and not JsonValueKind.Null)
+            return Results.BadRequest(new { error = "ActiveProfile 必须是字符串" });
+    }
+    catch (JsonException ex)
+    {
+        return Results.BadRequest(new { error = "JSON 不合法：" + ex.Message });
+    }
+
+    Directory.CreateDirectory(ConfigDir());
+    File.WriteAllText(path, text);
+    return Results.Ok(new { ok = true });
+});
 
 // 测试连接：认证头走与真实调用同一份逻辑（防"测试成功、调用 401"的假阳性）
 app.MapPost("/api/ai/profiles/test", async (ProfileSaveReq req) =>
@@ -606,6 +941,66 @@ app.MapGet("/api/skills/{id}/export", (string id) =>
     return Results.Text(NovelSkillStore.ExportJson(skill), "application/json");
 });
 
+// ── 润色风格预设（与桌面版共用 polish_presets.json，文件格式就是 JSON 字符串数组）──
+
+string[] defaultPolishPresets =
+    { "正式严谨", "简洁干练", "优美文学", "口语化", "古风雅韵", "幽默风趣" };
+
+app.MapGet("/api/polish-presets", () =>
+{
+    var path = Path.Combine(ConfigDir(), "polish_presets.json");
+    List<string> list;
+    try
+    {
+        list = File.Exists(path)
+            ? JsonSerializer.Deserialize<List<string>>(File.ReadAllText(path)) ?? new()
+            : new List<string>();
+    }
+    catch { list = new List<string>(); }
+
+    if (list.Count == 0)
+    {
+        // 首次访问：落一份默认清单，与桌面版 LoadPolishPresets 的首次行为一致
+        list = defaultPolishPresets.ToList();
+        try { Directory.CreateDirectory(ConfigDir()); File.WriteAllText(path, JsonSerializer.Serialize(list)); }
+        catch { }
+    }
+    return Results.Ok(new { presets = list, defaults = defaultPolishPresets });
+});
+
+// 新增一条（重名忽略）或删除一条（内置预设不可删，与桌面版 RemovePolishPreset_Click 一致）
+app.MapPost("/api/polish-presets", (PolishPresetReq req) =>
+{
+    var path = Path.Combine(ConfigDir(), "polish_presets.json");
+    var name = (req.Name ?? "").Trim();
+    if (name.Length == 0) return Results.BadRequest(new { error = "名称不能为空" });
+
+    List<string> list;
+    try
+    {
+        list = File.Exists(path)
+            ? JsonSerializer.Deserialize<List<string>>(File.ReadAllText(path)) ?? new()
+            : new List<string>();
+    }
+    catch { list = new List<string>(); }
+    if (list.Count == 0) list = defaultPolishPresets.ToList();
+
+    if (req.Delete == true)
+    {
+        if (defaultPolishPresets.Contains(name))
+            return Results.BadRequest(new { error = "内置风格不可删除" });
+        list.Remove(name);
+    }
+    else if (!list.Contains(name))
+    {
+        list.Add(name);
+    }
+
+    Directory.CreateDirectory(ConfigDir());
+    File.WriteAllText(path, JsonSerializer.Serialize(list));
+    return Results.Ok(new { ok = true, presets = list });
+});
+
 // ══════════════════════════════════════════════════════════════════
 // 提示词方案与覆写（SystemPromptStore，与桌面版共用 system_prompts.json）
 // ══════════════════════════════════════════════════════════════════
@@ -651,7 +1046,7 @@ app.MapPost("/api/prompts/set", (PromptSlotReq req) =>
     if (!store.Exists(req.PresetId) || string.IsNullOrEmpty(req.Key))
         return Results.BadRequest(new { error = "方案或槽位不存在" });
 
-    store.Set(req.PresetId!, req.Key!, req.Value, AiPrompts.DefaultFor(req.PresetId, req.Key));
+    store.Set(req.PresetId!, req.Key!, req.Value, AiPrompts.DefaultFor(req.PresetId!, req.Key!));
     store.Save();
     return Results.Ok(new { ok = true, text = AiPrompts.TextFor(req.PresetId, req.Key) });
 });
@@ -1048,7 +1443,21 @@ public record AiReq(
     [property: JsonPropertyName("outputContract")] string? OutputContract,
     [property: JsonPropertyName("skillId")] string? SkillId,
     [property: JsonPropertyName("relatedChapterIds")] List<string>? RelatedChapterIds,
-    [property: JsonPropertyName("history")] List<ChatTurn>? History);
+    [property: JsonPropertyName("history")] List<ChatTurn>? History,
+    [property: JsonPropertyName("targetChapter")] int? TargetChapter,
+    [property: JsonPropertyName("polishStyle")] string? PolishStyle,
+    [property: JsonPropertyName("scaleHint")] string? ScaleHint);
+
+public record PolishPresetReq(
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("delete")] bool? Delete);
+
+public record FindReq([property: JsonPropertyName("q")] string? Q);
+
+public record ReplaceAllReq(
+    [property: JsonPropertyName("q")] string? Q,
+    [property: JsonPropertyName("r")] string? R,
+    [property: JsonPropertyName("caseSensitive")] bool? CaseSensitive);
 
 public record ChatTurn(
     [property: JsonPropertyName("role")] string? Role,

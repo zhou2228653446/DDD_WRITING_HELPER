@@ -374,6 +374,9 @@ FodyWeavers.xsd
 pdf_pages/
 *.html
 *_files/
+# 例外：网页版前端的入口 HTML 是源码，必须入库（上面的 *.html 是给另存网页当参考资料用的，
+# 它一路把 编辑器.Web/wwwroot/index.html 也吞了——仓库里少了它，克隆下来网页版直接打不开）
+!编辑器.Web/wwwroot/*.html
 
 # 根目录示例项目文件
 /*.tdxproj

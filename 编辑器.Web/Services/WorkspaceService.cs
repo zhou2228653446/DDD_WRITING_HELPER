@@ -264,6 +264,33 @@ public sealed class WorkspaceService
             .ToList();
     }
 
+    /// <summary>
+    /// 手动拍一张快照。桌面端在"续写前 / 润色前 / 人名生成前 / 万能写作前"都会调，
+    /// 网页端的 AI 生成走的是同一个入口——AI 失败或写坏了能回滚。
+    /// </summary>
+    public void TakeSnapshot(string description)
+    {
+        lock (_gate)
+        {
+            var path = _project?.FilePath;
+            if (path == null) return;
+            try { new ProjectSnapshotManager(path).SaveSnapshot(_project!, description); }
+            catch { /* 快照失败不该阻断生成 */ }
+        }
+    }
+
+    /// <summary>
+    /// 给定章节之前的前情梗概 + 上一章末尾（续写衔接用）。与桌面版
+    /// NovelProject.BuildPriorChapterBrief 同源，网页端不另写一套摘要逻辑。
+    /// </summary>
+    public string PriorBrief(int beforeChapterNumber)
+    {
+        var p = _project;
+        if (p == null) return "";
+        try { return p.BuildPriorChapterBrief(beforeChapterNumber, includePrevTail: true); }
+        catch { return ""; }
+    }
+
     // ==================================================================
     // 人物卡
     // ==================================================================
@@ -531,6 +558,81 @@ public sealed class WorkspaceService
             c.ModifiedDate = DateTime.Now;
             _project!.Save();
         }
+    }
+
+    // ==================================================================
+    // 全书查找 / 替换（桌面版 FindReplaceWindow 的"全书"范围）
+    // ==================================================================
+
+    /// <summary>全书查找：每章命中数 + 少量上下文片段（供结果列表展示）。</summary>
+    public List<object> FindAll(string query, bool caseSensitive)
+    {
+        lock (_gate)
+        {
+            if (_project == null || string.IsNullOrEmpty(query)) return new List<object>();
+            var cmp = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+            var result = new List<object>();
+
+            foreach (var c in _project.Chapters.OrderBy(c => c.ChapterNumber))
+            {
+                var text = c.Content ?? "";
+                var hits = new List<string>();
+                int i = 0, count = 0;
+                while ((i = text.IndexOf(query, i, cmp)) >= 0)
+                {
+                    count++;
+                    if (hits.Count < 5)
+                    {
+                        var s = Math.Max(0, i - 18);
+                        var e = Math.Min(text.Length, i + query.Length + 18);
+                        hits.Add((s > 0 ? "…" : "")
+                                 + text[s..e].Replace('\n', ' ').Replace('\r', ' ')
+                                 + (e < text.Length ? "…" : ""));
+                    }
+                    i += query.Length;
+                }
+                if (count > 0)
+                    result.Add(new { n = c.ChapterNumber, title = c.Title, count, hits });
+            }
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// 全书替换。替换前自动拍快照——跨章替换靠 Ctrl+Z 救不回来，
+    /// 桌面版同样在替换前 TakeSnapshot（FastReplaceAll 路径）。
+    /// </summary>
+    public int ReplaceAll(string query, string replacement, bool caseSensitive)
+    {
+        lock (_gate)
+        {
+            var path = _project?.FilePath;
+            if (_project == null || path == null || string.IsNullOrEmpty(query)) return 0;
+
+            try { new ProjectSnapshotManager(path).SaveSnapshot(_project, "全书替换前备份"); }
+            catch { /* 快照失败也要让替换继续 */ }
+
+            var cmp = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+            var total = 0;
+            foreach (var c in _project.Chapters)
+            {
+                var text = c.Content ?? "";
+                if (text.Length == 0) continue;
+                var n = CountOccurrences(text, query, cmp);
+                if (n == 0) continue;
+                c.Content = text.Replace(query, replacement, cmp);
+                total += n;
+            }
+            if (total > 0) _project.Save();
+            return total;
+        }
+    }
+
+    private static int CountOccurrences(string text, string q, StringComparison cmp)
+    {
+        int n = 0, i = 0;
+        while ((i = text.IndexOf(q, i, cmp)) >= 0) { n++; i += q.Length; }
+        return n;
     }
 
     // ==================================================================

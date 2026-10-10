@@ -1817,7 +1817,10 @@ function connect() {
     if (ev.summary) log(ev.summary, true);   // MCP 的消息都是 agent 发的，别标成「你」
     if (ev.previewText) $('#aiOut').textContent = ev.previewText;
     if (ev.projectModified) {
-      await refresh();           // 从磁盘把 agent 改的内容拉回来（含新的 stamp）
+      // ★ 先让**服务器**重新从磁盘读一遍：stdio 的 agent 改的是文件，
+      //   服务器内存里还是旧副本，只刷前端等于读了个旧的（字数全 0）。
+      try { await post('/api/book/reload', {}); } catch { /* 读不到就照旧刷新 */ }
+      await refresh();           // 再把新内容拉到页面（含新的 stamp）
       loadChatInfo();
     }
     $('#saveState').textContent = '已同步';

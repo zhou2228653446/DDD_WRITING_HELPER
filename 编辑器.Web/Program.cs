@@ -160,6 +160,19 @@ app.MapGet("/api/book", (WorkspaceService ws) =>
     });
 });
 
+// 从磁盘重新加载当前项目。
+//
+// ★ 为什么必须有这个端点：agent 用 stdio 启动 MCP 时，改文件的是**另一个进程**，
+//   事件走命名管道直接给了浏览器，**服务器自己完全不知道文件变了**——内存里
+//   还是旧副本（章节是空的时候加载的）。于是 agent 写了两万字，界面上字数全是 0，
+//   点开也是空的。HTTP 那条路（POST /mcp）里有 ws.Reload()，stdio 路径没有，
+//   前端收到 MCP 的 done 之后必须自己叫这一声。
+app.MapPost("/api/book/reload", (WorkspaceService ws) =>
+{
+    ws.Reload();
+    return Results.Ok(new { ok = true, stamp = StampToken.From(ws.Stamp()) });
+});
+
 app.MapGet("/api/chapter/{n:int}", (WorkspaceService ws, int n) =>
 {
     var ch = ws.GetChapter(n);

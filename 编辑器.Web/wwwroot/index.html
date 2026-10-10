@@ -266,9 +266,10 @@
         <option value="review">AI 审稿</option>
       </select>
 
-      <div class="ctx-gen">
-        <span class="muted">生成上下文</span>
-        <div class="ctx-gen-btns">
+      <!-- 各区块可折叠：小屏下把暂时不用的收起来，「生成」才不至于要滚半天 -->
+      <div class="ai-sec" id="secCtx">
+        <button class="ai-sec-head" type="button"><i class="caret"></i>生成上下文</button>
+        <div class="ai-sec-body ctx-gen-btns">
           <button class="mini-btn" data-ctx="outline" title="生成全文大纲（已有则改成在原文上扩写）">全文大纲</button>
           <button class="mini-btn" data-ctx="chapterOutline">章节大纲</button>
           <button class="mini-btn" data-ctx="character">生成人物</button>
@@ -284,15 +285,18 @@
         <div class="ctx-ops"><button id="ctxAll" class="mini-btn" type="button">全选</button><button id="ctxNone" class="mini-btn" type="button">全不选</button></div>
       </details>
 
-      <label class="ai-field"><span>技能</span>
-        <select id="aiSkill"><option value="">无技能</option></select>
-      </label>
+      <div class="ai-sec" id="secSkill">
+        <button class="ai-sec-head" type="button"><i class="caret"></i>技能</button>
+        <div class="ai-sec-body">
+          <select id="aiSkill"><option value="">无技能</option></select>
+        </div>
+      </div>
       <textarea id="aiPrompt" rows="2" placeholder="要求 / 输入（可留空）"></textarea>
 
       <!-- 润色风格：桌面端是常驻的一块（带「仅润色有效」说明 + ＋ － 管预设） -->
-      <div id="polishRow">
-        <div class="ai-sub-head">润色风格<span class="muted">仅润色有效</span></div>
-        <div class="polish-line">
+      <div class="ai-sec" id="secPolish">
+        <button class="ai-sec-head" type="button"><i class="caret"></i>润色风格<span class="muted">仅润色有效</span></button>
+        <div class="ai-sec-body polish-line">
           <select id="polishStyle" title="润色风格预设（与桌面版共用 polish_presets.json）">
             <option value="">（无预设）</option>
           </select>

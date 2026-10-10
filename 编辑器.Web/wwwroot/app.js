@@ -2143,6 +2143,33 @@ const scheduleMenuClose = () => {
   });
 }
 
+// ---------- AI 面板的分区折叠 ----------
+// 小屏（1080p 在 125%/150% 缩放下只剩 760/633 高）一屏放不下全部功能，
+// 让次要区块能收起来，用户按需展开。选择记在本地，下次打开还是他调好的样子。
+const AI_SEC_KEY = 'aiSectionsCollapsed';
+function readAiSections() {
+  try { return JSON.parse(localStorage.getItem(AI_SEC_KEY) || '{}') || {}; }
+  catch { return {}; }
+}
+function applyAiSections() {
+  const saved = readAiSections();
+  const shortScreen = window.innerHeight <= 980;   // 1080p 100% 缩放就在这条线附近
+  document.querySelectorAll('.ai-sec').forEach(sec => {
+    const v = saved[sec.id];
+    sec.classList.toggle('collapsed', v == null ? shortScreen : !!v);
+  });
+}
+document.querySelectorAll('.ai-sec .ai-sec-head').forEach(h => {
+  h.onclick = () => {
+    const sec = h.parentElement;
+    sec.classList.toggle('collapsed');
+    const saved = readAiSections();
+    saved[sec.id] = sec.classList.contains('collapsed');
+    try { localStorage.setItem(AI_SEC_KEY, JSON.stringify(saved)); } catch { /* 隐私模式 */ }
+  };
+});
+applyAiSections();
+
 // 菜单的键盘操作（桌面端 Header 里的 _F/_E/_A/_V/_H 就是这些）：
 // Alt+字母开菜单、左右方向键在菜单间挪、Esc 收起。
 document.addEventListener('keydown', e => {

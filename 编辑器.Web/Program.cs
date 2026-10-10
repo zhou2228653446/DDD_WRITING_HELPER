@@ -209,16 +209,24 @@ app.MapGet("/api/auth/me", (HttpContext ctx, AccountStore accounts, AuthSessions
     return Results.Ok(new { subject, isSelf = false, code = subject.Split(':').Last() });
 });
 
-// 初始化：**仅限本机**——公网上谁都不许创建/重置账号
-app.MapPost("/api/auth/initialize", async (HttpContext ctx, AccountStore accounts) =>
+// 初始化：账号系统未初始化时**任意来源可用**（抢占式）——此时服务里没有任何
+// 受保护内容，而部署者很可能恰恰是从手机/远程打开页面的；一旦初始化完成，
+// 这个端点立即封闭为仅本机，公网上谁都不许创建/重置账号。
+// 成功后**直接签发自用会话**：初始化即登录。否则前端初始化完依然无凭据，
+// 后续请求全部 401 → 登录框反复弹出 → 界面死锁（实测踩过：用户点「进入」毫无反应）。
+app.MapPost("/api/auth/initialize", async (HttpContext ctx, AccountStore accounts, AuthSessions sessions) =>
 {
-    if (!IsLoopback(ctx)) return Results.StatusCode(403);
     if (accounts.Initialized) return Results.Json(new { error = "已初始化" }, statusCode: 400);
+    if (!IsLoopback(ctx) && !string.IsNullOrEmpty(TokenFrom(ctx)))
+        return Results.StatusCode(403);   // 已有会话令牌的非登录请求不在此列，防御性一行
     var req = await ctx.Request.ReadFromJsonAsync<InitReq>();
     var pwd = (req.SelfPassword ?? "").Trim();
     if (pwd.Length < 6) return Results.Json(new { error = "自用密码至少 6 位" }, statusCode: 400);
     accounts.Initialize(pwd);
-    return Results.Ok(new { ok = true });
+    var token = sessions.Issue("self");
+    ctx.Response.Headers["Set-Cookie"] =
+        $"tdx_session={token}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax";
+    return Results.Ok(new { ok = true, token, subject = "self" });
 });
 
 // 自用账号管理：改密码 / 手动轮换试用密码（仅 self 主体）

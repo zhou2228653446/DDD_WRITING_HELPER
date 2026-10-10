@@ -498,42 +498,20 @@
   </div>
 </dialog>
 
-<!-- 登录（非本机访问时；本机回环自动以「自用」工作） -->
-<dialog id="loginDlg">
-  <form method="dialog" onsubmit="return false">
-    <h3 id="loginTitle">登录</h3>
-    <div id="loginInitRow" class="hidden">
-      <label>设置自用密码（至少 6 位；这是管理员账号）
-        <input id="loginInitPwd" type="password" autocomplete="new-password">
-      </label>
-      <p class="muted">试用账号的密码会在初始化后自动生成（每 10 天轮换一次），在「帮助 → 接入 Agent」里查看。</p>
-    </div>
-    <div id="loginFields">
-      <div id="loginUserRow">
-        <label>账号
-          <select id="loginUser">
-            <option value="self">自用</option>
-            <option value="trial">试用</option>
-          </select>
-        </label>
-      </div>
-      <label>密码
-        <input id="loginPassword" type="password" autocomplete="current-password">
-      </label>
-      <div id="loginCodeRow" class="hidden">
-        <label>个人码（试用账号必填，四位数字，用来区分不同试用者）
-          <input id="loginCode" inputmode="numeric" maxlength="4" placeholder="如 0731">
-        </label>
-      </div>
-    </div>
-    <div id="loginErr" class="muted" style="color:#c0392b"></div>
-    <div class="dlg-btns">
-      <button type="button" id="loginCancel">取消</button>
-      <span class="grow"></span>
-      <button type="button" id="loginGo" class="primary">进入</button>
-    </div>
-  </form>
-</dialog>
+<!-- 登录横幅（非本机访问时出现；登录成功整页刷新，避免任何弹窗状态机问题） -->
+<div id="loginBanner" class="hidden">
+  <b id="loginTitle">登录</b>
+  <select id="loginUser" title="账号类型">
+    <option value="self">自用</option>
+    <option value="trial">试用</option>
+  </select>
+  <input id="loginPassword" type="password" placeholder="密码" autocomplete="current-password">
+  <input id="loginCode" class="hidden" inputmode="numeric" maxlength="4"
+         placeholder="四位个人码（试用必填）" style="width:110px">
+  <button id="loginGo" class="primary">进入</button>
+  <span id="loginErr"></span>
+  <span class="muted">试用账号的密码向管理员索取；个人码自己定四位数字，用来区分不同试用者。</span>
+</div>
 
 <!-- 统计对话框 -->
 <dialog id="statsDlg">

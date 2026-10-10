@@ -11,19 +11,20 @@ let dirty = false;
 let chatInfo = null;      // 聊天记忆的规模（服务器侧 <项目目录>/.chat/session.json，与桌面端同一份）
 
 // ---------- 登录会话（多账户：自用 + 试用）----------
-// 服务端：本机回环免登录（自动以「自用」工作）；其他设备必须登录，
-// 试用账号还要四位个人码（区分试用者，作品库按码隔离）。
-// 401 → 弹登录框 → 成功后把 token 存 localStorage 并自动重试原请求。
+// 本机回环免登录（自动以「自用」工作）；其他设备必须登录。
+// 401 → 页面顶部横幅 → 登录成功存 token → **整页刷新**：
+// 页面上还挂着一批等 401 的请求，刷新让它们全部带着新会话重来——
+// 不做原地重试（弹窗+挂起请求+重复弹框的纠缠就是上一版死锁的根源）。
 const sessionToken = () => localStorage.getItem('tdxSession') || '';
 const authHeaders = () => sessionToken() ? { 'Authorization': 'Bearer ' + sessionToken() } : {};
 
 const api = async (url, opt) => {
   const merged = { ...opt, headers: { ...authHeaders(), ...(opt?.headers || {}) } };
-  let r = await fetch(url, merged);
-  if (r.status === 401) {                       // 未登录/会话失效 → 登录后重试
-    const ok = await showLoginDlg(r);
-    if (!ok) throw new Error('未登录');
-    r = await fetch(url, { ...merged, headers: { ...merged.headers, ...authHeaders() } });
+  const r = await fetch(url, merged);
+  if (r.status === 401) {
+    const d = await r.clone().json().catch(() => ({}));
+    showLoginBanner(d.needInit ? '首次使用：设置自用密码后进入' : '请登录后使用');
+    throw new Error(d.error || '未登录');
   }
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   return r.json();
@@ -35,78 +36,58 @@ const post = (url, body) => api(url, {
 });
 const del = url => api(url, { method: 'DELETE' });
 
-let loggingIn = null;   // 同一时段多个 401 只弹一个登录框
-function showLoginDlg(resp) {
-  if (loggingIn) return loggingIn;
-  loggingIn = (async () => {
-    let needInit = false;
-    try { needInit = (await resp.clone().json()).needInit === true; } catch { }
-    const dlg = $('#loginDlg');
-    $('#loginTitle').textContent = needInit ? '初始化账号' : '登录';
-    $('#loginInitRow').classList.toggle('hidden', !needInit);
-    $('#loginFields').classList.toggle('hidden', needInit);
-    if (needInit) $('#loginUserRow').classList.add('hidden');
-    else $('#loginUserRow').classList.remove('hidden');
-    $('#loginCodeRow').classList.toggle('hidden', true);   // 选了试用再显示
-    $('#loginErr').textContent = '';
-    $('#loginPassword').value = '';
-    $('#loginCode').value = '';
-    dlg.showModal();
-    const ok = await new Promise(resolve => {
-      dlg.addEventListener('close', () => resolve(dlg.returnValue === 'ok'), { once: true });
-    });
-    loggingIn = null;
-    return ok;
-  })();
-  return loggingIn;
-}
-
-async function doLogin() {
-  const needInit = !$('#loginFields').classList.contains('hidden');
-  const err = $('#loginErr');
-  err.textContent = '';
-  try {
-    if (needInit) {
-      const pwd = $('#loginInitPwd').value.trim();
-      await post('/api/auth/initialize', { selfPassword: pwd });
-      $('#loginDlg').close('ok');
-      log('账号系统已初始化，本机直接以「自用」工作');
-      await loadMe();
-      return true;
-    }
-    const user = $('#loginUser').value;
-    const body = { user, password: $('#loginPassword').value };
-    if (user === 'trial') body.code = $('#loginCode').value.trim();
-    const d = await post('/api/auth/login', body);
-    localStorage.setItem('tdxSession', d.token);
-    $('#loginDlg').close('ok');
-    log(user === 'self' ? '已登录：自用' : `已登录：试用 #${d.subject.split(':')[1]}`);
-    await loadMe();
-    return true;
-  } catch (e) {
-    err.textContent = errMsg(e);
-    return false;
-  }
+let loginBusy = false;
+function showLoginBanner(msg) {
+  $('#loginBanner').classList.remove('hidden');
+  $('#loginErr').textContent = msg || '';
 }
 
 $('#loginUser').onchange = () =>
-  $('#loginCodeRow').classList.toggle('hidden', $('#loginUser').value !== 'trial');
-$('#loginGo').onclick = () => doLogin();
-$('#loginCancel').onclick = () => $('#loginDlg').close('');
+  $('#loginCode').classList.toggle('hidden', $('#loginUser').value !== 'trial');
+
+$('#loginGo').onclick = async () => {
+  if (loginBusy) return;
+  loginBusy = true;
+  const err = $('#loginErr');
+  err.textContent = '登录中…';
+  try {
+    const user = $('#loginUser').value;
+    const body = { user, password: $('#loginPassword').value };
+    if (user === 'trial') {
+      const code = $('#loginCode').value.trim();
+      if (!/^\d{4}$/.test(code)) throw new Error('试用账号需要四位数字的个人码');
+      body.code = code;
+    }
+    let r = await fetch('/api/auth/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    let d = await r.json().catch(() => ({}));
+    if (r.status === 401 && d.needInit) {
+      // 账号系统还没初始化：横幅密码框直接当初始化用
+      r = await fetch('/api/auth/initialize', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selfPassword: body.password }),
+      });
+      d = await r.json().catch(() => ({}));
+    }
+    if (!r.ok) throw new Error(d.error || '登录失败');
+    if (d.token) localStorage.setItem('tdxSession', d.token);
+    location.reload();   // 整页刷新：所有挂起请求带新会话重来
+  } catch (e) {
+    err.textContent = errMsg(e);
+    loginBusy = false;
+  }
+};
 
 async function loadMe() {
   try {
     const me = await api('/api/auth/me');
     const badge = $('#meBadge');
-    if (me.isSelf) {
-      badge.textContent = me.initialized === false ? '自用（未初始化）' : '自用';
-      $('#logoutBtn').classList.toggle('hidden', me.initialized === false);
-    } else {
-      badge.textContent = `试用 #${me.code}`;
-      $('#logoutBtn').classList.remove('hidden');
-    }
+    badge.textContent = me.isSelf ? '自用' : `试用 #${me.code}`;
+    $('#logoutBtn').classList.toggle('hidden', false);
     window.__me = me;
-  } catch { /* 未登录状态由首个 api() 调用触发登录框 */ }
+  } catch { /* 未登录：横幅已由 api() 显示 */ }
 }
 $('#logoutBtn').onclick = async () => {
   try { await post('/api/auth/logout', {}); } catch { }
@@ -856,7 +837,12 @@ let authChoices = [];
 
 // 后端抛的是 "400 至少保留一个配置方案" 这种——状态码对用户没意义，剥掉
 function errMsg(e) {
-  return String(e?.message || e || '操作失败').replace(/^\d{3}\s*/, '');
+  const raw = String(e?.message || e || '操作失败').replace(/^\d{3}\s*/, '');
+  try {
+    const d = JSON.parse(raw);                 // 服务端的错误都是 {"error":"..."} 形式
+    if (d && typeof d.error === 'string') return d.error;
+  } catch { /* 不是 JSON 就按原文显示 */ }
+  return raw;
 }
 
 async function openAiDlg() {

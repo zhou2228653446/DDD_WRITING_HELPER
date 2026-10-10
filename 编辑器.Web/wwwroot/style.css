@@ -741,3 +741,18 @@ aside:not(.hidden){animation:fadeIn 180ms ease-out}
   flex:1;min-width:180px;font:inherit;font-size:13px;padding:6px 10px;
   border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);color:var(--ink);
 }
+
+/* ---------- 登录横幅（非本机访问时的登录/初始化入口） ---------- */
+#loginBanner{
+  position:fixed;top:0;left:0;right:0;z-index:120;
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:10px 16px;background:var(--panel);
+  border-bottom:2px solid var(--accent);
+  box-shadow:0 6px 20px rgba(0,0,0,.28);
+}
+#loginBanner.hidden{display:none}
+#loginBanner input,#loginBanner select{
+  font:inherit;font-size:13px;padding:5px 9px;
+  border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);color:var(--ink);
+}
+#loginBanner .primary{cursor:pointer}

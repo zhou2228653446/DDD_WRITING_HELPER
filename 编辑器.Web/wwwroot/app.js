@@ -2269,78 +2269,54 @@ document.addEventListener('keydown', e => {
   if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); $('#aiGoBtn').click(); }
 });
 
-// ---------- 菜单栏：入口换个地方，功能全是现成的（对应桌面端那一排菜单） ----------
-function closeMenus() {
-  document.querySelectorAll('#menubar details').forEach(d => { d.open = false; });
-}
-document.querySelectorAll('#menubar .menu-items button').forEach(b => {
-  b.onclick = () => {
-    const cmd = b.dataset.cmd;
-    closeMenus();
-    if (cmd === 'newbook') $('#newBookBtn').click();
-    else if (cmd === 'openbook') { $('#bookSel').focus(); log('在左上角的下拉里选一本书'); }
-    else if (cmd === 'save') flushSave();
-    else if (cmd === 'export') document.querySelector(`.export [data-fmt="${b.dataset.fmt}"]`)?.click();
-    else if (cmd === 'find') findOpen();
-    else if (cmd === 'ai') { $('#aiTask').value = b.dataset.task; runAi(b.dataset.task); }
-    else if (cmd === 'review') $('#reviewBtn').click();
-    else if (cmd === 'aiset') $('#aiSetBtn').click();
-    else if (cmd === 'prompts') $('#promptBtn').click();
-    else if (cmd === 'skills') $('#skillBtn').click();
-    else if (cmd === 'view') document.querySelector(`.tabs [data-view="${b.dataset.view}"]`)?.click();
-    else if (cmd === 'toggle') $(b.dataset.panel === 'chapters' ? '#toggleChapters' : '#toggleRight').click();
-    else if (cmd === 'appearance') $('#appearanceBtn').click();
-    else if (cmd === 'help') $('#helpBtn').click();
-  };
-});
-// 点别处就收起菜单
-document.addEventListener('click', e => {
-  if (!e.target.closest || !e.target.closest('#menubar')) closeMenus();
+// ---------- 工具条：更多 / 打开项目 ----------
+// 低频功能收在「更多」对话框里（原生 <dialog> 在 top layer，不可能被遮），
+// 按钮沿用原来的 id，所以各功能自己的绑定一行都不用改。
+$('#moreBtn').onclick = () => $('#moreDlg').showModal();
+$$('#moreDlg button[id]').forEach(b => {
+  // 按钮自己的 onclick 在目标阶段先跑（打开它对应的对话框），这里再收起本框，
+  // 免得两层对话框叠在一起。
+  b.addEventListener('click', () => { try { $('#moreDlg').close(); } catch { /* 已关闭 */ } });
 });
 
-// 菜单的鼠标行为（对齐桌面端那套 WPF Menu 的手感）：
-// ① 划到别的顶级菜单就直接切过去 —— WPF 菜单栏的标准行为，
-//    不然得先点一下空白把上一个关掉，很难用
-// ② 鼠标离开菜单区域就自动收起（延时 300ms；鼠标回来就取消，
-//    否则手一抖从菜单上滑过去就没了）
-let menuCloseTimer = null;
-const cancelMenuClose = () => { clearTimeout(menuCloseTimer); menuCloseTimer = null; };
-const scheduleMenuClose = () => {
-  cancelMenuClose();
-  menuCloseTimer = setTimeout(closeMenus, 300);
+// 打开项目：列出书库里所有的书。此前菜单里这一项只是把焦点挪到左上角下拉
+// 并打一行提示，等于什么都没做——现在是真的能选。
+$('#openBookBtn').onclick = async () => {
+  $('#openBookList').innerHTML = '<div class="empty">载入中…</div>';
+  $('#openBookDlg').showModal();
+  try {
+    const d = await api('/api/books');
+    $('#openBookDir').textContent = '书库：' + d.dir;
+    const list = $('#openBookList');
+    list.innerHTML = '';
+    if (!d.books.length) {
+      list.innerHTML = '<div class="empty">书库里还没有书，用「新建」建一本。</div>';
+      return;
+    }
+    const cur = book?.fileName || $('#bookSel').value;
+    d.books.forEach(b => {
+      const it = document.createElement('div');
+      it.className = 'book-item' + (b.fileName === cur ? ' current' : '');
+      const when = b.modified ? new Date(b.modified).toLocaleString('zh-CN',
+        { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+      it.innerHTML =
+        `<span class="bname"></span><span class="bmeta"></span>`;
+      it.querySelector('.bname').textContent = b.name;
+      it.querySelector('.bmeta').textContent =
+        `${b.chapters} 章 · ${b.words} 字 · ${when}`;
+      it.onclick = async () => {
+        $('#openBookDlg').close();
+        await openBook(b.fileName);
+      };
+      list.appendChild(it);
+    });
+  } catch (e) {
+    $('#openBookList').innerHTML = `<div class="empty">读不到书库：${e.message}</div>`;
+  }
 };
 
-{
-  const bar = $('#menubar');
-  bar.addEventListener('mouseenter', cancelMenuClose);
-  bar.addEventListener('mouseleave', scheduleMenuClose);   // 下拉是这个节点的后代，鼠标在上面不会触发
-
-  document.querySelectorAll('#menubar > details').forEach(d => {
-    // 鼠标刚把它「划开」的时刻。紧接着的点击只是落点，不该又把它关掉——
-    // 否则会出现「划过去看着开了、一点反而没了」这种最恼人的手感。
-    let hoverOpenedAt = 0;
-
-    d.addEventListener('mouseenter', () => {
-      cancelMenuClose();
-      const opened = document.querySelector('#menubar > details[open]');
-      if (opened && opened !== d) {
-        opened.open = false;
-        d.open = true;
-        hoverOpenedAt = Date.now();
-      }
-    });
-
-    // 键盘 / 触摸走点击这条路，也要保证同时只开一个
-    d.querySelector('summary').addEventListener('click', e => {
-      document.querySelectorAll('#menubar > details').forEach(o => { if (o !== d) o.open = false; });
-      if (Date.now() - hoverOpenedAt < 400) {
-        e.preventDefault();   // 刚划开就点的这一下，保持打开
-        d.open = true;
-        hoverOpenedAt = 0;
-      }
-    });
-  });
-}
+$('#saveBtn').onclick = () => flushSave();
+$('#findBtn').onclick = () => findOpen();
 
 // ---------- AI 面板的分区折叠 ----------
 // 小屏（1080p 在 125%/150% 缩放下只剩 760/633 高）一屏放不下全部功能，
@@ -2369,33 +2345,11 @@ document.querySelectorAll('.ai-sec .ai-sec-head').forEach(h => {
 });
 applyAiSections();
 
-// 菜单的键盘操作（桌面端 Header 里的 _F/_E/_A/_V/_H 就是这些）：
-// Alt+字母开菜单、左右方向键在菜单间挪、Esc 收起。
+// Esc 收起当前对话框（原生 dialog 自带 Esc，这里补上「更多」里点开的那些）
 document.addEventListener('keydown', e => {
-  const menus = [...document.querySelectorAll('#menubar > details')];
-  const open = menus.find(m => m.open);
-
-  if (e.key === 'Escape' && open) { closeMenus(); return; }
-
-  if (open && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
-    const i = menus.indexOf(open);
-    const step = e.key === 'ArrowRight' ? 1 : menus.length - 1;
-    const next = menus[(i + step) % menus.length];
-    open.open = false; next.open = true;
-    next.querySelector('summary').focus();
-    e.preventDefault();
-    return;
-  }
-
-  if (e.altKey && !e.ctrlKey && !e.metaKey) {
-    const map = { f: 0, e: 1, a: 2, v: 3, h: 4 };   // 文件 / 编辑 / AI助手 / 视图 / 帮助
-    const idx = map[(e.key || '').toLowerCase()];
-    if (idx != null && menus[idx]) {
-      e.preventDefault();
-      const wasOpen = menus[idx].open;
-      closeMenus();
-      if (!wasOpen) menus[idx].open = true;
-    }
+  if (e.key === 'Escape') {
+    const dlg = document.querySelector('dialog[open]');
+    if (dlg && dlg.id === 'moreDlg') dlg.close();
   }
 });
 

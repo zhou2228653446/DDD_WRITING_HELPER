@@ -44,17 +44,29 @@ body{
 .muted{color:var(--muted);font-size:12px}
 .hidden{display:none!important}
 
+/* 工具条：竖排两行（功能行 + 视图行），每行内部**永不换行**——
+   手机上宁可左右滑动，也不要折成三四行把正文挤没。 */
 header{
-  display:flex;align-items:center;gap:8px;padding:10px 16px;flex-wrap:wrap;
-  background:var(--panel);border-bottom:1px solid var(--line);flex-shrink:0;
+  display:flex;flex-direction:column;flex-shrink:0;
+  background:var(--panel);border-bottom:1px solid var(--line);
 }
-.brand{font-weight:600;margin-right:8px}
+.bar-main,.bar-tabs{
+  display:flex;align-items:center;gap:6px;flex-wrap:nowrap;overflow-x:auto;
+  scrollbar-width:none;              /* 横向滚动条很丑，隐藏；手指直接滑 */
+}
+.bar-main{padding:8px 12px 6px}
+.bar-tabs{padding:0 12px 6px}
+.bar-main::-webkit-scrollbar,.bar-tabs::-webkit-scrollbar{display:none}
+.bar-sep{width:1px;height:18px;background:var(--line);flex:0 0 auto}
+.brand{font-weight:600;margin-right:4px;flex:0 0 auto}
 header select,header button,.editor-bar input,.ai-box select,.ai-box button{
   font:inherit;color:var(--ink);background:var(--bg);
   border:1px solid var(--line);border-radius:var(--radius);padding:5px 10px;
 }
+/* 工具条里每一项都不可压缩：一压就变成挤在一起的窄条，文字读不出来 */
+header .bar-main > *{flex:0 0 auto}
 header button{cursor:pointer}
-.tabs{display:flex;gap:4px;margin-left:8px}
+.tabs{display:flex;gap:4px;margin-left:0}
 .tab{
   border:1px solid transparent;background:transparent;cursor:pointer;
   padding:5px 12px;border-radius:var(--radius);color:var(--muted);
@@ -593,65 +605,27 @@ dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
 /* Token 用量（对应桌面端 TokenUsageTextBlock）：窄屏下允许收缩省略，别把状态栏挤爆 */
 #statusbar #sbTokens{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-/* ---------- 菜单栏（对应桌面端「文件 / 编辑 / AI助手 / 视图 / 帮助」） ---------- */
-/* ★ 背景一律用 --menu-solid（**不带 alpha**）：下拉是盖在正文上的，
-   用 --panel 的话在玻璃材质下会半透明、背后的字透出来，菜单根本读不清。
-   材质只该改它的色调，不该改它的可读性。 */
-#menubar{
-  display:flex;align-items:center;gap:2px;padding:0 8px;flex-shrink:0;
-  background:var(--menu-solid,var(--panel));
-  border-bottom:1px solid var(--line);font-size:12.5px;
-  /* 下拉菜单要盖过下面的 header 工具条（header 因材质加了 z-index:1，
-     菜单栏若不自己建立层叠上下文，下拉会被 header 压在底下——
-     手机窄屏 header 换行成三四行时，「文件」菜单的前几项直接看不见）。 */
-  /* 9999：菜单是临时浮层，必须压过一切（header 工具条、浮动的 AI 面板
-     都是 z-index 60，同级时 DOM 靠后的赢，菜单会被它们盖住）。 */
-  position:relative;z-index:9999;
+/* ---------- 「更多」对话框 / 打开项目对话框 ---------- */
+.more-grid{display:grid;grid-template-columns:repeat(2,minmax(150px,1fr));gap:8px}
+.more-grid button{font:inherit;color:var(--ink);background:var(--bg);
+  border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;
+  cursor:pointer;text-align:left}
+.more-grid button:hover{border-color:var(--accent-mid,var(--accent))}
+
+.book-list{display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow-y:auto;
+  margin:8px 0 4px}
+.book-item{
+  display:flex;align-items:center;gap:10px;padding:9px 11px;cursor:pointer;
+  border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);
 }
-#menubar .ver{margin-left:auto;font-size:10px;color:var(--muted);opacity:.55;user-select:none}
-#menubar .menu{position:relative}
-#menubar summary{
-  list-style:none;cursor:pointer;padding:5px 10px;border-radius:var(--radius);
-  color:var(--ink);user-select:none;
-}
-#menubar summary::-webkit-details-marker{display:none}
-#menubar summary:hover{background:var(--bg)}
-#menubar details[open] summary{background:var(--bg)}
-#menubar .menu-items{
-  position:absolute;left:0;top:100%;z-index:60;min-width:200px;
-  background:var(--menu-solid,var(--panel));
-  border:1px solid var(--line);border-radius:var(--radius);
-  box-shadow:0 8px 24px rgba(0,0,0,.16);padding:5px;
-  transform-origin:top left;
-}
-/* 展开动画：与桌面端 Motion.PlayUnfold 同一套（0.72 → 1 缩放 + 淡入，DurPop 320ms） */
-#menubar details[open]>.menu-items{
-  animation:menuUnfold 320ms cubic-bezier(.2,.85,.3,1);
-}
-@keyframes menuUnfold{
-  from{opacity:0;transform:scale(.72) translateY(-6px)}
-  to{opacity:1;transform:scale(1) translateY(0)}
-}
-#menubar .menu-items button{
-  display:flex;justify-content:space-between;align-items:center;gap:16px;
-  width:100%;text-align:left;font:inherit;font-size:12.5px;color:var(--ink);
-  background:transparent;border:0;border-radius:var(--radius);
-  padding:6px 10px;cursor:pointer;
-}
-#menubar .menu-items button:hover{background:var(--bg)}
-#menubar .menu-items hr{border:0;border-top:1px solid var(--line);margin:5px 2px}
-#menubar .key{font-size:11px;color:var(--muted)}
-/* 窄屏（手机）：下拉不再「浮」在页面上，而是就地展开把下面的内容推开。
-   浮层在触屏上两头不讨好——它盖住下面整条工具条，而手指去点菜单项时
-   又容易点到被盖住的东西。就地展开后谁也不遮谁，菜单项也一定点得到。 */
-@media (max-width:1100px){
-  #menubar{flex-wrap:wrap}
-  #menubar .menu[open]{flex:1 0 100%}       /* 展开的那个独占一行，下拉才能铺满宽度 */
-  #menubar .menu-items{
-    position:static;width:100%;min-width:0;margin:2px 0 4px;
-    box-shadow:none;animation:none;transform:none;
-  }
-}
+.book-item:hover{border-color:var(--accent-mid,var(--accent))}
+.book-item.current{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft,transparent)}
+.book-item .bname{font-weight:600}
+.book-item .bmeta{margin-left:auto;font-size:11.5px;color:var(--muted);white-space:nowrap}
+.book-list .empty{padding:14px;text-align:center;color:var(--muted)}
+
+/* 前端版本标记（放在状态栏右端，用来确认浏览器拿到的是不是新版） */
+.ver{font-size:10px;color:var(--muted);opacity:.55;user-select:none;margin-left:6px}
 
 /* ---------- 左栏「版本历史」（对应桌面端左栏下半部分） ---------- */
 #historyBox{
@@ -800,9 +774,9 @@ body{
 }
 
 /* ── 顶栏：微影替代硬边线 ── */
-/* ⚠ 只给 header。#menubar 不能在这里一起设 z-index——本节在文件后部，
-   会把 #menubar 自身的 z-index:9999（见菜单栏一节）覆盖掉，两者跌回同层，
-   header 靠 DOM 顺序压在下拉菜单上面，菜单前两项被盖住（踩过三次才找到）。 */
+/* ⚠ 只写 header 自己。曾经这里写成 header,#menubar{z-index:5}，把菜单栏
+   自己的高层叠覆盖成同层，header 靠 DOM 顺序压在下拉菜单上（踩过四轮）。
+   教训：同一选择器的规则散落多处时，文件后部会无声吃掉前部。 */
 header{
   border-bottom:1px solid var(--line-soft);
   box-shadow:0 1px 3px rgba(0,0,0,.04);
@@ -914,9 +888,8 @@ dialog::backdrop{ background:rgba(0,0,0,.32); backdrop-filter:blur(2px); }
 .mcp-badge{ border-radius:999px; box-shadow:var(--shadow-1); }
 .badge{ border-radius:999px; }
 
-/* ── 帮助横幅与菜单浮层 ── */
+/* ── 帮助横幅 ── */
 #loginBanner{ box-shadow:var(--shadow-2); }
-#menubar .menu-items{ box-shadow:var(--shadow-2); border-radius:var(--radius); }
 
 /* ── 浮岛布局：三栏各自成卡片，间隙透出底色 ── */
 main{ gap:10px; padding:10px; }

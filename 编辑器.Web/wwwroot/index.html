@@ -6,91 +6,42 @@
 <title>写作 · 网页版</title>
 <!-- 版本戳：手机浏览器（尤其微信/Safari）会强缓存静态文件，改了 css/js 它
      照样拿旧的，表现为「修好了他那边还是老样子」。改前端就递增这个号。 -->
-<link rel="stylesheet" href="/style.css?v=20261011c">
+<link rel="stylesheet" href="/style.css?v=20261011d">
 </head>
 <body>
 
-<!-- 菜单栏：桌面端有「文件 / 编辑 / AI助手 / 视图 / 帮助」一整排，
-     网页版此前只有一个平铺的工具条。菜单项绑的都是已有的功能，只是换个入口。 -->
-<nav id="menubar">
-  <details class="menu"><summary>文件</summary>
-    <div class="menu-items">
-      <button data-cmd="newbook">新建项目</button>
-      <button data-cmd="openbook">打开项目</button>
-      <button data-cmd="save">保存章节</button>
-      <hr>
-      <button data-cmd="export" data-fmt="docx">导出为 Word</button>
-      <button data-cmd="export" data-fmt="pdf">导出为 PDF</button>
-      <button data-cmd="export" data-fmt="txt">导出为 TXT</button>
-    </div>
-  </details>
-  <details class="menu"><summary>编辑</summary>
-    <div class="menu-items">
-      <button data-cmd="find">查找替换<span class="key">Ctrl+F</span></button>
-    </div>
-  </details>
-  <details class="menu"><summary>AI 助手</summary>
-    <div class="menu-items">
-      <button data-cmd="ai" data-task="continue">续写</button>
-      <button data-cmd="ai" data-task="polish">润色</button>
-      <button data-cmd="ai" data-task="name">人名生成</button>
-      <button data-cmd="ai" data-task="chat">万能聊天</button>
-      <button data-cmd="review">AI 审稿</button>
-      <hr>
-      <button data-cmd="aiset">AI 设置</button>
-      <button data-cmd="prompts">提示词</button>
-      <button data-cmd="skills">技能</button>
-    </div>
-  </details>
-  <details class="menu"><summary>视图</summary>
-    <div class="menu-items">
-      <button data-cmd="view" data-view="write">写作</button>
-      <button data-cmd="view" data-view="outline">大纲</button>
-      <button data-cmd="view" data-view="characters">人物</button>
-      <button data-cmd="view" data-view="literature">文献</button>
-      <button data-cmd="view" data-view="sbook">设定集</button>
-      <button data-cmd="view" data-view="snapshots">快照</button>
-      <button data-cmd="view" data-view="settings">设定</button>
-      <hr>
-      <button data-cmd="toggle" data-panel="chapters">章节栏</button>
-      <button data-cmd="toggle" data-panel="right">AI 助手面板</button>
-      <button data-cmd="appearance">外观设置</button>
-    </div>
-  </details>
-  <details class="menu"><summary>帮助</summary>
-    <div class="menu-items">
-      <button data-cmd="help">关于 / 快捷键 / 接入 Agent</button>
-    </div>
-  </details>
-  <!-- 前端版本标记：改了 css/js 就递增。手机浏览器爱缓存旧页面，
-       有它就能一眼分辨「用户看到的是不是改完的那版」。 -->
-  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v3</span>
-</nav>
-
+<!-- 工具条：固定两行，各自单行横向滚动。
+     手机上不再折成三四行；低频功能收进「更多」对话框——用原生 <dialog>
+     而不是浮层下拉，它在 top layer，永远不可能被别的元素盖住（此前下拉菜单
+     被工具条压住四轮，根子就在浮层要跟页面比层叠）。 -->
 <header>
-  <div class="brand">写作</div>
-  <select id="bookSel" title="选择一本书"></select>
-  <button id="newBookBtn">新建</button>
-  <span class="grow"></span>
-  <span id="meBadge" class="muted" title="当前登录身份">自用</span>
-  <button id="logoutBtn" class="hidden" title="退出登录">退出</button>
-  <span id="mcpBadge" class="mcp-badge hidden" title="agent 正在通过 MCP 操作这本书">MCP 执行中</span>
-  <span id="stats" class="muted" title="点击看最近 14 天"></span>
-  <select id="themeSel" title="配色（与桌面版同名的 8 套）"></select>
-  <button id="appearanceBtn" title="配色 / 材质 / 材质强度 / 背景图">外观</button>
-  <div class="export">
-    <span class="muted">导出</span>
-    <button data-fmt="docx" title="Word 文档">Word</button>
-    <button data-fmt="pdf" title="PDF 文档">PDF</button>
-    <button data-fmt="txt" title="纯文本">TXT</button>
+  <div class="bar-main">
+    <span class="brand">写作</span>
+    <select id="bookSel" title="选择一本书（书库里所有的书）"></select>
+    <button id="openBookBtn" title="打开项目：列出书库里的书并切换">打开</button>
+    <button id="newBookBtn" title="新建一本书">新建</button>
+    <button id="saveBtn" title="保存本章（Ctrl+S）">保存</button>
+    <button id="findBtn" title="查找替换（Ctrl+F）">查找</button>
+    <span class="bar-sep"></span>
+    <div class="export">
+      <span class="muted">导出</span>
+      <button data-fmt="docx" title="Word 文档">Word</button>
+      <button data-fmt="pdf" title="PDF 文档">PDF</button>
+      <button data-fmt="txt" title="纯文本">TXT</button>
+    </div>
+    <button id="reviewBtn" title="对照设定集检查本章正文，输出矛盾清单（只读，不改正文）">AI 审稿</button>
+    <span class="bar-sep"></span>
+    <select id="themeSel" title="配色（与桌面版同名的 8 套）"></select>
+    <button id="moreBtn" title="外观 / AI 设置 / 提示词 / 技能 / 角色出场 / 帮助">更多 ▾</button>
+    <span class="grow"></span>
+    <span id="mcpBadge" class="mcp-badge hidden" title="agent 正在通过 MCP 操作这本书">MCP 执行中</span>
+    <span id="stats" class="muted" title="点击看最近 14 天"></span>
+    <span id="meBadge" class="muted" title="当前登录身份">自用</span>
+    <button id="logoutBtn" class="hidden" title="退出登录">退出</button>
+    <button id="toggleChapters" class="vt-btn" title="显示 / 隐藏左侧章节栏">章节栏</button>
+    <button id="toggleRight" class="vt-btn" title="显示 / 隐藏右侧 AI 面板">AI面板</button>
   </div>
-  <button id="reviewBtn" title="对照设定集检查本章正文，输出矛盾清单（只读，不改正文）">AI 审稿</button>
-  <button id="charAppearBtn" title="统计每个角色出场章次与连续缺席（本地扫描，不花 token）">角色出场</button>
-  <button id="aiSetBtn" title="AI 服务商 / API Key">AI 设置</button>
-  <button id="promptBtn" title="提示词方案与覆写">提示词</button>
-  <button id="skillBtn" title="写作技能管理">技能</button>
-  <button id="helpBtn" title="关于、快捷键、把编辑器接进 Codex 等 agent 客户端">帮助</button>
-  <div class="tabs">
+  <div class="tabs bar-tabs">
     <button class="tab active" data-view="write">写作</button>
     <button class="tab" data-view="outline">大纲</button>
     <button class="tab" data-view="characters">人物</button>
@@ -99,8 +50,6 @@
     <button class="tab" data-view="snapshots">快照</button>
     <button class="tab" data-view="settings">设定</button>
   </div>
-  <button id="toggleChapters" class="vt-btn" title="显示 / 隐藏左侧章节栏（对应桌面端「视图 ▸ 项目管理器」）">章节栏</button>
-  <button id="toggleRight" class="vt-btn" title="显示 / 隐藏右侧 AI 面板（对应桌面端「视图 ▸ AI助手面板」）">AI面板</button>
 </header>
 
 <main>
@@ -350,6 +299,9 @@
   <span class="grow"></span>
   <span id="sbSave" class="muted"></span>
   <span id="sbApi" class="muted" title="当前启用的 AI 配置方案"></span>
+  <!-- 前端版本标记：改了 css/js 就递增。手机浏览器爱缓存旧页面，
+       有它就能一眼分辨「用户看到的是不是改完的那版」。 -->
+  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v4</span>
 </footer>
 
 <!-- AI 设置对话框 -->
@@ -517,6 +469,35 @@
   <span id="loginErr"></span>
   <span class="muted">试用账号的密码向管理员索取；个人码自己定四位数字，用来区分不同试用者。</span>
 </div>
+
+<!-- 「更多」：低频功能收在这里。按钮沿用原来的 id，点击后先关本框再执行，
+     原有绑定一行都不用改。 -->
+<dialog id="moreDlg">
+  <h3>更多功能</h3>
+  <div class="more-grid">
+    <button id="appearanceBtn" title="配色 / 材质 / 材质强度 / 背景图">外观设置</button>
+    <button id="aiSetBtn" title="AI 服务商 / API Key">AI 设置</button>
+    <button id="promptBtn" title="提示词方案与覆写">提示词</button>
+    <button id="skillBtn" title="写作技能管理">技能</button>
+    <button id="charAppearBtn" title="统计每个角色出场章次与连续缺席（本地扫描，不花 token）">角色出场</button>
+    <button id="helpBtn" title="关于、快捷键、把编辑器接进 Codex 等 agent 客户端">关于与帮助</button>
+  </div>
+  <div class="dlg-btns"><span class="grow"></span>
+    <button type="button" onclick="this.closest('dialog').close()">关闭</button>
+  </div>
+</dialog>
+
+<!-- 打开项目：书库里所有的书，点一条即切换。此前菜单里的「打开项目」
+     只是把焦点挪到左上角下拉并打一行提示，等于什么都没做。 -->
+<dialog id="openBookDlg">
+  <h3>打开项目</h3>
+  <div id="openBookDir" class="muted"></div>
+  <div id="openBookList" class="book-list"></div>
+  <div class="dlg-btns">
+    <span class="grow"></span>
+    <button type="button" onclick="this.closest('dialog').close()">关闭</button>
+  </div>
+</dialog>
 
 <!-- 统计对话框 -->
 <dialog id="statsDlg">
@@ -730,6 +711,6 @@
      而且表面上一点报错都没有（踩过）。 -->
 <script src="/vendor/signalr.min.js"></script>
 <script src="/appearance.js"></script>
-<script src="/app.js?v=20261011c"></script>
+<script src="/app.js?v=20261011d"></script>
 </body>
 </html>

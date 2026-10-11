@@ -9,7 +9,11 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>编辑器.Web</AssemblyName>
+    <!-- ⚠ 程序集名刻意用纯 ASCII：发布目录里混着桌面版 编辑器.exe 和
+         TdxClaw.Mcp.exe，开机自启脚本要靠文件名精确定位主程序；
+         中文文件名在 bat / 计划任务 / 控制台里会因为代码页被解析错。
+         只改 AssemblyName（输出文件名），RootNamespace 与代码保持中文不受影响。 -->
+    <AssemblyName>TdxClaw.Web</AssemblyName>
     <RootNamespace>编辑器.Web</RootNamespace>
   </PropertyGroup>
 

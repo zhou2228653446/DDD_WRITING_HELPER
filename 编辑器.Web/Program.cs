@@ -128,8 +128,10 @@ app.MapPost("/api/auth/login", async (HttpContext ctx, AccountStore accounts, Au
         return Results.Json(new { error = $"失败次数太多，约 {(int)Math.Ceiling((l.LockedUntil - DateTime.Now).TotalMinutes)} 分钟后再试" },
             statusCode: 429);
 
+    // 请求体可能整个是空的/非法 JSON：ReadFromJsonAsync 这时返回 null，
+    // 直接取属性会 NRE（发布时有 CS8602 警告）
     var req = await ctx.Request.ReadFromJsonAsync<LoginReq>();
-    var user = (req.User ?? "").Trim().ToLowerInvariant();
+    var user = (req?.User ?? "").Trim().ToLowerInvariant();
 
     // 未初始化：不说「密码不对」（那会让第一次进来的人莫名其妙，还白记失败次数），
     // 明确返回 needInit 让前端走初始化流程
@@ -139,7 +141,7 @@ app.MapPost("/api/auth/login", async (HttpContext ctx, AccountStore accounts, Au
     string subject;
     if (user == "self")
     {
-        if (!accounts.VerifySelf(req.Password ?? ""))
+        if (!accounts.VerifySelf(req?.Password ?? ""))
         {
             MarkFail(ip);
             return Results.Json(new { error = "账号或密码不对" }, statusCode: 401);
@@ -148,11 +150,11 @@ app.MapPost("/api/auth/login", async (HttpContext ctx, AccountStore accounts, Au
     }
     else if (user == "trial")
     {
-        var code = (req.Code ?? "").Trim();
+        var code = (req?.Code ?? "").Trim();
         // 四位数字：既是目录名也是试用者标识，格式先卡死
         if (!System.Text.RegularExpressions.Regex.IsMatch(code, @"^\d{4}$"))
             return Results.Json(new { error = "试用账号需要四位数字的个人码" }, statusCode: 400);
-        if (!accounts.VerifyTrial(req.Password ?? ""))
+        if (!accounts.VerifyTrial(req?.Password ?? ""))
         {
             MarkFail(ip);
             return Results.Json(new { error = "账号或密码不对" }, statusCode: 401);
@@ -226,7 +228,7 @@ app.MapPost("/api/auth/initialize", async (HttpContext ctx, AccountStore account
     if (!IsLoopback(ctx) && !string.IsNullOrEmpty(TokenFrom(ctx)))
         return Results.StatusCode(403);   // 已有会话令牌的非登录请求不在此列，防御性一行
     var req = await ctx.Request.ReadFromJsonAsync<InitReq>();
-    var pwd = (req.SelfPassword ?? "").Trim();
+    var pwd = (req?.SelfPassword ?? "").Trim();
     if (pwd.Length < 6) return Results.Json(new { error = "自用密码至少 6 位" }, statusCode: 400);
     accounts.Initialize(pwd);
     var token = sessions.Issue("self");
@@ -243,7 +245,7 @@ app.MapPost("/api/accounts/self-password", async (HttpContext ctx, AccountStore 
     var req = await ctx.Request.ReadFromJsonAsync<SelfPwdReq>();
     try
     {
-        accounts.ChangeSelfPassword(req.Old ?? "", req.New ?? "");
+        accounts.ChangeSelfPassword(req?.Old ?? "", req?.New ?? "");
         return Results.Ok(new { ok = true });
     }
     catch (InvalidOperationException e)

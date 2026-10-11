@@ -94,22 +94,39 @@ namespace 编辑器
             // ★ 原子写 + 保留上一版。
             // 整本书就这一个文件，直接 WriteAllText 会在「清空旧内容」和「写完新内容」
             // 之间留下一个时间窗：此刻断电或强杀，落盘的就是一个半截的 JSON，整本报废。
-            // 先写 .tmp 再用 Move 原子替换，这个窗口就没了。
-            // 替换前把上一版另存为 .bak：万一新版本本身有问题（序列化异常、误覆盖），
-            // 还有一个可捞的上一版。几十万字也就几 MB，这个代价值得。
+            // 先写 .tmp 再改名，这个窗口就没了。
+            //
+            // ★ 上一版留 .bak 用「改名」而不是「复制」（2026-10-11 改）：
+            //   File.Copy 要把整本书读一遍再写一遍——机械盘上等于每次保存多两倍 I/O，
+            //   而我们要保留的只是"上一版内容"，改名即位，零数据搬运。
+            //   多人同时写（自用 + 3 个试用）时，这一项直接把写盘量降到 1/4，
+            //   顺带缩短了保存锁的持有时间。
+            //   任何时刻磁盘上都有一份完整可读的正式文件：
+            //     ① 写 tmp 期间 → 旧文件还在
+            //     ② 旧文件改名为 .bak 后 → .bak 就是完整一版（正式文件短暂缺席）
+            //     ③ tmp 改名为正式文件后 → 新版就位
+            //   ②③ 之间断电的话正式文件会缺席，由 Load 用 .bak 顶上（见 Load 里的兜底）。
             var tmp = FilePath + ".tmp";
+            var bak = FilePath + ".bak";
             File.WriteAllText(tmp, json);
 
             try
             {
                 if (File.Exists(FilePath))
-                    File.Copy(FilePath, FilePath + ".bak", true);
-                // 同卷内的 Move(overwrite) 是原子操作
-                File.Move(tmp, FilePath, true);
+                    File.Move(FilePath, bak, true);     // 同卷改目录项，不搬数据
+                File.Move(tmp, FilePath);               // 同卷内的 Move 是原子操作
             }
             catch
             {
-                // 替换失败时把 .tmp 留在原地——内容还在，别让异常把它带走
+                // 两次改名之间失败：把 .bak 搬回来，绝不让正式文件缺席。
+                // （搬不回来也没关系——内容在 .bak 里躺着，Load 能顶上）
+                try
+                {
+                    if (!File.Exists(FilePath) && File.Exists(bak))
+                        File.Move(bak, FilePath, true);
+                }
+                catch { }
+                // .tmp 留在原地——内容还在，别让异常把它带走
                 try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
                 throw;
             }
@@ -117,10 +134,21 @@ namespace 编辑器
 
         public static NovelProject Load(string path)
         {
-            if (!File.Exists(path))
-                throw new FileNotFoundException("项目文件不存在", path);
+            // ★ 兜底：上次保存死在「旧版改名成 .bak」与「新文件就位」之间
+            //   （断电 / 强杀；窗口极短但存在，见 Save 里的说明）。
+            //   正式文件缺席，而 .bak 是完整的一版——透明地拿它顶上，
+            //   否则用户的稿子会"打不开"，可内容其实就在旁边躺着。
+            //   ⚠ FilePath 仍要设成**正式路径**（下面那句），这样下次 Save 自然归位。
+            var readPath = path;
+            if (!File.Exists(readPath))
+            {
+                var bak = path + ".bak";
+                if (!File.Exists(bak))
+                    throw new FileNotFoundException("项目文件不存在", path);
+                readPath = bak;
+            }
 
-            string json = File.ReadAllText(path);
+            string json = File.ReadAllText(readPath);
             var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
             var project = JsonSerializer.Deserialize<NovelProject>(json, options)
                 ?? throw new InvalidOperationException("项目文件格式错误");

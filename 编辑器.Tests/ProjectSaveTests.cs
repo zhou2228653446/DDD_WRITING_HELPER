@@ -67,6 +67,34 @@ public class ProjectSaveTests : IDisposable
     }
 
     [Fact]
+    public void 正式文件缺席时_Load用bak顶上并保持正式路径()
+    {
+        // 模拟"上一版改名成 .bak 之后、新文件就位之前"断电（Save 的 rename 链中间态）。
+        // .bak 是完整的一版，Load 必须能顶上——不然用户的稿子看起来就是"丢了"。
+        var p = NewProject();
+        p.Save();
+        p.Chapters[0].Content = "新文";
+        p.Save();
+
+        File.Delete(_file);            // 正式文件缺席（= 断电窗口）
+        var recovered = NovelProject.Load(_file);
+
+        Assert.Equal("原文", recovered.Chapters[0].Content);   // 内容来自 .bak
+        Assert.Equal(_file, recovered.FilePath);               // 路径仍指向正式文件，不是 .bak
+
+        // 再存一次：正式文件归位，且写的是恢复出来的这版内容
+        recovered.Save();
+        Assert.True(File.Exists(_file));
+        Assert.Equal("原文", NovelProject.Load(_file).Chapters[0].Content);
+    }
+
+    [Fact]
+    public void 正式文件与bak都不在时_抛文件不存在()
+    {
+        Assert.Throws<FileNotFoundException>(() => NovelProject.Load(_file));
+    }
+
+    [Fact]
     public void 路径为空时_抛明确异常而不是静默()
     {
         var p = new NovelProject { ProjectName = "x", FilePath = "" };

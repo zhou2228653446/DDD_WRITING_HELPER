@@ -1286,15 +1286,17 @@ app.MapGet("/api/character-appearances", (WorkspaceService ws) =>
 
 // ── MCP 实时跟随（与桌面端 settings.json 同一个文件、同一个键）──
 // 关掉之后，agent 通过 MCP 改稿时界面不再自动切章/刷新，避免正写着被打断。
-app.MapGet("/api/settings/mcp-live-sync", () =>
+// ⚠ 同样按主体：自用改的是与桌面端共享的全局 settings.json（与现状一致），
+//   试用者改的是自己那份——界面偏好属个人设置，不该跨账户互相影响。
+app.MapGet("/api/settings/mcp-live-sync", (HttpContext ctx) =>
 {
-    var path = Path.Combine(ConfigDir(), "settings.json");
+    var path = Path.Combine(SubjectConfigDir(SubjectOfCtx(ctx)), "settings.json");
     return Results.Ok(new { enabled = McpLiveBridge.LoadLiveSyncEnabled(path), path });
 });
 
-app.MapPost("/api/settings/mcp-live-sync", (EnabledReq req) =>
+app.MapPost("/api/settings/mcp-live-sync", (HttpContext ctx, EnabledReq req) =>
 {
-    var path = Path.Combine(ConfigDir(), "settings.json");
+    var path = Path.Combine(SubjectConfigDir(SubjectOfCtx(ctx)), "settings.json");
     McpLiveBridge.SaveLiveSyncEnabled(req.Enabled ?? true, path);
     return Results.Ok(new { ok = true, enabled = req.Enabled ?? true });
 });
@@ -1458,8 +1460,9 @@ app.MapGet("/api/skills", () =>
 });
 
 // 保存自定义技能。内置 id 一律拒绝（与桌面版 AddOrUpdate 同一语义）。
-app.MapPost("/api/skills/save", (SkillSaveReq req) =>
+app.MapPost("/api/skills/save", (HttpContext ctx, SkillSaveReq req) =>
 {
+    if (!CanEditGlobalConfig(ctx)) return GlobalConfigReadOnly();
     try
     {
         var all = NovelSkillStore.Load(ConfigDir());
@@ -1486,8 +1489,9 @@ app.MapPost("/api/skills/save", (SkillSaveReq req) =>
     catch (Exception ex) { return Results.BadRequest(new { error = ex.Message }); }
 });
 
-app.MapPost("/api/skills/{id}/delete", (string id) =>
+app.MapPost("/api/skills/{id}/delete", (HttpContext ctx, string id) =>
 {
+    if (!CanEditGlobalConfig(ctx)) return GlobalConfigReadOnly();
     try
     {
         var all = NovelSkillStore.Load(ConfigDir());
@@ -1500,8 +1504,9 @@ app.MapPost("/api/skills/{id}/delete", (string id) =>
 });
 
 // 导入：JSON 文本（单技能或数组），内置 id 拒绝导入
-app.MapPost("/api/skills/import", (SkillImportReq req) =>
+app.MapPost("/api/skills/import", (HttpContext ctx, SkillImportReq req) =>
 {
+    if (!CanEditGlobalConfig(ctx)) return GlobalConfigReadOnly();
     try
     {
         var incoming = NovelSkillStore.ParseImport(req.Json ?? "");
@@ -1554,8 +1559,9 @@ app.MapGet("/api/polish-presets", () =>
 });
 
 // 新增一条（重名忽略）或删除一条（内置预设不可删，与桌面版 RemovePolishPreset_Click 一致）
-app.MapPost("/api/polish-presets", (PolishPresetReq req) =>
+app.MapPost("/api/polish-presets", (HttpContext ctx, PolishPresetReq req) =>
 {
+    if (!CanEditGlobalConfig(ctx)) return GlobalConfigReadOnly();
     var path = Path.Combine(ConfigDir(), "polish_presets.json");
     var name = (req.Name ?? "").Trim();
     if (name.Length == 0) return Results.BadRequest(new { error = "名称不能为空" });
@@ -1624,8 +1630,9 @@ app.MapGet("/api/prompts", () =>
 });
 
 // 写一条覆写。value 为空或与默认相同 → 视为恢复默认（与桌面版 Set 同语义）
-app.MapPost("/api/prompts/set", (PromptSlotReq req) =>
+app.MapPost("/api/prompts/set", (HttpContext ctx, PromptSlotReq req) =>
 {
+    if (!CanEditGlobalConfig(ctx)) return GlobalConfigReadOnly();
     var store = AiPrompts.Store;
     if (store == null) return Results.StatusCode(503);
     if (!store.Exists(req.PresetId) || string.IsNullOrEmpty(req.Key))
@@ -1637,8 +1644,9 @@ app.MapPost("/api/prompts/set", (PromptSlotReq req) =>
 });
 
 // 恢复默认：单条（key）或整个方案（all = true）
-app.MapPost("/api/prompts/reset", (PromptResetReq req) =>
+app.MapPost("/api/prompts/reset", (HttpContext ctx, PromptResetReq req) =>
 {
+    if (!CanEditGlobalConfig(ctx)) return GlobalConfigReadOnly();
     var store = AiPrompts.Store;
     if (store == null) return Results.StatusCode(503);
     if (req.All == true) store.ResetAll(req.PresetId ?? store.ActivePresetId);
@@ -1647,8 +1655,9 @@ app.MapPost("/api/prompts/reset", (PromptResetReq req) =>
     return Results.Ok(new { ok = true });
 });
 
-app.MapPost("/api/prompts/active", (PromptActiveReq req) =>
+app.MapPost("/api/prompts/active", (HttpContext ctx, PromptActiveReq req) =>
 {
+    if (!CanEditGlobalConfig(ctx)) return GlobalConfigReadOnly();
     var store = AiPrompts.Store;
     if (store == null) return Results.StatusCode(503);
     if (!store.Exists(req.PresetId)) return Results.BadRequest(new { error = "方案不存在" });
@@ -1658,8 +1667,9 @@ app.MapPost("/api/prompts/active", (PromptActiveReq req) =>
     return Results.Ok(new { ok = true, active = store.ActivePresetId });
 });
 
-app.MapPost("/api/prompts/custom", (PromptCustomReq req) =>
+app.MapPost("/api/prompts/custom", (HttpContext ctx, PromptCustomReq req) =>
 {
+    if (!CanEditGlobalConfig(ctx)) return GlobalConfigReadOnly();
     var store = AiPrompts.Store;
     if (store == null) return Results.StatusCode(503);
 
@@ -1766,10 +1776,13 @@ app.MapPost("/api/world", async (WorkspaceService ws, JsonElement req) =>
 // 桌面端加了新配色/新材质，网页端自动就有，不会两边走偏。
 // ══════════════════════════════════════════════════════════════════
 
-app.MapGet("/api/appearance", () =>
+// ⚠ 外观是**按主体**存的（见 SubjectConfigDir）：自用改的是与桌面端共享的全局
+//   appearance.json；试用者改的是自己工作区里的那份。此前这里写死 ConfigDir()，
+//   试用者挑个配色会把自用（连同桌面版）的外观一起改掉。
+app.MapGet("/api/appearance", (HttpContext ctx) =>
 {
-    var cfg = new AppearanceManager(ConfigDir()).Load();
-    var bg = WebBgFile();
+    var cfg = new AppearanceManager(SubjectConfigDir(SubjectOfCtx(ctx))).Load();
+    var bg = WebBgFile(SubjectConfigDir(SubjectOfCtx(ctx)));
     return Results.Ok(new
     {
         scheme = cfg.PresetName,
@@ -1795,9 +1808,9 @@ app.MapGet("/api/appearance", () =>
 });
 
 // 保存：只在点「确定」时调用；「取消」与实时预览全在浏览器侧，不落盘
-app.MapPost("/api/appearance", (AppearanceReq req) =>
+app.MapPost("/api/appearance", (HttpContext ctx, AppearanceReq req) =>
 {
-    var mgr = new AppearanceManager(ConfigDir());
+    var mgr = new AppearanceManager(SubjectConfigDir(SubjectOfCtx(ctx)));
     var cfg = mgr.Load();
 
     if (AppearanceManager.GetColorScheme(req.Scheme) != null) cfg.PresetName = req.Scheme!;
@@ -1809,9 +1822,9 @@ app.MapPost("/api/appearance", (AppearanceReq req) =>
 });
 
 // 自定义背景图：桌面版存本机路径，网页版存服务器上的一个文件（任何设备打开都能看到）
-app.MapGet("/api/appearance/bg", () =>
+app.MapGet("/api/appearance/bg", (HttpContext ctx) =>
 {
-    var bg = WebBgFile();
+    var bg = WebBgFile(SubjectConfigDir(SubjectOfCtx(ctx)));
     if (bg == null) return Results.NotFound();
     var ext = Path.GetExtension(bg).ToLowerInvariant();
     var mime = ext switch
@@ -1837,18 +1850,20 @@ app.MapPost("/api/appearance/bg", async (HttpContext ctx) =>
     if (ms.Length == 0) return Results.BadRequest(new { error = "空文件" });
     if (ms.Length > 8 * 1024 * 1024) return Results.BadRequest(new { error = "图片请控制在 8MB 以内" });
 
-    foreach (var old in Directory.GetFiles(ConfigDir(), "web_bg.*")) File.Delete(old);
-    Directory.CreateDirectory(ConfigDir());
-    var path = Path.Combine(ConfigDir(), "web_bg." + ext);
+    var dir = SubjectConfigDir(SubjectOfCtx(ctx));
+    Directory.CreateDirectory(dir);
+    foreach (var old in Directory.GetFiles(dir, "web_bg.*")) File.Delete(old);
+    var path = Path.Combine(dir, "web_bg." + ext);
     await File.WriteAllBytesAsync(path, ms.ToArray());
 
     return Results.Ok(new { ok = true, bgUrl = "/api/appearance/bg?v=" + File.GetLastWriteTimeUtc(path).Ticks });
 });
 
-app.MapDelete("/api/appearance/bg", () =>
+app.MapDelete("/api/appearance/bg", (HttpContext ctx) =>
 {
-    if (Directory.Exists(ConfigDir()))
-        foreach (var old in Directory.GetFiles(ConfigDir(), "web_bg.*")) File.Delete(old);
+    var dir = SubjectConfigDir(SubjectOfCtx(ctx));
+    if (Directory.Exists(dir))
+        foreach (var old in Directory.GetFiles(dir, "web_bg.*")) File.Delete(old);
     return Results.Ok(new { ok = true });
 });
 
@@ -2160,9 +2175,9 @@ static string? FindPython()
     return null;
 }
 
-static string? WebBgFile()
+/// <summary>自定义背景图文件（按主体：自用用全局那份，试用用自己的）。</summary>
+static string? WebBgFile(string dir)
 {
-    var dir = ConfigDir();
     if (!Directory.Exists(dir)) return null;
     return Directory.GetFiles(dir, "web_bg.*").FirstOrDefault();
 }
@@ -2181,14 +2196,46 @@ static ApiConfig? LoadApiConfig(string subject)
     }
 }
 
+/// <summary>当前请求的主体（中间件已设置；回环与未设置时按自用处理）。</summary>
+static string SubjectOfCtx(HttpContext ctx) => ctx.Items["subject"] as string ?? "self";
+
+/// <summary>
+/// 主体专属的配置目录。
+///
+/// ★ 自用**必须**用全局配置目录（%APPDATA%\TdxClaw）：桌面版读的也是它，
+///   自用的外观 / Key / 设置与桌面端共享是设计前提，路径一变两边就分家。
+/// 试用各用自己工作区下的目录（D:\TdxClaw\trial-&lt;码&gt;）——试用者怎么折腾
+///   都影响不到自用。
+///
+/// 为什么要有这个统一入口：外观、设置、AI 配置这几类"个人偏好"文件都得按主体
+/// 分流，各端点自己拼路径迟早漏一处（外观曾经就是漏的那一处：试用者改配色
+/// 会直接改到全局文件，把自用连同桌面版一起改了）。
+/// </summary>
+static string SubjectConfigDir(string subject) =>
+    subject == "self" ? ConfigDir() : WorkspaceService.RootDirOf(subject);
+
 /// <summary>
 /// 主体专属的 AI API 配置文件路径。自用与桌面端**共享同一份**（现状不变，
 /// 桌面端配的 Key 网页版直接能用）；试用各一份——试用者怎么折腾都影响不到自用。
 /// </summary>
 static string ApiProfilesPath(string subject) =>
-    subject == "self"
-        ? Path.Combine(ConfigDir(), "api_profiles.json")
-        : Path.Combine(WorkspaceService.RootDirOf(subject), "api_profiles.json");
+    Path.Combine(SubjectConfigDir(subject), "api_profiles.json");
+
+/// <summary>
+/// 这个主体能不能改「全局创作配置」（提示词方案 / 技能 / 润色预设）。
+///
+/// 这几样是进程级单例加载、与桌面端共享同一份文件（AiPrompts.Store 在启动时
+/// 加载一次），写进去会**直接改到自用**。所以试用账号对它们是只读：
+/// 读照旧（能用上自用调好的方案，开箱体验不降），写一律 403。
+/// </summary>
+static bool CanEditGlobalConfig(HttpContext ctx) => SubjectOfCtx(ctx) == "self";
+
+static IResult GlobalConfigReadOnly() =>
+    Results.Json(new
+    {
+        error = "这些是与桌面端共享的全局配置，试用账号只能查看（避免改到管理员的设置）。",
+        readOnly = true,
+    }, statusCode: 403);
 
 public record BookNameReq([property: JsonPropertyName("name")] string? Name);
 public record NameReq([property: JsonPropertyName("name")] string? Name);

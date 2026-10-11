@@ -1160,6 +1160,13 @@ button.busy::before{
 #mcpCfgBtn{white-space:nowrap}
 #mcpCfgState{margin-left:8px}
 
+/* ── 试用只读提示（提示词 / 技能对话框顶部） ── */
+.ro-hint{
+  font-size:12px;color:var(--muted);background:var(--accent-soft);
+  border-left:2px solid var(--accent);border-radius:var(--radius-sm);
+  padding:5px 9px;margin:-6px 0 10px;
+}
+
 /* ── 系统开了「减弱动效」：全部压平，只留功能 ── */
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{

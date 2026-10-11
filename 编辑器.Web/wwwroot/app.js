@@ -90,7 +90,11 @@ $('#loginGo').onclick = async () => {
       d = await r.json().catch(() => ({}));
     }
     if (!r.ok) throw new Error(d.error || '登录失败');
-    if (d.token) localStorage.setItem('tdxSession', d.token);
+    if (d.token) {
+      localStorage.setItem('tdxSession', d.token);
+      // 提前写主体：整页刷新时外观等本地缓存要按新账户取键（loadMe 后还会再写一次）
+      try { localStorage.setItem('tdxSubject', d.subject || ''); } catch { }
+    }
     location.reload();   // 整页刷新：所有挂起请求带新会话重来
   } catch (e) {
     err.textContent = errMsg(e);
@@ -106,11 +110,46 @@ async function loadMe() {
     badge.textContent = me.isSelf ? '自用' : `试用 #${me.code}`;
     $('#logoutBtn').classList.toggle('hidden', false);
     window.__me = me;
+    // 账户标识落进 localStorage：外观等本地缓存按它分键（见 appearance.js 的 lsKey）。
+    // 同一台浏览器上自用与试用是两个账号，共用一个键会互相看到对方的配色。
+    try { localStorage.setItem('tdxSubject', me.subject || (me.isSelf ? 'self' : '')); } catch { }
+    applyTrialReadOnly(!me.isSelf);
   } catch { /* 未登录：横幅已由 api() 显示 */ }
 }
+
+// 试用账号对「全局创作配置」（提示词方案 / 技能 / 润色预设）只读——它们与桌面端
+// 共用同一份文件，能改就等于能改管理员那边的设置。后端同样会 403（这里是提前
+// 把按钮禁掉并说明原因，免得人点了没反应只能靠报错猜）。
+function applyTrialReadOnly(readOnly) {
+  window.__readOnlyGlobal = readOnly;
+  const ids = ['polishAdd', 'polishDel'];
+  ids.forEach(id => {
+    const el = $('#' + id);
+    if (!el) return;
+    el.disabled = readOnly;
+    if (readOnly) el.title = '试用账号只读：润色预设与管理员共享，改不了';
+  });
+  if (!readOnly) return;
+  $$('#promptDlg .dlg-btns button, #skillDlg .dlg-btns button').forEach(b => {
+    // 保留：关闭、导出（导出是只读操作）
+    if (b.id === 'pClose' || b.id === 'skillClose' || b.id === 'sExport') return;
+    b.disabled = true;
+  });
+  // 在标题下说清楚为什么（只插一次）
+  ['#promptDlg', '#skillDlg'].forEach(sel => {
+    const dlg = $(sel);
+    if (!dlg || dlg.querySelector('.ro-hint')) return;
+    const tip = document.createElement('div');
+    tip.className = 'ro-hint muted';
+    tip.textContent = '试用账号：这些配置与管理员（桌面端）共享，只能查看。';
+    dlg.querySelector('h3')?.after(tip);
+  });
+}
+
 $('#logoutBtn').onclick = async () => {
   try { await post('/api/auth/logout', {}); } catch { }
   localStorage.removeItem('tdxSession');
+  try { localStorage.removeItem('tdxSubject'); } catch { }   // 回到未登录，缓存键也回 self
   location.reload();
 };
 
@@ -124,7 +163,7 @@ $('#themeSel').onchange = async () => {
   await post('/api/appearance', {
     scheme: appearance.scheme, material: appearance.material, intensity: appearance.intensity,
   });
-  localStorage.setItem('appearance', JSON.stringify(appearanceDraft));
+  localStorage.setItem(lsKey('appearance'), JSON.stringify(appearanceDraft));
   log(`配色已切换：${schemeName(appearance.scheme)}`);
 };
 $('#appearanceBtn').onclick = openAppearanceDlg;
@@ -1419,8 +1458,8 @@ function setFloat(on, pos) {
     ['left', 'top', 'right', 'bottom'].forEach(k => { rightPanel.style[k] = ''; });
   }
   try {
-    localStorage.setItem('aiPanelFloat', on ? '1' : '0');
-    if (on && pos) localStorage.setItem('aiPanelPos', JSON.stringify(pos));
+    localStorage.setItem(lsKey('aiPanelFloat'), on ? '1' : '0');
+    if (on && pos) localStorage.setItem(lsKey('aiPanelPos'), JSON.stringify(pos));
   } catch { /* 隐私模式禁 localStorage，不影响功能 */ }
 }
 
@@ -1453,7 +1492,7 @@ const endAiDrag = () => {
   aiDragOff = null;
   try {
     const r = rightPanel.getBoundingClientRect();
-    localStorage.setItem('aiPanelPos', JSON.stringify({ left: Math.round(r.left), top: Math.round(r.top) }));
+    localStorage.setItem(lsKey('aiPanelPos'), JSON.stringify({ left: Math.round(r.left), top: Math.round(r.top) }));
   } catch { }
 };
 $('#aiPanelHead').addEventListener('pointerup', endAiDrag);
@@ -1462,8 +1501,8 @@ $('#aiPanelHead').addEventListener('pointercancel', endAiDrag);
 // 恢复上次的浮动状态。窄屏不自动浮动 —— 浮层会盖住大半屏幕，反而更没法写。
 (function restoreFloat() {
   try {
-    if (localStorage.getItem('aiPanelFloat') !== '1' || window.innerWidth < 1100) return;
-    const raw = localStorage.getItem('aiPanelPos');
+    if (localStorage.getItem(lsKey('aiPanelFloat')) !== '1' || window.innerWidth < 1100) return;
+    const raw = localStorage.getItem(lsKey('aiPanelPos'));
     setFloat(true, raw ? JSON.parse(raw) : null);
   } catch { }
 })();

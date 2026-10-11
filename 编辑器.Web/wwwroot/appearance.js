@@ -240,10 +240,20 @@ const styleStr = obj => Object.entries(obj).map(([k, v]) => `${k}:${v}`).join(';
 
 // ---------------- 与服务端同步 ----------------
 
+// localStorage 的键一律带账户前缀。
+// 同一台浏览器上「自用」和「试用」是两个账号（各自的外观、面板位置都不同），
+// 共用一个键的话，试用者改的配色会被自用读到——首次绘制会闪一下别人的颜色。
+// 主体在登录成功时写入 tdxSubject（见 app.js 的 loadMe / 登录 / 登出）。
+function lsKey(name) {
+  let subj = 'self';
+  try { subj = localStorage.getItem('tdxSubject') || 'self'; } catch { /* 隐私模式禁 localStorage */ }
+  return name + '::' + subj;
+}
+
 async function loadAppearance() {
   // 先用本地缓存画一帧，避免"打开还是默认色、闪一下才变"（服务器仍是权威）
   try {
-    const cached = JSON.parse(localStorage.getItem('appearance') || 'null');
+    const cached = JSON.parse(localStorage.getItem(lsKey('appearance')) || 'null');
     if (cached) appearanceDraft = cached;
   } catch { /* 缓存坏了就当没有 */ }
 
@@ -252,7 +262,7 @@ async function loadAppearance() {
   // 服务器是权威：以它为准（本地缓存只用于首帧）
   appearanceDraft = pick(appearance);
   applyAppearance(appearanceDraft);
-  localStorage.setItem('appearance', JSON.stringify(appearanceDraft));
+  localStorage.setItem(lsKey('appearance'), JSON.stringify(appearanceDraft));
   fillSchemeSelect();
 }
 
@@ -379,7 +389,7 @@ document.getElementById('apOk').onclick = async () => {
   appearance.scheme = r.scheme; appearance.material = r.material; appearance.intensity = r.intensity;
   appearanceDraft = pick(appearance);
   applyAppearance(appearanceDraft);
-  localStorage.setItem('appearance', JSON.stringify(appearanceDraft));
+  localStorage.setItem(lsKey('appearance'), JSON.stringify(appearanceDraft));
   fillSchemeSelect();
   document.getElementById('appearanceDlg').close();
   log(`外观已保存：${schemeName(r.scheme)} + ${materialName(r.material)}（强度 ${r.intensity}）`);

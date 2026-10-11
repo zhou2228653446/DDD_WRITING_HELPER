@@ -49,6 +49,21 @@ internal static class SelfTest
             });
             p.Save();
 
+            // ---- 冷启动：Session 还没打开任何项目 ----
+            //   agent 刚接上、用户还没说"打开某某书"的这一段时间，手册必须已经可读；
+            //   章节类资源则应为空（此时要它们也没有）。这段必须放在 session 第一次
+            //   project_open 之前跑 —— Session 是静态的，一旦打开就撤不回去了。
+            {
+                var cold = await CallAsync(new List<string> { Req(1, "resources/list", new { }) });
+                var coldUris = cold[0].RootElement.GetProperty("result").GetProperty("resources")
+                                       .EnumerateArray()
+                                       .Select(x => x.GetProperty("uri").GetString() ?? "").ToList();
+                Assert("冷启动（未打开项目）时 resources/list 仍给 tdx://guide",
+                    coldUris.Contains("tdx://guide"), string.Join(",", coldUris));
+                Assert("冷启动时没有章节资源",
+                    !coldUris.Any(u => u.StartsWith("tdx://chapter/")), string.Join(",", coldUris));
+            }
+
             // ---- 组装一次完整会话 ----
             var requests = new List<string>
             {
@@ -69,6 +84,7 @@ internal static class SelfTest
                 Req(14, "tools/call", new { name = "project_export", arguments = new { format = "txt", output = exportPath } }),
                 Req(15, "tools/call", new { name = "不存在的工具", arguments = new { } }),
                 Req(16, "不存在的办法", new { }),                            // 协议级错误
+                Req(17, "resources/list", new { }),                          // ★ 还没打开任何项目时
             };
 
             // ---- 跑一遍真实 stdio 循环 ----
@@ -78,8 +94,8 @@ internal static class SelfTest
                               .Select(l => JsonDocument.Parse(l)).ToList();
 
             // ---- 断言 ----
-            // 16 个有 id 的请求 + 1 条通知（通知不回）→ 恰好 16 条响应
-            Assert("响应条数 = 有 id 的请求数（通知不产生响应）", lines.Count == 16, lines.Count.ToString());
+            // 17 个有 id 的请求 + 1 条通知（通知不回）→ 恰好 17 条响应
+            Assert("响应条数 = 有 id 的请求数（通知不产生响应）", lines.Count == 17, lines.Count.ToString());
 
             var init = lines[0].RootElement;
             Assert("initialize 返回 protocolVersion",
@@ -95,13 +111,28 @@ internal static class SelfTest
 
             var tools = lines[1].RootElement.GetProperty("result").GetProperty("tools").EnumerateArray()
                               .Select(t => t.GetProperty("name").GetString()!).ToList();
-            Assert("tools/list 列出 28 个工具", tools.Count == 28, string.Join(",", tools));
+            Assert("tools/list 列出 29 个工具", tools.Count == 29, string.Join(",", tools));
             Assert("工具集覆盖 读/写/导出/AI",
                 tools.Contains("chapter_read") && tools.Contains("chapter_write")
                 && tools.Contains("project_export") && tools.Contains("ai_write"), "");
+            // 手册（docs/AGENT_GUIDE.md 编进程序集）——它是"agent 自己知道怎么做"的入口，
+            // 读不出来就等于没写，所以这里必须断言内容真的在
+            Assert("guide 工具在列表里且排在第一个（agent 一眼能看到）",
+                tools.FirstOrDefault() == "guide", string.Join(",", tools));
+            Assert("initialize 的 instructions 来自手册（不是兜底文本）",
+                (inst.GetString() ?? "").Contains("指南") || (inst.GetString() ?? "").Contains("guide"),
+                Cut(inst.GetString() ?? "", 40));
             Assert("工具都有 description（agent 靠它决定调谁）",
                 lines[1].RootElement.GetProperty("result").GetProperty("tools").EnumerateArray()
                     .All(t => t.GetProperty("description").GetString()!.Length > 5), "");
+
+            // ★ 手册必须无条件出现在资源列表里（不管有没有打开书）——
+            //   "不知道该干什么"的时刻恰恰是 agent 最需要手册的时刻
+            var warmUris = lines[16].RootElement.GetProperty("result").GetProperty("resources")
+                                     .EnumerateArray()
+                                     .Select(x => x.GetProperty("uri").GetString() ?? "").ToList();
+            Assert("resources/list 无条件含 tdx://guide（手册）", warmUris.Contains("tdx://guide"),
+                string.Join(",", warmUris));
 
             Assert("未打开项目时给可操作提示", IsError(lines[2]) && Text(lines[2]).Contains("project_open"), Cut(Text(lines[2]), 40));
             Assert("project_open 成功并显示项目名", Text(lines[3]).Contains("MCP自检之书"), "");
@@ -219,6 +250,8 @@ internal static class SelfTest
                 Req(5, "resources/read", new { uri = "http://别的地方/x" }),          // 不认识的 URI
                 Req(6, "tools/call", new { name = "project_create", arguments = new { name = "Agent新书", directory = createDir, description = "由 MCP 自检创建" } }),
                 Req(7, "tools/call", new { name = "ai_config_check", arguments = new { probe = false } }),
+                Req(8, "tools/call", new { name = "guide", arguments = new { } }),                  // 手册（不依赖项目）
+                Req(9, "resources/read", new { uri = "tdx://guide" }),                              // 同一份文本的资源入口
             });
 
             // ---- resources/list ----
@@ -264,6 +297,17 @@ internal static class SelfTest
                 Assert("H4 ai_config_check 不泄露 Key", !chk.Contains(key), "");
             else
                 Skip("H4 ai_config_check 不泄露 Key", "当前未配置 API Key，无从比对；配好后再跑一次");
+
+            // ---- 手册：guide 工具 与 tdx://guide 必须是同一份完整文本 ----
+            var manual = Text(hLines[7]);
+            Assert("H5 guide 工具返回手册正文（含黄金规则与剧本小节）",
+                manual.Contains("黄金规则") && manual.Contains("任务剧本") && manual.Length > 2000,
+                $"{manual.Length} 字：{Cut(manual, 40)}");
+            var manualRes = hLines[8].RootElement.GetProperty("result").GetProperty("contents")[0]
+                                    .GetProperty("text").GetString() ?? "";
+            Assert("H5 tdx://guide 资源与 guide 工具同一份文本", manualRes == manual,
+                $"{manualRes.Length} vs {manual.Length}");
+            Assert("H5 资源列表里含 tdx://guide", uris.Contains("tdx://guide"), string.Join(",", uris));
         }
 
         // ==================================================================
@@ -276,7 +320,8 @@ internal static class SelfTest
                                .Select(x => x.GetProperty("name").GetString() ?? "").ToList();
             Assert("I1 工具含 ai_config_check", names.Contains("ai_config_check"), "");
             Assert("I2 工具含 project_create", names.Contains("project_create"), "");
-            Assert("I3 工具数为 28", names.Count == 28, names.Count.ToString());
+            Assert("I3 工具数为 29（新增 guide 手册工具）", names.Count == 29, names.Count.ToString());
+            Assert("I3b 工具含 guide（agent 自己能读到怎么做）", names.Contains("guide"), "");
             Assert("I4 章节结构管理齐备（改名/删除/重排）",
                 names.Contains("chapter_rename") && names.Contains("chapter_delete")
                 && names.Contains("chapter_reorder"), "");

@@ -1,0 +1,138 @@
+# TdxClaw 写作助手 · Agent 手册
+
+这份文档是写给 **agent**（接进本服务的 AI 客户端）看的：读一遍就知道该怎么做、按什么顺序做、
+什么不能做。人类用户也可以拿它当说明书。
+
+MCP 服务器在 `initialize` 时会返回下面 `BEGIN/END:instructions` 之间的内容作为 instructions；
+全文则随时可以通过 **`guide` 工具**、或资源 **`tdx://guide`** 再读一次。
+
+<!-- BEGIN:instructions -->
+TdxClaw 写作助手 MCP 服务器：直接读写 .tdxproj 长篇写作项目（小说 / 学术论文 / 公文 / 通用写作），并与界面端共享同一套 AI 提示词方案、设定集、结构化人物卡、记忆与文献库。如果你不确定怎么做，先调用 guide 工具读完整手册（黄金规则 / 工具地图 / 任务剧本 / 长篇上下文治理 / 出错处置）。
+
+推荐工作流：
+1. 找书与打开：先用 project_list 查找 .tdxproj，调用 project_open(path) 打开，或用 project_create(name, directory/path, description, ...) 新建（支持直接传完整 .tdxproj 路径并顺带填初始设定）；打开后优先调 project_status 获取全书进度画像与下一步建议。
+2. 读稿与检索：chapters_list 看目录，chapter_read 读单章，chapter_search 全书搜词查伏笔/矛盾，settings_get 读五项贯穿设定（含结构化人物卡汇总），settings_book_get 读 12 章设定集，characters_list / characters_stats 看人物卡与出场统计，memory_get 读 AI 写作记忆。
+3. 写稿与管章：chapter_create(title, content, summary) 新建章，chapter_write(number, content, mode=replace/append) 写正文，chapter_rename 改标题，chapter_reorder 调序，chapter_delete 删章，chapter_summary_set(number, summary) 写章节梗概（每章写完建议顺手更新梗概，续写/审稿会自动注入全部前情梗概 + 紧邻上章末尾 800 字）。
+4. 改设定与记忆：settings_set 支持单项 (field, text) 或批量同时传多个字段 (full_outline / chapter_outline / characters / background / writing_style / narrative_viewpoint / description)；settings_book_set(key, content, mode) 改设定集（12 章内置 key：world / power / geography / history / factions / customs / characters / relations / timeline / foreshadow / style / glossary）；character_upsert(name, role, age, gender, occupation, appearance, personality, background, abilities, relationships, notes) 管理结构化人物卡；memory_set 沉淀作者长期偏好。
+5. 调用本软件 AI（ai_write）：自动注入五项设定 + 结构化人物卡 + 设定集 + 章节梗概链 + 上章末尾 + 记忆 + 文献库。task 支持 continue（续写，默认 maxTokens=16384）/ polish（润色）/ expand（扩写，默认 16384）/ review（一致性审稿）/ name（起名）/ chat（自由问答，默认 16384）/ outline / chapter_outline / character / background / write_style / setting_book。默认 writeBack=false 只返回文本；显式传 writeBack=true 才落盘。报失败时先调 ai_config_check 诊断。
+6. 安全与回滚：所有写操作均串行加锁、写前自动存快照（高频轻量设定/人物卡修改自动合并防刷屏）并检查文件冲突；改错可随时用 snapshot_list + snapshot_restore 回滚；完稿用 project_export(format, output/path) 导出 docx / pdf / txt。
+7. 资源（tdx://）：打开项目后可通过 resources/list 与 resources/read 直接读取 tdx://chapter/{number}、tdx://settings/{key}、tdx://settings-book/{key}；tdx://guide 是本手册，任何状态下都能读。
+<!-- END:instructions -->
+
+---
+
+## 1. 这是什么
+
+一个**长篇写作工具**的 MCP 服务。核心不是"再写一段文本"，而是**让几十万字还不崩结构**：
+
+- 服务端替你把上下文管起来（先省再压），你不需要自己灌一堆设定；
+- AI 失败**绝不写回正文**，写盘前自动存快照，写盘原子替换；
+- 章节梗概成链、设定集当事实基准、人物卡结构化存储。
+
+一本书 = 一个 `.tdxproj` 文件（JSON）。**它是唯一权威**，不要绕过本服务直接改它。
+
+## 2. 黄金规则（八条，务必遵守）
+
+1. **写之前先读**：改任何一章前，先 `chapter_read` 或 `chapter_search` 看过现文；不要凭记忆改稿。
+2. **正文落盘要显式**：`ai_write` 默认只返回文本（`writeBack=false`）。**先把文本给用户看，用户认可再传 `writeBack=true`**——这是"AI 失败绝不写回正文"的约定，别默认落盘。
+3. **覆盖是危险动作**：`chapter_write(mode=replace)`、`chapter_delete`、`snapshot_restore` 会改动已有内容；执行前先跟用户确认。删改前服务会自动存快照，但**没确认过就别做**。
+4. **每写完一章，顺手写梗概**：`chapter_summary_set(number, summary)`。长篇靠梗概链保持跨章连贯，缺梗概是"后期崩结构"的第一原因。
+5. **用户的长期偏好沉淀到记忆**：`memory_set`（`mode=append`）。用户说"别写死主角""对话别太长"这类纠正，不记下来下一轮就忘了。
+6. **不要重复灌上下文**：`ai_write` 已自动带上设定/人物卡/设定集/梗概链/上章末尾/记忆/文献库。你在 instruction 里再抄一遍设定，等于双倍 token + 版本冲突。
+7. **一个会话一本书**：`project_open` 之后所有读写都针对它；要换书就再 `project_open`。用户网页上正开着的那本会被你的 `project_open` 同步切换（他在旁边看着）。
+8. **不确定就先读手册**：`guide` 工具或 `tdx://guide`，含任务剧本与出错处置。
+
+## 3. 工具地图（29 个，按用途分组）
+
+**项目（4）**
+| 工具 | 用途 |
+|---|---|
+| `project_list` | 找 `.tdxproj`（不传目录就扫默认项目目录 / 当前目录 / 文档 / 桌面） |
+| `project_open` | 打开某本书，之后所有操作都针对它 |
+| `project_create` | 新建一本（自动补设定集 12 章骨架；同名文件存在时报错而不是覆盖） |
+| `project_status` | 进度画像 + 「下一步该做什么」的建议；用户问"写到哪了"先用它 |
+
+**读（7）**
+`chapters_list`（目录）/ `chapter_read`（单章，可 `maxChars` 截断）/ `chapter_search`（全书搜词，查伏笔与矛盾）/ `settings_get`（五项贯穿设定 + 视角 + 简介）/ `settings_book_get`（设定集清单或单章）/ `characters_list`（人物卡）/ `memory_get`（AI 写作记忆）
+
+**写（11）**
+`chapter_create` / `chapter_write`（replace\|append）/ `chapter_rename` / `chapter_reorder` / `chapter_delete` / `chapter_summary_set` / `settings_set`（单项或批量）/ `settings_book_set` / `character_upsert`（只改传入字段，不传的保持原样）/ `character_delete` / `memory_set`（append\|replace）
+
+**回滚（2）** `snapshot_list` / `snapshot_restore`（恢复前又会自动存一份当前状态，所以这一步本身也可反悔）
+
+**AI 与产出（4）**
+`ai_write`（与界面点按钮完全同源：提示词方案 + 全部上下文 + 技能）/ `ai_config_check`（AI 报错先跑它；401=Key 失效或欠费，404=模型名不对；它永不输出 Key）/ `project_export`（docx / pdf / txt，论文版式传 `paperMode=true`）/ `guide`（本手册）
+
+**统计（1）** `characters_stats`（出场章次 / 总次数 / 连续缺席几章；纯本地扫描，不花 token）
+
+**资源（`resources/*`）**：`tdx://chapter/{n}`、`tdx://settings/{key}`、`tdx://settings-book/{key}`、`tdx://guide`。支持资源的客户端可以直接把整章挂进上下文，比"先 list 再 read"省一轮往返。
+
+## 4. 五套剧本（照做即可）
+
+**A. 从零立一本书**
+`project_create(name, description)` → `ai_write(task=outline, writeBack=true)` 生成全文大纲
+→ `ai_write(task=character, writeBack=true)` 生成人物 → 用 `character_upsert` 补齐人物卡
+→ `ai_write(task=chapter_outline, writeBack=true)` 排章节大纲 → `chapter_create` 建章节
+→ 逐章 `ai_write(task=continue, number=N, writeBack=true)` → 每章 `chapter_summary_set`。
+
+**B. 给已有的书续写一章**
+`project_status` 看进度 → `chapters_list` 找章 → `chapter_read` 读上章结尾 + `chapter_summary_set` 补前情
+→ `ai_write(task=continue, number=N, instruction="这一章要发生什么…")`（**先不落盘**）
+→ 把文本给用户确认 → `ai_write(..., writeBack=true)` 或对生成结果 `chapter_write(mode=append)`
+→ `chapter_summary_set(N, "本章梗概")` → `project_export` 需要时导出。
+
+**C. 一致性审稿**
+`ai_write(task=review, number=N)` 拿到矛盾清单（它会把设定集放到待审正文旁边逐条核对）
+→ 需要证据时用 `chapter_search(关键词)` 全书找 → 把清单给用户，逐项确认后再改。
+
+**D. 设定改了，回填前文**
+`settings_set(field=..., text=...)` 改设定 → `chapter_search` 找出所有受影响的位置
+→ 逐处 `chapter_write` 修正（每处都先说清楚改什么）→ 重要改动前提醒用户可用 `snapshot_list` 回滚。
+
+**E. 导出交稿**
+`project_export(format=docx|pdf|txt, output="完整路径")`；论文模式加 `paperMode=true`（首页连排摘要 + 数字编号章节 + GB/T 7714 文献）。
+
+## 5. 长篇上下文怎么管（为什么不要自己灌）
+
+服务端已经按"装不下先省再压"的顺序处理：**当前章正文 + 紧邻上章末尾 800 字 + 全部前情梗概
++ 设定集 + 人物卡 + 记忆 + 文献库 + 提示词方案 + 技能**，超预算会先省后压。
+
+- 你该做的是**保证这些上游数据是新的**：梗概写了没、设定改了没、人物卡补了没。
+- 你不该做的是把正文/设定**重复塞进 instruction**——那会让 token 翻倍，而且你手上那份可能
+  跟文件里的已经不同，模型会照着你给的旧版本写。
+- 真要限定本次写法时，instruction 只写**这次的要求**："这一章从苏晚视角写，节奏慢一点"。
+
+## 6. 出错怎么办
+
+工具返回 `isError=true` 时，**先读文本里的提示**，它通常已经说明原因：
+
+| 现象 | 原因与处置 |
+|---|---|
+| `还没有打开项目` | 先 `project_open`（或 `project_list` 找） |
+| `没有第 N 章` | `chapters_list` 核对章号；注意 `chapter_reorder` 之后章号会整体重排 |
+| `ai_write` 报 401 / 403 | Key 失效或欠费 → `ai_config_check` 确认；提示用户去「AI 设置」换 Key |
+| `ai_write` 报 404 | 模型名不对 → `ai_config_check`，让用户改配置里的模型名 |
+| `文件已被别处修改` / 冲突 | 界面端正在编辑同一本书：重新读一次（`project_status` / `chapter_read`）再重试，别硬写 |
+| `ai_write` 超时/中断 | 生成过长：调小 `maxTokens`，或分两次（`expand` 续着扩写） |
+
+## 7. 明文禁区
+
+- **不要直接编辑 `.tdxproj` 文件**（除非用户明确要求且你清楚后果）：绕过服务就没有快照、
+  没有原子写、没有冲突检查，一次写坏就是一整本书。
+- **不要在未经确认时删除章节 / 覆盖正文 / 恢复快照**——这些动作服务端都会自动存快照，
+  但那是兜底，不是许可。
+- **不要把 API Key 写进任何输出**（`ai_config_check` 本身已保证不回显 Key）。
+
+## 8. 通过 HTTP 接入时（网页版服务）
+
+stdio 之外的另一种接法：网页版把同一套工具挂在 `POST /mcp` 上。
+
+- 同一台机器：`http://127.0.0.1:5280/mcp`，回环免登录，**连令牌都不用**。
+- 局域网 / 外网：地址填公网域名（如 `http://ddd-lighthouse.ddns.net:5280/mcp`），
+  并且**必须带登录令牌**（`Authorization: Bearer <令牌>`，不支持自定义请求头的客户端
+  可用 `?access_token=<令牌>`）。令牌在网页「帮助 → 接入 Agent」里一键生成。
+- 端点**只接受 POST**，`GET /mcp` 返回 405，没有 SSE 长连接。客户端里请选
+  `http` / `streamable-http` 类型；坚持要 SSE 的客户端请改走 stdio。
+- 令牌是服务进程内存态：**服务重启 / 重新发布后失效**，重新生成一次即可。
+- 网页界面会实时跟随你的操作（对着同一本书），用户在旁边看得见你在改哪一章——
+  因此**动作前说清楚要做什么**，比默默写盘体验好得多。

@@ -236,8 +236,10 @@ internal static class McpServer
                         ["version"] = "1.0.0",
                     },
                     // ★ Antigravity 等支持懒加载的客户端会把 instructions 保存为 instructions.md 注入系统提示词，
-                    // 让 Agent 不用逐个翻 28 个工具的 JSON schema 就能掌握完整工作流。
-                    ["instructions"] = ServerInstructions,
+                    // 让 Agent 不用逐个翻工具的 JSON schema 就能掌握完整工作流。
+                    // 内容来自 docs/AGENT_GUIDE.md 的 BEGIN/END:instructions 段（见 Guide.cs）——
+                    // 手册是唯一真源，这里不再写死一份，免得两处漂移。
+                    ["instructions"] = Guide.Instructions,
                 });
 
             case "ping":
@@ -274,16 +276,8 @@ internal static class McpServer
         }
     }
 
-    private const string ServerInstructions =
-        "TdxClaw 写作助手 MCP 服务器：直接读写 .tdxproj 长篇写作项目（小说 / 学术论文 / 公文 / 通用写作），并与桌面端共享同一套 AI 提示词方案、设定集、结构化人物卡、记忆与文献库。\n\n" +
-        "推荐工作流：\n" +
-        "1. 找书与打开：先用 project_list 查找 .tdxproj，调用 project_open(path) 打开，或用 project_create(name, directory/path, description, ...) 新建（支持直接传完整 .tdxproj 路径并顺带填初始设定）；打开后优先调 project_status 获取全书进度画像与下一步建议。\n" +
-        "2. 读稿与检索：chapters_list 看目录，chapter_read 读单章，chapter_search 全书搜词查伏笔/矛盾，settings_get 读五项贯穿设定（含结构化人物卡汇总），settings_book_get 读 12 章设定集，characters_list / characters_stats 看人物卡与出场统计，memory_get 读 AI 写作记忆。\n" +
-        "3. 写稿与管章：chapter_create(title, content, summary) 新建章，chapter_write(number, content, mode=replace/append) 写正文，chapter_rename 改标题，chapter_reorder 调序，chapter_delete 删章，chapter_summary_set(number, summary) 写章节梗概（每章写完建议顺手更新梗概，续写/审稿会自动注入全部前情梗概 + 紧邻上章末尾 800 字）。\n" +
-        "4. 改设定与记忆：settings_set 支持单项 (field, text) 或批量同时传多个字段 (full_outline / chapter_outline / characters / background / writing_style / narrative_viewpoint / description)；settings_book_set(key, content, mode) 改设定集（12 章内置 key：world / power / geography / history / factions / customs / characters / relations / timeline / foreshadow / style / glossary）；character_upsert(name, role, age, gender, occupation, appearance, personality, background, abilities, relationships, notes) 管理结构化人物卡；memory_set 沉淀作者长期偏好。\n" +
-        "5. 调用本软件 AI（ai_write）：自动注入五项设定 + 结构化人物卡 + 设定集 + 章节梗概链 + 上章末尾 + 记忆 + 文献库。task 支持 continue（续写，默认 maxTokens=16384）/ polish（润色）/ expand（扩写，默认 16384）/ review（一致性审稿）/ name（起名）/ chat（自由问答，默认 16384）/ outline / chapter_outline / character / background / write_style / setting_book。默认 writeBack=false 只返回文本；显式传 writeBack=true 才落盘。报失败时先调 ai_config_check 诊断。\n" +
-        "6. 安全与回滚：所有写操作均串行加锁、写前自动存快照（高频轻量设定/人物卡修改自动合并防刷屏）并检查文件冲突；改错可随时用 snapshot_list + snapshot_restore 回滚；完稿用 project_export(format, output/path) 导出 docx / pdf / txt。\n" +
-        "7. 资源（tdx://）：打开项目后可通过 list_resources / read_resource 直接读取 tdx://chapter/{number}、tdx://settings/{key}、tdx://settings-book/{key}。";
+    // initialize 的 instructions 已移到 docs/AGENT_GUIDE.md（经 Guide.Instructions 注入），
+    // 见文件顶部的说明——不要在代码里再养第二份工作流描述。
 
     // ==================================================================
     // 工具清单
@@ -291,6 +285,17 @@ internal static class McpServer
 
     private static List<ToolDef> ToolList() => new()
     {
+        // 放在第一个：agent 扫工具列表时先看到它。手册内容来自 docs/AGENT_GUIDE.md
+        // （见 Guide.cs），含黄金规则、工具地图、五套剧本、长篇上下文治理、出错处置。
+        new ToolDef
+        {
+            name = "guide",
+            description =
+                "读这份使用手册（完整版）：黄金规则、29 个工具的分组地图、五套任务剧本（从零立书 / 续写 / 审稿 / " +
+                "改设定回填 / 导出）、长篇上下文该怎么管、出错怎么处置、明文禁区、HTTP 接入方式。" +
+                "★ 第一次接入、或不确定「下一步该调哪个工具」时，先读它。" +
+                "不支持工具以外通道的客户端也可以读资源 tdx://guide，两者是同一份文本。",
+        },
         new ToolDef
         {
             name = "project_list",
@@ -706,6 +711,9 @@ internal static class McpServer
             // 不需要项目的工具（只调一次——Open 有副作用，重复调用会白白刷新文件指纹）
             switch (name)
             {
+                case "guide":
+                    // 手册与项目无关：没打开书也要能读到（正是这种时候最需要它）
+                    return ToolText(Guide.Text, false);
                 case "project_list":
                 {
                     var r0 = NovelTools.ListProjects(args);

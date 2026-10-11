@@ -19,4 +19,12 @@
     <ProjectReference Include="..\编辑器\编辑器.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Agent 手册编进程序集（见 Guide.cs）：md 是唯一真源，运行时读出来当
+         initialize 的 instructions 与 guide 工具/资源的内容。
+         ⚠ 中文路径 + 文件名，必须显式给 LogicalName——否则生成的资源名依赖
+            文件名拼装，跨工具链容易对不上。 -->
+    <EmbeddedResource Include="..\docs\AGENT_GUIDE.md" LogicalName="editor.mcp.agent-guide.md" />
+  </ItemGroup>
+
 </Project>

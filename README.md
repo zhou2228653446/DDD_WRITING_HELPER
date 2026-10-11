@@ -513,6 +513,16 @@ Cursor / WorkBuddy / Cline 这类 AI 客户端就能直接打开你的 `.tdxproj
 | 产出 | `project_export`（docx / pdf / txt，论文版式传 `paperMode`）、**`ai_write`** |
 | 诊断 · 回滚 | `ai_config_check`（服务商/模型/Key 状态 + 可选真连通探测；**绝不输出 Key 本身**）、`snapshot_restore` |
 
+**agent 怎么知道该怎么做**：服务器自带一份手册 `docs/AGENT_GUIDE.md`（黄金规则、工具地图、
+五套任务剧本、长篇上下文治理、出错处置、明文禁区），并编进程序集。agent 有三个入口读到它：
+
+- `initialize` 返回的 **instructions**（手册里 `BEGIN/END:instructions` 之间的那段；Antigravity 等
+  客户端会存成 `instructions.md` 注入系统提示词，接入即生效）；
+- **`guide` 工具**（`tools/list` 里的第一个，任何时候可调，不依赖项目）；
+- 资源 **`tdx://guide`**（支持资源的客户端可以直接 @ 引用；没打开项目时也列得出来）。
+
+改手册就改那一个 md 文件——instructions、工具、资源三处内容是同一份，不会漂移。
+
 设计取向是**让 agent 能独立完成整本书**：凡是界面里能做、MCP 里做不到的操作都补齐了——
 用户说一句「这两章合并」「刚才那次改坏了撤回」，agent 得真能做，而不是回一句"我做不了"。
 

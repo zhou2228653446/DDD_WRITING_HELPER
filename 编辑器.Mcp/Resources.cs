@@ -48,10 +48,24 @@ internal static class Resources
         },
     };
 
+    /// <summary>手册资源的 URI。★ 它**不需要项目**，任何状态下都列、都能读——
+    /// agent 最需要手册的时候恰恰是"还没打开书、不知道该干什么"的时候。</summary>
+    public const string GuideUri = Scheme + "://guide";
+
     /// <summary>当前项目可列出的资源。没开项目就返回空列表（不是错误）。</summary>
     public static List<object> List(Session s)
     {
-        var list = new List<object>();
+        var list = new List<object>
+        {
+            new Dictionary<string, object?>
+            {
+                ["uri"] = GuideUri,
+                ["name"] = "Agent 手册（怎么用这个服务器）",
+                ["description"] = "黄金规则 / 工具地图 / 任务剧本 / 上下文治理 / 出错处置 / 禁区。" +
+                                  "第一次接入或不确定下一步时读它（与 guide 工具同一份文本）",
+                ["mimeType"] = "text/markdown",
+            },
+        };
         if (!s.TryGet(out var p, out _)) return list;
 
         foreach (var c in p.Chapters.OrderBy(c => c.ChapterNumber))
@@ -111,6 +125,18 @@ internal static class Resources
 
         if (!uri.StartsWith(Scheme + "://", StringComparison.OrdinalIgnoreCase))
             return (new(), true, $"不认识的 URI：{uri}（本服务器只提供 {Scheme}:// 开头的资源）");
+
+        // 手册先于项目判定：没打开书也要能读（见 List 里的说明）
+        if (uri.Equals(GuideUri, StringComparison.OrdinalIgnoreCase))
+            return (new List<object>
+            {
+                new Dictionary<string, object?>
+                {
+                    ["uri"] = uri,
+                    ["mimeType"] = "text/markdown",
+                    ["text"] = Guide.Text,
+                },
+            }, false, null);
 
         if (!s.TryGet(out var p, out var err))
             return (new(), true, err.Text);

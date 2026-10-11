@@ -2356,7 +2356,9 @@ async function loadAgentClients() {
     agentClientsLoaded = true;
     $('#agentHint').innerHTML =
       `服务器：<code>${escapeHtml(d.exe || '')}</code>` +
-      (d.exeExists ? '' : ' —— <b>还没发布</b>，先在仓库根双击 deploy.bat；否则客户端连上也会失败。');
+      (d.exeExists ? '' : ' —— <b>还没发布</b>，先在仓库根双击 deploy.bat；否则客户端连上也会失败。') +
+      `<br>接上之后不用教它怎么用：连上时服务会注入一份说明，它也可以随时调 <code>guide</code>` +
+      `（或读资源 <code>tdx://guide</code>）拿到完整手册——黄金规则、工具地图、任务剧本都在里面。`;
     renderAgentClients(d.clients || []);
   } catch (e) {
     $('#agentHint').textContent = '读取失败：' + e.message;

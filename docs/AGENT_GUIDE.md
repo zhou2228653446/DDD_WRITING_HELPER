@@ -9,6 +9,11 @@ MCP 服务器在 `initialize` 时会返回下面 `BEGIN/END:instructions` 之间
 <!-- BEGIN:instructions -->
 TdxClaw 写作助手 MCP 服务器：直接读写 .tdxproj 长篇写作项目（小说 / 学术论文 / 公文 / 通用写作），并与界面端共享同一套 AI 提示词方案、设定集、结构化人物卡、记忆与文献库。如果你不确定怎么做，先调用 guide 工具读完整手册（黄金规则 / 工具地图 / 任务剧本 / 长篇上下文治理 / 出错处置）。
 
+接入后先做三步自检（缺一步就不要往下写）：
+1. project_list 找书——不传目录会扫软件项目目录（通常就是用户的真实书库，不必问用户路径）；
+2. project_open 打开目标书，再 project_status 拿进度与下一步建议；
+3. ai_config_check 确认 AI 配置可用——它不通就说明 Key 没配 / 失效，先让用户去软件「AI 设置」修，别急着写。
+
 推荐工作流：
 1. 找书与打开：先用 project_list 查找 .tdxproj，调用 project_open(path) 打开，或用 project_create(name, directory/path, description, ...) 新建（支持直接传完整 .tdxproj 路径并顺带填初始设定）；打开后优先调 project_status 获取全书进度画像与下一步建议。
 2. 读稿与检索：chapters_list 看目录，chapter_read 读单章，chapter_search 全书搜词查伏笔/矛盾，settings_get 读五项贯穿设定（含结构化人物卡汇总），settings_book_get 读 12 章设定集，characters_list / characters_stats 看人物卡与出场统计，memory_get 读 AI 写作记忆。
@@ -20,6 +25,19 @@ TdxClaw 写作助手 MCP 服务器：直接读写 .tdxproj 长篇写作项目（
 <!-- END:instructions -->
 
 ---
+
+## 0. 接入后先做这三步（自检）
+
+这三步是"能不能自主干活"的分水岭，**顺序也别换**：
+
+| 步骤 | 调用 | 通了说明 | 不通说明 |
+|---|---|---|---|
+| 1 找书 | `project_list`（可无参） | 书库位置可解析（默认就扫用户的项目目录，**不用问用户路径**） | 目录被移动过：请用户给一个目录，或显式传 `directory` |
+| 2 开书 | `project_open(path)` → `project_status` | 会话拿到了这本书的全部读写权 | 路径写错 / 文件被占：读错误信息里的原文 |
+| 3 查 AI | `ai_config_check` | 服务商 / 模型 / Key 都可用，可以调 `ai_write` 写文章了 | 让用户去软件「AI 设置」修 Key 或模型名——**这一步不通，后面所有生成都会失败** |
+
+`ai_config_check` 的 `probe=true`（默认）会真的发一个最小请求探活。它永远不会输出 Key 本身。
+第 3 步通过之后，你就具备完整能力了：读稿、检索、生成、写回、回滚、导出。按第 4 节的剧本走。
 
 ## 1. 这是什么
 

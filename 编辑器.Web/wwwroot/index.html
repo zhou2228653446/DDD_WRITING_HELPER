@@ -4,7 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>写作 · 网页版</title>
-<link rel="stylesheet" href="/style.css">
+<!-- 版本戳：手机浏览器（尤其微信/Safari）会强缓存静态文件，改了 css/js 它
+     照样拿旧的，表现为「修好了他那边还是老样子」。改前端就递增这个号。 -->
+<link rel="stylesheet" href="/style.css?v=20261011b">
 </head>
 <body>
 
@@ -725,6 +727,6 @@
      而且表面上一点报错都没有（踩过）。 -->
 <script src="/vendor/signalr.min.js"></script>
 <script src="/appearance.js"></script>
-<script src="/app.js"></script>
+<script src="/app.js?v=20261011b"></script>
 </body>
 </html>

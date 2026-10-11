@@ -604,8 +604,11 @@ dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
   /* 下拉菜单要盖过下面的 header 工具条（header 因材质加了 z-index:1，
      菜单栏若不自己建立层叠上下文，下拉会被 header 压在底下——
      手机窄屏 header 换行成三四行时，「文件」菜单的前几项直接看不见）。 */
-  position:relative;z-index:60;
+  /* 9999：菜单是临时浮层，必须压过一切（header 工具条、浮动的 AI 面板
+     都是 z-index 60，同级时 DOM 靠后的赢，菜单会被它们盖住）。 */
+  position:relative;z-index:9999;
 }
+#menubar .ver{margin-left:auto;font-size:10px;color:var(--muted);opacity:.55;user-select:none}
 #menubar .menu{position:relative}
 #menubar summary{
   list-style:none;cursor:pointer;padding:5px 10px;border-radius:var(--radius);
@@ -641,7 +644,7 @@ dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
 /* 窄屏（手机）：下拉不再「浮」在页面上，而是就地展开把下面的内容推开。
    浮层在触屏上两头不讨好——它盖住下面整条工具条，而手指去点菜单项时
    又容易点到被盖住的东西。就地展开后谁也不遮谁，菜单项也一定点得到。 */
-@media (max-width:820px){
+@media (max-width:1100px){
   #menubar{flex-wrap:wrap}
   #menubar .menu[open]{flex:1 0 100%}       /* 展开的那个独占一行，下拉才能铺满宽度 */
   #menubar .menu-items{

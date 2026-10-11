@@ -250,6 +250,10 @@ hr{border:none;border-top:1px solid var(--line);margin:16px 0}
   flex:1;min-height:0;overflow-y:auto;
   border-bottom:1px solid var(--line);
 }
+/* 空间不够时让容器自己滚动，而不是把子项压扁——
+   不加这条，手机/窄屏下面板内容一多，「要求/输入」框会被
+   flex 压成一条缝，里面的字只露出上半截（用户截图反馈过）。 */
+.ai-box > *{flex-shrink:0}
 .ai-box textarea{
   font:inherit;color:var(--ink);background:var(--bg);
   border:1px solid var(--line);border-radius:var(--radius);padding:8px;resize:vertical;

@@ -258,8 +258,23 @@ internal static class NovelTools
     /// <summary>
     /// 读取主程序保存的 paths.json，保证仅分发 exe 时 MCP 与主程序使用完全相同的项目目录和配置目录。
     /// </summary>
+    /// <summary>
+    /// 环境变量覆盖目录。为什么需要：开机自启若用 SYSTEM 账户（开机、登录之前就跑），
+    /// %APPDATA% 指向 C:\Windows\System32\config\systemprofile，账户密码（accounts.json）
+    /// 和 API 配置会整个读不到——等于换了个人。用环境变量把目录钉死在真实用户目录上，
+    /// SYSTEM 与用户会话才会用同一份配置。
+    /// </summary>
+    private static string EnvDir(string name)
+    {
+        var v = Environment.GetEnvironmentVariable(name);
+        return string.IsNullOrWhiteSpace(v) ? "" : v.Trim();
+    }
+
     internal static string ResolveProjectsDirectory()
     {
+        var envProjects = EnvDir("TDXCLAW_PROJECTS_DIR");
+        if (envProjects.Length > 0) return envProjects;
+
         try
         {
             var pathsFile = Path.Combine(
@@ -282,6 +297,9 @@ internal static class NovelTools
 
     internal static string ResolveConfigDirectory()
     {
+        var envConfig = EnvDir("TDXCLAW_CONFIG_DIR");
+        if (envConfig.Length > 0) return envConfig;
+
         try
         {
             var pathsFile = Path.Combine(

@@ -62,8 +62,11 @@ INFO = "[..]"
 
 # ---------------------------------------------------------------- 基础工具
 
-def run(args, check=False, capture=True, timeout=60):
-    """跑一条命令。返回 (返回码, 输出文本)。"""
+def run(args, check=False, capture=True, timeout=60, dry=False):
+    """跑一条命令。返回 (返回码, 输出文本)。dry=True 只打印不执行。"""
+    if dry:
+        print(f"       [dry-run] {' '.join(args)}")
+        return 0, ""
     try:
         p = subprocess.run(
             args,
@@ -82,6 +85,10 @@ def run(args, check=False, capture=True, timeout=60):
         return 127, f"找不到命令：{args[0]}"
     except subprocess.TimeoutExpired:
         return 124, f"超时：{' '.join(args)}"
+    except OSError as e:
+        # 连进程都起不来（权限不足、被安全软件拦掉）也算"这一步没成"，
+        # 不能让异常把整个 status/restart 掀翻——查不到任务状态而已，服务还在跑
+        return 126, f"无法执行：{e}"
 
 
 def say(tag, msg):
@@ -133,9 +140,12 @@ def local_urls():
 
 
 def alive(timeout=3):
-    """服务是否在跑。本地回环探测，非回环会要求登录所以只探回环。"""
+    """服务是否在跑。本地回环探测，非回环会要求登录所以只探回环。
+    ⚠ 必须绕过系统代理：代理会把 127.0.0.1 的请求也接走并回一个 502，
+    那样探测结果全是错的（曾因此误判"服务已在运行"，服务再也没起来过）。"""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/", timeout=timeout) as r:
+        with opener.open(f"http://127.0.0.1:{PORT}/", timeout=timeout) as r:
             return r.status < 500
     except Exception:
         return False
@@ -244,11 +254,20 @@ if not defined STAMP set "STAMP=run"
 set "LOG=%DIR%logs\web-%STAMP%.log"
 
 rem Skip if an instance is already listening (same port would clash).
-curl.exe -s -m 3 -o NUL http://127.0.0.1:%PORT%/ >NUL 2>&1
+rem --noproxy is not optional: with a system proxy set, curl asks the proxy for
+rem 127.0.0.1 and gets a 502 back -- which still counts as "curl succeeded",
+rem so the launcher would skip starting and the service would never come up.
+rem -f makes HTTP error codes count as failure too.
+curl.exe -s -f --noproxy "*" -m 3 -o NUL http://127.0.0.1:%PORT%/ >NUL 2>&1
 if not errorlevel 1 (
   >> "%LOG%" echo %DATE% %TIME% [TdxClaw] already listening on %PORT%, skip.
   exit /b 0
 )
+
+rem SYSTEM autostart (before logon): %APPDATA% points at systemprofile, which
+rem would make the service read a different set of accounts and API keys.
+rem Pin the config dir to the real user profile -- written by install --onstart.
+set "TDXCLAW_CONFIG_DIR=__CONFIG_DIR__"
 
 rem TDXCLAW_LAN=1 -> bind 0.0.0.0 and [::] so other devices can reach it.
 set TDXCLAW_LAN=1
@@ -290,9 +309,27 @@ ws.Run cmd, 0, False
 '''
 
 
-def write_launchers():
+def user_config_dir():
+    """真实用户的配置目录（%APPDATA%\\TdxClaw）。开机自启跑在 SYSTEM 下时
+    要把这个路径显式传给服务，否则它读的是 systemprofile 下那份空配置。"""
+    base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+    return str(Path(base) / "TdxClaw")
+
+
+def write_launchers(config_dir=None):
+    """不传参时也把配置目录钉死成真实用户目录：用户会话下它与 %APPDATA% 一致，
+    而 SYSTEM 自启时这是唯一能读到同一份账户/API 配置的办法。
+    ⚠ 别让 restart 之类后续操作把它写没了——那会让 SYSTEM 那条路静默读空配置。"""
+    if config_dir is None:
+        config_dir = user_config_dir()
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
-    (INSTALL_DIR / "start.bat").write_text(START_BAT, encoding="ascii")
+    bat = START_BAT
+    if config_dir:
+        bat = bat.replace("__CONFIG_DIR__", config_dir)
+    else:
+        # 普通（用户会话）路线不需要钉死目录，去掉这两行而不是留个空变量
+        bat = "\n".join(l for l in bat.splitlines() if "__CONFIG_DIR__" not in l)
+    (INSTALL_DIR / "start.bat").write_text(bat, encoding="ascii")
     (INSTALL_DIR / "start-hidden.vbs").write_text(
         START_VBS.replace("__DIR__", str(INSTALL_DIR)), encoding="ascii"
     )
@@ -307,9 +344,10 @@ def task_exists():
     return code == 0
 
 
-def task_info():
+def task_info(name=None, dry=False):
     """返回 (是否存在, 状态, 上次运行时间)"""
-    code, out = run(["schtasks", "/query", "/tn", TASK_NAME, "/fo", "LIST", "/v"])
+    code, out = run(["schtasks", "/query", "/tn", name or TASK_NAME, "/fo", "LIST", "/v"],
+                    dry=dry)
     if code != 0:
         return False, "", ""
     status = re.search(r"^\s*(?:Status|状态)\s*[:：]\s*(.+)$", out, re.M)
@@ -337,6 +375,7 @@ def install_task():
 
 
 STARTUP_VBS_NAME = "TdxClawWeb.vbs"
+DDNS_TASK = "TdxClawDDNS"
 
 
 def startup_folder():
@@ -372,6 +411,64 @@ def uninstall_startup_folder():
     return True
 
 
+def install_task_onstart(dry=False):
+    """开机即跑（登录之前）：SYSTEM 账户、最高权限。跟 bili 的 BiliMonitor 一个路子，
+    好处是不用写账户密码、开机就有；代价是 %APPDATA% 变成 systemprofile，
+    所以启动脚本里必须钉死 TDXCLAW_CONFIG_DIR（见 user_config_dir）。"""
+    vbs = INSTALL_DIR / "start-hidden.vbs"
+    if not vbs.exists():
+        say(ERR, f"缺少 {vbs}，先写启动器。")
+        return False
+    # 先清同名旧任务，保证幂等（ONLOGON 装过再装 ONSTART 也不会留两个）
+    run(["schtasks", "/delete", "/tn", TASK_NAME, "/f"], dry=dry)
+    tr = f'wscript.exe //B //NOLOGO "{vbs}"'
+    code, out = run(
+        ["schtasks", "/create", "/tn", TASK_NAME, "/tr", tr,
+         "/sc", "onstart", "/ru", "SYSTEM", "/rl", "HIGHEST", "/f"],
+        dry=dry,
+    )
+    if code != 0:
+        say(ERR, "注册开机任务失败：")
+        print(out)
+        return False
+    say(OK, f"计划任务 {TASK_NAME} 已注册（开机即启动，SYSTEM，无需登录）")
+    return True
+
+
+def install_ddns_task(dry=False):
+    """家宽 IPv6 前缀随时可能变，域名不跟着更新外部就断连。每 30 分钟查一次。"""
+    if not DDNS_SCRIPT.exists():
+        say(INFO, f"没找到 DDNS 脚本（{DDNS_SCRIPT}），跳过定时任务。")
+        return False
+    tr = f'"{sys.executable}" "{DDNS_SCRIPT}"'
+    code, out = run(
+        ["schtasks", "/create", "/tn", DDNS_TASK, "/tr", tr,
+         "/sc", "minute", "/mo", "30", "/ru", "SYSTEM", "/rl", "HIGHEST", "/f"],
+        dry=dry,
+    )
+    if code != 0:
+        say(INFO, f"DDNS 定时任务没建成：{out[:200]}")
+        return False
+    say(OK, f"计划任务 {DDNS_TASK} 已注册（每 30 分钟检查 IPv6 是否变化）")
+    return True
+
+
+def run_task(name, dry=False):
+    code, out = run(["schtasks", "/run", "/tn", name], dry=dry)
+    if code == 0:
+        say(OK, f"已触发任务 {name}")
+    else:
+        say(INFO, f"触发 {name} 失败：{out[:200]}")
+    return code == 0
+
+
+def uninstall_ddns_task():
+    code, _ = run(["schtasks", "/delete", "/tn", DDNS_TASK, "/f"])
+    if code == 0:
+        say(OK, f"计划任务 {DDNS_TASK} 已删除")
+    return code == 0
+
+
 def uninstall_task():
     code, out = run(["schtasks", "/delete", "/tn", TASK_NAME, "/f"])
     if code == 0:
@@ -383,17 +480,17 @@ def uninstall_task():
 
 # ---------------------------------------------------------------- 防火墙
 
-def firewall_open(quiet=False):
+def firewall_open(quiet=False, dry=False):
     """放行 5280 入站。需要管理员；没权限就给出命令让用户自己跑。"""
     code, out = run(["netsh", "advfirewall", "firewall", "show", "rule",
-                     f"name={FW_RULE_NAME}"])
+                     f"name={FW_RULE_NAME}"], dry=dry)
     if code == 0 and FW_RULE_NAME in out:
         say(OK, f"防火墙规则已存在：{FW_RULE_NAME}")
         return True
 
     code, out = run(["netsh", "advfirewall", "firewall", "add", "rule",
                      f"name={FW_RULE_NAME}", "dir=in", "action=allow",
-                     "protocol=TCP", f"localport={PORT}"])
+                     "protocol=TCP", f"localport={PORT}"], dry=dry)
     if code == 0:
         say(OK, f"防火墙已放行 TCP {PORT}")
         return True
@@ -459,6 +556,13 @@ def cmd_status(_a):
     else:
         say(INFO, "开机自启（计划任务）：未注册（跑 install 开启）")
 
+    ddns_ok, _, ddns_last = task_info(DDNS_TASK)
+    if ddns_ok:
+        say(OK, f"DDNS 定时检查：已注册（{DDNS_TASK}"
+                + (f"，上次 {ddns_last}）" if ddns_last else "）"))
+    else:
+        say(INFO, f"DDNS 定时检查：未注册（install --onstart 会一并建）")
+
     sf = startup_folder() / STARTUP_VBS_NAME
     if sf.exists():
         say(OK, f"开机自启（启动文件夹）：已放 {sf}")
@@ -514,6 +618,30 @@ def cmd_install(a):
         say(ERR, "发布目录里没有可执行文件，install 中止。")
         return 1
 
+    if a.onstart:
+        # 开机即跑（登录之前）：SYSTEM 账户，必须要管理员令牌
+        if not is_admin():
+            if a.dry_run:
+                say(INFO, "（dry-run）真实执行要管理员权限，这里只打印命令。")
+            elif relaunch_as_admin():
+                say(INFO, "已弹窗请求管理员权限，请在打开的窗口里确认。")
+                return 2
+            else:
+                say(INFO, "注册开机任务需要管理员权限。请用管理员终端跑：")
+                print("       web-service.bat install --onstart")
+                return 1
+        cfg = user_config_dir()
+        say(INFO, f"SYSTEM 下 %APPDATA% 不是你的目录，配置目录钉死为 {cfg}")
+        write_launchers(config_dir=cfg)
+        if not install_task_onstart(a.dry_run):
+            return 1
+        install_ddns_task(a.dry_run)
+        firewall_open(dry=a.dry_run)
+        if not a.dry_run:
+            run_task(TASK_NAME)     # 立刻按任务的方式跑一次，确认 SYSTEM 下也起得来
+            cmd_status(a)
+        return 0
+
     write_launchers()
 
     if a.startup_folder:
@@ -542,6 +670,7 @@ def cmd_install(a):
 def cmd_uninstall(_a):
     print()
     uninstall_startup_folder()
+    uninstall_ddns_task()
     if task_exists() and not uninstall_task():
         if not is_admin() and relaunch_as_admin():
             say(INFO, "已弹窗请求管理员权限，请在打开的窗口里确认。")
@@ -602,6 +731,10 @@ def main():
                     help="install/restart 时跳过重新发布（只重启现有产物）")
     ap.add_argument("--startup-folder", action="store_true",
                     help="install 时只写入用户启动文件夹（免管理员，不注册计划任务）")
+    ap.add_argument("--onstart", action="store_true",
+                    help="install 时注册开机即跑的 SYSTEM 任务（需管理员，登录之前就启动）")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="只打印将执行的系统命令，不真的执行")
     args = ap.parse_args()
 
     table = {

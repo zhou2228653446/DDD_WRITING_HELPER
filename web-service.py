@@ -296,6 +296,12 @@ set "TDXCLAW_CONFIG_DIR=__CONFIG_DIR__"
 
 rem TDXCLAW_LAN=1 -> bind 0.0.0.0 and [::] so other devices can reach it.
 set TDXCLAW_LAN=1
+
+rem Public address of this service. The web UI prints it in Help > Agents as the
+rem MCP url to paste into an agent client (the outside world reaches us through
+rem the IPv6 DDNS name, not through whatever origin the browser happens to use).
+set "TDXCLAW_PUBLIC_URL=http://__DOMAIN__:5280"
+
 set ASPNETCORE_ENVIRONMENT=Production
 
 rem The folder also holds the desktop app and TdxClaw.Mcp.exe -- name it exactly.
@@ -348,7 +354,7 @@ def write_launchers(config_dir=None):
     if config_dir is None:
         config_dir = user_config_dir()
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
-    bat = START_BAT
+    bat = START_BAT.replace("__DOMAIN__", DOMAIN)
     if config_dir:
         bat = bat.replace("__CONFIG_DIR__", config_dir)
     else:

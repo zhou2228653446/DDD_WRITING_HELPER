@@ -616,6 +616,46 @@ web-service.bat start / stop / log
 那种模式下进程跑在 SYSTEM 会话里，看不到桌面也无所谓，但**配置目录必须显式指定**
 （脚本已经处理，`start.bat` 里的 `TDXCLAW_CONFIG_DIR` 别删）。
 
+### 在外网用 agent 控制：需要开什么？
+
+**不用开网页，也不用开桌面 App。** MCP 端点是那个后台服务自己提供的（`POST /mcp`），
+浏览器只是个可选的观察窗——开着能实时看到 agent 改哪一章（SignalR 跟随），
+关掉照样能干活。要连通，满足三件套即可：
+
+1. **服务在跑**：`web-service.bat status`。装了自启（`install` 或 `install --onstart`）就一直是它的活。
+2. **外网可达**：`TDXCLAW_LAN=1`（自启脚本已带）+ Windows 防火墙放行 TCP 5280 +
+   `ddd-lighthouse.ddns.net` 的 AAAA 指向本机当前 IPv6（`install` 会顺手推一次 DDNS；
+   `status` 里能看出域名指没指对）。家宽 IPv4 入站被 CGNAT 挡着，公网实际走 IPv6。
+3. **agent 客户端带登录令牌**：非本机访问的 `/mcp` 和 `/api` 一样要过登录
+   （公网裸奔 = 任何人可改稿烧 Key）。在网页上打开 **帮助 → 接入 Agent**，
+   点「生成并复制 MCP 配置（含令牌）」——它当场签发一个令牌，并生成可直接粘贴的片段：
+
+   ```json
+   {
+     "mcpServers": {
+       "tdxclaw": {
+         "type": "http",
+         "url": "http://ddd-lighthouse.ddns.net:5280/mcp",
+         "headers": { "Authorization": "Bearer <令牌>" }
+       }
+     }
+   }
+   ```
+
+   客户端不支持自定义请求头时，把令牌写进地址：`.../mcp?access_token=<令牌>`
+   （服务端三种取法都认：`Authorization: Bearer`、`?access_token=`、Cookie）。
+
+**几个容易踩的点**
+
+- 令牌**只存在服务进程内存里**（`AuthSessions`）：服务重启、`publish` 之后全部失效，
+  回帮助页再点一次按钮即可。不用记，也泄不出历史令牌。
+- 端点**只接受 POST**（`GET /mcp` 返回 405，不提供 SSE 长连接）。客户端里请选
+  `http` / `streamable-http` 类型；要求 SSE 长连接的客户端请改走 stdio（`TdxClaw.Mcp.exe`）。
+- 客户端的 URL 要用**公网域名**（`ddd-lighthouse.ddns.net:5280`），不是 `127.0.0.1`——
+  后者只在那台机器上有效。生成按钮已经按启动脚本里的 `TDXCLAW_PUBLIC_URL` 填好。
+- 同机 agent 想省事就直接用 `http://127.0.0.1:5280/mcp`（回环免登录，连令牌都不用）：
+  这也是 `install-mcp.bat` 走的 stdio 之外最省的一条路。
+
 ---
 
 ## 配置与数据存放位置

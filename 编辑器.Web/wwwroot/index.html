@@ -6,7 +6,7 @@
 <title>写作 · 网页版</title>
 <!-- 版本戳：手机浏览器（尤其微信/Safari）会强缓存静态文件，改了 css/js 它
      照样拿旧的，表现为「修好了他那边还是老样子」。改前端就递增这个号。 -->
-<link rel="stylesheet" href="/style.css?v=20261011e">
+<link rel="stylesheet" href="/style.css?v=20261011f">
 </head>
 <body>
 
@@ -306,7 +306,7 @@
   <span id="sbApi" class="muted" title="当前启用的 AI 配置方案"></span>
   <!-- 前端版本标记：改了 css/js 就递增。手机浏览器爱缓存旧页面，
        有它就能一眼分辨「用户看到的是不是改完的那版」。 -->
-  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v5</span>
+  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v6</span>
 </footer>
 
 <!-- AI 设置对话框 -->
@@ -429,7 +429,23 @@
     </p>
     <div id="agentHint" class="muted"></div>
     <div id="agentList" class="agent-list"></div>
-    <p class="help-p muted" id="httpMcpHint"></p>
+    <!-- ⚠ 这里必须是 div 不是 p：里面要塞 <pre> 和 <button>，
+        浏览器遇到 p 里的块级元素会自动闭合标签，结构就散了。 -->
+    <div class="help-p muted" id="httpMcpHint"></div>
+
+    <!-- 外网 agent 的唯一门槛是「令牌」：非本机访问的 /mcp 必须先登录。
+         令牌只在网页登录态里，手敲密码换 token 最容易卡住人，所以做成一键。 -->
+    <!-- 默认隐藏：只有确认了是自用账号（loadAccountBox）才放出来——
+         试用账号点了也是 403，不如不给看。 -->
+    <div class="help-p hidden" id="mcpCfgWrap">
+      <button type="button" id="mcpCfgBtn" class="mini-btn primary"
+        title="签发一个访问令牌，并生成可直接粘贴进 agent 客户端的 MCP 配置（含令牌）">
+        生成并复制 MCP 配置（含令牌）
+      </button>
+      <span id="mcpCfgState" class="muted"></span>
+      <pre id="mcpCfgBox" class="cfg hidden"></pre>
+      <div id="mcpCfgNote" class="muted"></div>
+    </div>
 
     <div class="help-p" style="margin-top:12px" id="accountBox">
       <b>账号</b>
@@ -719,7 +735,7 @@
 
 <script src="/vendor/signalr.min.js"></script>
 <script src="/appearance.js"></script>
-<script src="/fx.js?v=20261011e"></script>
-<script src="/app.js?v=20261011e"></script>
+<script src="/fx.js?v=20261011f"></script>
+<script src="/app.js?v=20261011f"></script>
 </body>
 </html>

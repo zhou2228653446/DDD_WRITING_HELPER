@@ -265,6 +265,33 @@ app.MapPost("/api/accounts/trial-rotate", (HttpContext ctx, AccountStore account
     return Results.Ok(new { trialPassword = p, trialNextRotate = next });
 });
 
+// 「复制 MCP 配置」用：非本机访问的 agent 必须先登录才有令牌（Bearer），
+// 而令牌只有网页登录态里才有——用户要手敲密码换 token 才能接上外网 agent。
+// 这个端点把「公网地址 + 一个当场签发的令牌」一次给全，帮助页一键复制即完成配置。
+// 只认自用账号（试用账号的 subject 是 trial:<码>，403）。
+app.MapPost("/api/accounts/mcp-token", (HttpContext ctx, AuthSessions sessions) =>
+{
+    if ((ctx.Items["subject"] as string ?? (IsLoopback(ctx) ? "self" : "")) != "self")
+        return Results.Json(new { error = "只有自用账号能签发 MCP 令牌" }, statusCode: 403);
+
+    // 公网地址由启动脚本给（TDXCLAW_PUBLIC_URL，走 IPv6 DDNS 域名）。
+    // 没给就退回请求本身的 origin——本机看网页时那是 127.0.0.1，仅够局域网用。
+    var pub = Environment.GetEnvironmentVariable("TDXCLAW_PUBLIC_URL");
+    if (string.IsNullOrWhiteSpace(pub)) pub = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+    pub = pub.TrimEnd('/');
+
+    var token = sessions.Issue("self");
+    return Results.Ok(new
+    {
+        token,
+        url = pub + "/mcp",
+        publicUrl = pub,
+        localUrl = "http://127.0.0.1:5280/mcp",
+        // 令牌是内存态（AuthSessions）：重启/重新发布即全部失效，回来再点一次
+        note = "令牌存在服务进程内存里：服务重启或重新发布后失效，回来再点一次即可",
+    });
+});
+
 app.MapHub<LiveHub>("/hub/live");
 
 // ══════════════════════════════════════════════════════════════════

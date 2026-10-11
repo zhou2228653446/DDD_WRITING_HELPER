@@ -1147,6 +1147,19 @@ button.busy::before{
 .live .row{animation:rowIn .3s ease-out}
 @keyframes rowIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
 
+/* ── 接入 Agent：一键生成的 MCP 配置片段 ──
+   逐字照抄的东西，必须能完整看见：等宽字体 + 框内滚动 + 长行折行。 */
+#mcpCfgBox{
+  font:12px/1.6 ui-monospace,Consolas,monospace;
+  background:var(--bg);color:var(--ink);
+  border:1px solid var(--line);border-radius:var(--radius);
+  padding:9px 11px;margin:8px 0 6px;max-height:210px;overflow:auto;
+  white-space:pre-wrap;word-break:break-all;
+}
+#mcpCfgNote{margin-top:2px}
+#mcpCfgBtn{white-space:nowrap}
+#mcpCfgState{margin-left:8px}
+
 /* ── 系统开了「减弱动效」：全部压平，只留功能 ── */
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{

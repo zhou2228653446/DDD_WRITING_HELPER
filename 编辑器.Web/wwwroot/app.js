@@ -2234,17 +2234,75 @@ $('#helpBtn').onclick = () => $('#helpDlg').showModal();
 
 // 网页版工作区本身就是一个 HTTP MCP 端点（已用官方 MCP SDK 标准客户端实测：
 // 握手 / 28 个工具 / 两分钟长任务全通过）。接入方式按场景说明。
+const MCP_ORIGIN = location.origin;
 $('#httpMcpHint').innerHTML =
-  `另一条路：这个网页工作区本身就是 HTTP MCP 端点 <code>${location.origin}/mcp</code>` +
+  `另一条路：这个网页工作区本身就是 HTTP MCP 端点 <code>${MCP_ORIGIN}/mcp</code>` +
   `（免装 exe，agent 改的就是网页上正开着的这本书；已用官方 MCP SDK 标准客户端实测通过）。` +
-  `<br>· <b>同一台机器</b>上的 agent：直接用上面的地址即可。` +
+  `<br>· <b>同一台机器</b>上的 agent：直接用上面的地址即可（本机回环免登录，连令牌都不用）。` +
   `<br>· <b>局域网内</b>的其他设备：以 <code>set TDXCLAW_LAN=1</code> 启动服务（放行局域网 + IPv6），` +
   `对方连 <code>http://本机IP:5280/mcp</code>；Windows 防火墙首次弹窗选「允许」。` +
   `<br>· <b>公网</b>（人在外面、手机流量）：家宽 IPv4 入站被运营商 CGNAT 挡着走不通，` +
   `实际走 <b>IPv6 直连 + No-IP</b>——bili 看板已配好同一台机器的 No-IP 域名（AAAA 记录），` +
-  `直接复用：对方连 <code>http://你的域名.ddns.net:5280/mcp</code>。` +
-  `前提：TDXCLAW_LAN=1 启动、防火墙放行 5280、<b>必须设置下方访问口令</b>（公网裸奔 = 任何人可改稿烧 Key）。` +
-  `手机浏览器看稿：第一次打开时输一次口令即可（服务端会种 Cookie）。`;
+  `直接复用：对方连 <code>http://ddd-lighthouse.ddns.net:5280/mcp</code>。` +
+  `前提：TDXCLAW_LAN=1 启动、防火墙放行 5280、<b>必须带登录令牌</b>（公网裸奔 = 任何人可改稿烧 Key）。` +
+  `手机浏览器看稿：第一次打开时输一次密码即可（服务端会种 Cookie）。` +
+  `<br>⚠ 非本机访问的 agent 和网页一样要过登录——按下面那个按钮把配置（含令牌）一次生成出来，` +
+  `比手敲密码换 token 省事。`;
+
+// 「生成并复制 MCP 配置」：令牌由服务器当场签发（内存态，重启失效）。
+// 生成的片段是各家客户端通用的 mcpServers 结构；不支持自定义 header 的客户端
+// 可以把令牌挪进地址（服务端三种取法都认：Bearer / ?access_token= / Cookie）。
+$('#mcpCfgBtn').onclick = async () => {
+  const btn = $('#mcpCfgBtn'), st = $('#mcpCfgState');
+  btn.disabled = true;
+  st.textContent = '正在签发令牌…';
+  try {
+    const d = await post('/api/accounts/mcp-token', {});
+    const cfg = {
+      mcpServers: {
+        tdxclaw: {
+          type: 'http',
+          url: d.url,
+          headers: { Authorization: 'Bearer ' + d.token },
+        },
+      },
+    };
+    const text = JSON.stringify(cfg, null, 2) +
+      `\n\n// 客户端不吃 headers 的话，改用这个地址：\n// ${d.url}?access_token=${d.token}`;
+
+    const box = $('#mcpCfgBox');
+    box.textContent = text;
+    box.classList.remove('hidden');
+
+    // 剪贴板 API 只在安全上下文可用：本机 127.0.0.1 算安全，用域名/IP 打开就不算，
+    // 这时退回"选中文本 + execCommand"，用户至少能直接 Ctrl+C。
+    let copied = false;
+    try { await navigator.clipboard.writeText(text); copied = true; } catch { /* 降级 */ }
+    if (!copied) {
+      try {
+        const r = document.createRange();
+        r.selectNodeContents(box);
+        const sel = getSelection();
+        sel.removeAllRanges(); sel.addRange(r);
+        copied = document.execCommand('copy');
+      } catch { copied = false; }
+    }
+    $('#mcpCfgNote').textContent = (d.note || '') +
+      (copied ? '　已复制到剪贴板，粘进客户端的 mcpServers 一节即可。'
+              : '　浏览器不让自动复制，已替你选中下面这段，按 Ctrl+C 即可。');
+    st.textContent = copied ? '已复制' : '请手动复制';
+    log('MCP 配置已生成（含令牌）：' + d.url);
+    fx.toast(copied ? 'MCP 配置已复制，粘进 agent 客户端即可' : '配置已生成，见下方文本框', copied ? 'ok' : 'warn', 4200);
+  } catch (e) {
+    st.textContent = '';
+    const msg = errMsg(e);
+    // 试用账号会被后端 403 挡下——这不是错误，是权限边界，说清楚就行
+    fx.toast(/403/.test(e.message) ? '试用账号不能签发 MCP 令牌（这是自用账号的功能）'
+      : '签发失败：' + msg, 'err', 4200);
+  } finally {
+    btn.disabled = false;
+  }
+};
 
 // ---- 账号管理（帮助 → 接入 Agent 底部；自用可见试用密码，试用只见提示） ----
 async function loadAccountBox() {
@@ -2252,6 +2310,7 @@ async function loadAccountBox() {
   if (!me) return;
   $('#accountSelf').classList.toggle('hidden', !me.isSelf);
   $('#accountTrial').classList.toggle('hidden', me.isSelf);
+  $('#mcpCfgWrap').classList.toggle('hidden', !me.isSelf);   // 签发令牌只给自用账号
   if (me.isSelf && me.trialPassword) {
     $('#trialPwdView').value = me.trialPassword;
     $('#trialDays').textContent = String(me.trialDaysLeft);

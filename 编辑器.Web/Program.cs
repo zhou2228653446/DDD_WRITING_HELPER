@@ -52,12 +52,14 @@ catch (Exception ex) { Console.Error.WriteLine($"[web] 载入提示词配置失�
 var app = builder.Build();
 
 app.UseDefaultFiles();
-// 前端无构建步骤、改完即刷新，所以静态文件必须每次向服务器校验新鲜度，
-// 不许浏览器拿着旧 app.js 不放（刚在验证时踩过）。
+// 前端无构建步骤、改完即刷新，静态文件必须禁缓存。
+// no-cache 只是「每次校验」，实测手机浏览器（微信 X5 / Safari）照样把
+// 旧 index.html 整个存下来不校验，用户那边永远是我改之前的样子——
+// 必须用 no-store 禁止存储，每次都全量拉取。前端总共几十 KB，无所谓流量。
 app.UseStaticFiles(new StaticFileOptions
 {
     OnPrepareResponse = ctx =>
-        ctx.Context.Response.Headers["Cache-Control"] = "no-cache",
+        ctx.Context.Response.Headers["Cache-Control"] = "no-store, must-revalidate",
 });
 
 // ══════════════════════════════════════════════════════════════════

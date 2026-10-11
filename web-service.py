@@ -54,6 +54,7 @@ DOMAIN = "ddd-lighthouse.ddns.net"
 DDNS_SCRIPT = Path(r"D:\repos\bili\ddns_update.py")
 
 PROJ = ROOT / "编辑器.Web" / "编辑器.Web.csproj"
+BAT_SELF = ROOT / "web-service.bat"       # 入口 bat，下面要负责给它修换行
 
 OK = "[OK]"
 ERR = "[!!]"
@@ -61,6 +62,30 @@ INFO = "[..]"
 
 
 # ---------------------------------------------------------------- 基础工具
+
+def ensure_bat_eol():
+    """web-service.bat 必须是 CRLF，否则用户双击就报一堆「不是内部或外部命令」。
+
+    cmd 是按字节逐个解析 .bat 的，只认 CRLF 作换行。文件一旦变成 LF-only，
+    里面的中文多字节字符会被拦腰截断，切开的后半截被当成一条命令去执行，
+    于是出现 `'restart' 不是内部或外部命令` 这种莫名其妙的报错。
+    编辑器保存、跨工具复制都很容易把换行还原成 LF，所以每次运行顺手校一遍。
+
+    只修换行，不碰内容（内容非 ASCII 得靠写的人自觉——bat 里注释走英文）。
+    """
+    try:
+        raw = BAT_SELF.read_bytes()
+    except OSError:
+        return
+    fixed = raw.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+    if fixed == raw:
+        return
+    try:
+        BAT_SELF.write_bytes(fixed)
+        say(INFO, f"已把 {BAT_SELF.name} 的换行修回 CRLF（cmd 只认 CRLF）")
+    except OSError:
+        pass
+
 
 def run(args, check=False, capture=True, timeout=60, dry=False):
     """跑一条命令。返回 (返回码, 输出文本)。dry=True 只打印不执行。"""
@@ -724,6 +749,7 @@ def cmd_log(_a):
 
 
 def main():
+    ensure_bat_eol()
     ap = argparse.ArgumentParser(description="TdxClaw 写作服务开机自启动管理")
     ap.add_argument("command", nargs="?", default="status",
                     choices=["install", "uninstall", "restart", "start", "stop", "status", "log", "publish"])

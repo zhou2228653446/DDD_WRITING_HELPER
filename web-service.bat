@@ -1,18 +1,25 @@
 @echo off
 chcp 65001 >nul
 setlocal
-
 rem ============================================================
-rem  TdxClaw 写作服务（编辑器.Web）的开机自启动管理
-rem  实际逻辑在 web-service.py，这个 bat 只负责找到能用的 python。
+rem  TdxClaw writing service (web editor) startup manager.
+rem  All real logic lives in web-service.py; this bat only finds
+rem  a usable python interpreter and forwards the arguments.
 rem
-rem  用法（双击 = 看状态）：
-rem    web-service.bat              显示当前状态
-rem    web-service.bat install      发布 + 开机自启 + 防火墙 + 立刻启动
-rem    web-service.bat uninstall    取消开机自启并停掉
-rem    web-service.bat restart      改完代码后重新发布并重启
+rem  IMPORTANT: keep this file pure ASCII and CRLF-terminated.
+rem  cmd parses .bat byte by byte; a LF-only file containing
+rem  multi-byte characters gets sliced into fragments that it then
+rem  tries to RUN ("'restart' is not recognized as a command").
+rem  web-service.py repairs the line endings automatically, but it
+rem  cannot repair non-ASCII text -- edit comments in English.
+rem
+rem  Usage (double click = status):
+rem    web-service.bat               status
+rem    web-service.bat install       publish + autostart + firewall + start
+rem    web-service.bat uninstall     remove autostart and stop
+rem    web-service.bat restart       republish after code change, then restart
 rem    web-service.bat start / stop
-rem    web-service.bat log          看日志
+rem    web-service.bat log           tail today's log
 rem ============================================================
 
 set "PY="

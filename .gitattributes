@@ -4,6 +4,19 @@
 * text=auto
 
 ###############################################################################
+# Windows 脚本必须用 CRLF。
+#
+# cmd 按字节解析 .bat / .cmd，只认 CRLF 换行。文件一旦变成 LF-only，里面的
+# 中文多字节字符会被截断，切开的后半截会被当成命令执行（典型报错：
+# "'restart' 不是内部或外部命令"）。core.autocrlf 只在克隆者那边配了才生效，
+# 所以在仓库里用 .gitattributes 钉死，任何机器上 checkout 都是 CRLF。
+###############################################################################
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.vbs  text eol=crlf
+*.ps1  text eol=crlf
+
+###############################################################################
 # Set default behavior for command prompt diff.
 #
 # This is need for earlier builds of msysgit that does not have it on by

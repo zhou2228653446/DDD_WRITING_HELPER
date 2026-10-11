@@ -190,24 +190,113 @@ public sealed class AccountStore
         CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(a), Encoding.UTF8.GetBytes(b));
 }
 
-/// <summary>登录会话（内存态：服务重启后需重新登录，可接受）。</summary>
+/// <summary>一个正在线的试用者（按个人码去重后的聚合）。</summary>
+public readonly record struct TrialPresence(string Code, int Sessions, DateTime Since, DateTime LastSeen);
+
+/// <summary>登录会话（内存态：服务重启后需重新登录，可接受）。
+///
+/// ★「在线」的定义是**最近还有请求**，不是"登录过就一直算"：
+/// Session 每次被读取时刷新 LastSeen，超过 <see cref="IdleTimeout"/> 没有动静就当离线。
+/// 不这么定，试用者直接关掉页面（没人会点退出）名额就永远占着——
+/// 3 个名额会在一周内被历史会话卡死。
+/// </summary>
 public sealed class AuthSessions
 {
-    private sealed record Session(string Subject, DateTime Created);
+    /// <summary>同时最多几个试用用户（不同个人码）。自用账号不占名额。</summary>
+    public const int MaxConcurrentTrials = 3;
+
+    private sealed class Session
+    {
+        public string Subject = "";
+        public DateTime Created = DateTime.Now;
+        public DateTime LastSeen = DateTime.Now;   // 引用类型的字段赋值是原子的，够用了
+    }
+
     private readonly ConcurrentDictionary<string, Session> _sessions = new();
+
+    /// <summary>空闲多久算离线。默认 45 分钟；TDXCLAW_TRIAL_IDLE_MIN 可覆盖（实测用它压到分钟级）。</summary>
+    public static TimeSpan IdleTimeout { get; } = ReadIdleTimeout();
+
+    private static TimeSpan ReadIdleTimeout()
+    {
+        var raw = Environment.GetEnvironmentVariable("TDXCLAW_TRIAL_IDLE_MIN");
+        if (int.TryParse(raw, out var minutes) && minutes > 0) return TimeSpan.FromMinutes(minutes);
+        return TimeSpan.FromMinutes(45);
+    }
 
     /// <summary>主体标识："self" 或 "trial:&lt;四位码&gt;"。</summary>
     public string Issue(string subject)
     {
         var token = AccountStore.NewToken();
-        _sessions[token] = new Session(subject, DateTime.Now);
+        _sessions[token] = new Session { Subject = subject };
         return token;
     }
 
-    public string? SubjectOf(string? token) =>
-        token != null && _sessions.TryGetValue(token, out var s) ? s.Subject : null;
+    /// <summary>
+    /// 顺带刷新 LastSeen——「最近用过」本来就是"读会话那一刻"的语义。
+    /// 中间件、/api/auth/me、/mcp 都从这里拿主体，放在这里刷新，
+    /// 比指望每个调用点都记得单独 Touch 可靠得多。
+    /// </summary>
+    public string? SubjectOf(string? token)
+    {
+        if (token == null || !_sessions.TryGetValue(token, out var s)) return null;
+        s.LastSeen = DateTime.Now;
+        return s.Subject;
+    }
 
     public void Revoke(string token) => _sessions.TryRemove(token, out _);
+
+    /// <summary>当前在线的试用者（按个人码去重，最近活跃的在前）。顺手清掉过期会话。</summary>
+    public IReadOnlyList<TrialPresence> ActiveTrials()
+    {
+        Sweep();
+        var cut = DateTime.Now - IdleTimeout;
+        return _sessions.Values
+            .Where(s => s.Subject.StartsWith("trial:", StringComparison.Ordinal) && s.LastSeen >= cut)
+            .GroupBy(s => s.Subject)
+            .Select(g => new TrialPresence(
+                g.Key["trial:".Length..],
+                g.Count(),
+                g.Min(x => x.Created),
+                g.Max(x => x.LastSeen)))
+            .OrderByDescending(t => t.LastSeen)
+            .ToList();
+    }
+
+    /// <summary>这个码还能不能进：本码已在线（多设备/断线重连）不算新增名额。</summary>
+    public bool TrialSlotAvailable(string code)
+    {
+        var online = ActiveTrials();
+        return online.Any(t => t.Code == code) || online.Count < MaxConcurrentTrials;
+    }
+
+    /// <summary>把一个试用主体踢下线（自用账号手动释放被卡住的名额）。返回踢掉的会话数。</summary>
+    public int DropSubject(string subject)
+    {
+        var n = 0;
+        foreach (var kv in _sessions)
+            if (string.Equals(kv.Value.Subject, subject, StringComparison.Ordinal)
+                && _sessions.TryRemove(kv.Key, out _)) n++;
+        return n;
+    }
+
+    /// <summary>把所有试用会话踢下线（不动自用）。</summary>
+    public int DropAllTrials()
+    {
+        var n = 0;
+        foreach (var kv in _sessions)
+            if (kv.Value.Subject.StartsWith("trial:", StringComparison.Ordinal)
+                && _sessions.TryRemove(kv.Key, out _)) n++;
+        return n;
+    }
+
+    /// <summary>清掉空闲超时的会话（不做后台定时器，每次统计时顺手清）。</summary>
+    private void Sweep()
+    {
+        var cut = DateTime.Now - IdleTimeout;
+        foreach (var kv in _sessions)
+            if (kv.Value.LastSeen < cut) _sessions.TryRemove(kv.Key, out _);
+    }
 }
 
 /// <summary>每个主体（自用 / 试用+码）一个独立工作区实例——作品库、聊天记忆、快照互不可见。</summary>

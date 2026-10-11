@@ -40,6 +40,24 @@ let loginBusy = false;
 function showLoginBanner(msg) {
   $('#loginBanner').classList.remove('hidden');
   $('#loginErr').textContent = msg || '';
+  loadTrialQuota();
+}
+
+// 试用名额余量（未登录也能查：挂 /api/auth 放行段）。
+// 让试用者在输密码之前就看到"现在满了"，而不是白填一遍再被 429 挡回来。
+async function loadTrialQuota() {
+  try {
+    const r = await fetch('/api/auth/trial-quota');
+    if (!r.ok) return;
+    const q = await r.json();
+    const el = $('#trialQuota');
+    const full = q.used >= q.max;
+    el.textContent = full
+      ? `试用名额已满（${q.used}/${q.max} 人同时在线；空闲 ${q.idleMinutes} 分钟自动释放）`
+      : `试用同时在线 ${q.used}/${q.max}`;
+    el.style.color = full ? 'var(--warn)' : '';
+    el.classList.remove('hidden');
+  } catch { /* 拿不到就不显示，不打扰登录 */ }
 }
 
 $('#loginUser').onchange = () =>
@@ -77,6 +95,7 @@ $('#loginGo').onclick = async () => {
   } catch (e) {
     err.textContent = errMsg(e);
     loginBusy = false;
+    loadTrialQuota();     // 多半就是名额满了，顺手把余量刷新给人看
   }
 };
 
@@ -2311,12 +2330,42 @@ async function loadAccountBox() {
   $('#accountSelf').classList.toggle('hidden', !me.isSelf);
   $('#accountTrial').classList.toggle('hidden', me.isSelf);
   $('#mcpCfgWrap').classList.toggle('hidden', !me.isSelf);   // 签发令牌只给自用账号
+  if (me.isSelf) loadTrialOnline();                          // 试用名额看板（自用才有）
   if (me.isSelf && me.trialPassword) {
     $('#trialPwdView').value = me.trialPassword;
     $('#trialDays').textContent = String(me.trialDaysLeft);
   }
   if (!me.isSelf) $('#trialCodeView').textContent = me.code || '';
 }
+// ---- 试用名额（同时在线最多 3 人） ----
+// 判定在服务器：最近 45 分钟内有请求才算在线（AuthSessions）。
+// 这里只负责显示与"手动释放"——名额被"人走了页面没关"占住时不用等超时。
+async function loadTrialOnline() {
+  const el = $('#trialOnline');
+  if (!el) return;
+  try {
+    const d = await api('/api/accounts/trial-online');
+    const items = d.items || [];
+    el.textContent = `${items.length} / ${d.max}`;
+    $('#trialOnlineList').textContent = items.length
+      ? '　' + items.map(t => `#${t.code}（${t.lastSeen} 活跃${t.sessions > 1 ? ` · ${t.sessions} 设备` : ''}）`).join('，')
+      : `　（空闲 ${d.idleMinutes} 分钟算离线）`;
+    el.style.color = items.length >= d.max ? 'var(--warn)' : '';
+  } catch (e) { el.textContent = '读取失败'; }
+}
+$('#trialOnlineRefresh').onclick = loadTrialOnline;
+$('#trialKickAll').onclick = async () => {
+  if (!confirm('把在线的试用者全部下线？他们页面上的下一次请求会要求重新登录。')) return;
+  const st = $('#trialKickState');
+  try {
+    const d = await post('/api/accounts/trial-kick', {});
+    st.textContent = d.kicked ? `已下线 ${d.kicked} 个会话` : '当前没有在线的试用';
+    fx.toast(d.kicked ? `已释放试用名额（下线 ${d.kicked} 个会话）` : '当前没有在线的试用', 'ok');
+    log('已释放试用在线名额');
+    loadTrialOnline();
+  } catch (e) { st.textContent = '失败：' + errMsg(e); }
+};
+
 $('#trialRotateBtn').onclick = async () => {
   const st = $('#trialRotateState');
   try {

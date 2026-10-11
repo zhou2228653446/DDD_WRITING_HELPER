@@ -6,7 +6,7 @@
 <title>写作 · 网页版</title>
 <!-- 版本戳：手机浏览器（尤其微信/Safari）会强缓存静态文件，改了 css/js 它
      照样拿旧的，表现为「修好了他那边还是老样子」。改前端就递增这个号。 -->
-<link rel="stylesheet" href="/style.css?v=20261011g">
+<link rel="stylesheet" href="/style.css?v=20261011h">
 </head>
 <body>
 
@@ -306,7 +306,7 @@
   <span id="sbApi" class="muted" title="当前启用的 AI 配置方案"></span>
   <!-- 前端版本标记：改了 css/js 就递增。手机浏览器爱缓存旧页面，
        有它就能一眼分辨「用户看到的是不是改完的那版」。 -->
-  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v7</span>
+  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v8</span>
 </footer>
 
 <!-- AI 设置对话框 -->
@@ -463,6 +463,16 @@
           <span id="selfPwdState" class="muted"></span>
         </div>
         <span class="muted">自用与试用（按个人码）的作品库、AI 配置完全隔离；试用者看不到你的书和 Key。</span>
+        <div class="muted" style="margin-top:8px">
+          试用同时在线：<b id="trialOnline">—</b>
+          <span id="trialOnlineList" class="muted"></span>
+        </div>
+        <div class="key-set" style="margin-top:4px">
+          <button id="trialKickAll" class="mini-btn" type="button"
+            title="把在线的试用者全部下线，立刻空出名额">释放全部试用在线</button>
+          <button id="trialOnlineRefresh" class="mini-btn" type="button">刷新</button>
+          <span id="trialKickState" class="muted"></span>
+        </div>
       </div>
       <div id="accountTrial" class="hidden muted">
         你是试用账号（个人码 <span id="trialCodeView"></span>）。自己的书和配置都是独立的，管理员看不到内容。
@@ -488,6 +498,8 @@
          placeholder="四位个人码（试用必填）" style="width:110px">
   <button id="loginGo" class="primary">进入</button>
   <span id="loginErr"></span>
+  <!-- 试用名额：在输密码之前就告诉你满没满（满员时后端也会 429 挡一次） -->
+  <span id="trialQuota" class="muted hidden"></span>
   <span class="muted">试用账号的密码向管理员索取；个人码自己定四位数字，用来区分不同试用者。</span>
 </div>
 
@@ -735,7 +747,7 @@
 
 <script src="/vendor/signalr.min.js"></script>
 <script src="/appearance.js"></script>
-<script src="/fx.js?v=20261011g"></script>
-<script src="/app.js?v=20261011g"></script>
+<script src="/fx.js?v=20261011h"></script>
+<script src="/app.js?v=20261011h"></script>
 </body>
 </html>

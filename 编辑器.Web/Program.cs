@@ -161,6 +161,18 @@ app.MapPost("/api/auth/login", async (HttpContext ctx, AccountStore accounts, Au
             MarkFail(ip);
             return Results.Json(new { error = "账号或密码不对" }, statusCode: 401);
         }
+
+        // ★ 试用名额：最多 3 个个人码**同时在线**（判定见 AuthSessions：空闲 45 分钟算离线）。
+        //   同一码重复登录（换设备 / 断线重连）不占新名额；已在线的人不受满员影响。
+        //   检查放在密码校验**之后**——否则没验证过的人也能探到在线人数。
+        if (!sessions.TrialSlotAvailable(code))
+            return Results.Json(new
+            {
+                error = $"试用名额已满：最多 {AuthSessions.MaxConcurrentTrials} 人同时在线，" +
+                        "请稍后再试，或让管理员在帮助页释放名额。",
+                quotaFull = true,
+            }, statusCode: 429);
+
         subject = "trial:" + code;
     }
     else
@@ -190,6 +202,20 @@ app.MapPost("/api/auth/logout", (HttpContext ctx, AuthSessions sessions) =>
     if (t != null) sessions.Revoke(t);
     ctx.Response.Headers["Set-Cookie"] = "tdx_session=; Path=/; Max-Age=0";
     return Results.Ok(new { ok = true });
+});
+
+// 试用名额余量：登录页在**输密码之前**就要能告诉试用者"现在满了"，
+// 而不是让人填一遍再被拒。只暴露数字，不暴露谁在线。
+// 挂 /api/auth 下走放行段（未登录可访问）。
+app.MapGet("/api/auth/trial-quota", (AuthSessions sessions) =>
+{
+    var online = sessions.ActiveTrials();
+    return Results.Ok(new
+    {
+        max = AuthSessions.MaxConcurrentTrials,
+        used = online.Count,
+        idleMinutes = (int)AuthSessions.IdleTimeout.TotalMinutes,
+    });
 });
 
 // 当前身份。自用账号顺带拿到试用密码与剩余天数（要转发给试用者的就是它）。
@@ -269,6 +295,40 @@ app.MapPost("/api/accounts/trial-rotate", (HttpContext ctx, AccountStore account
 // 而令牌只有网页登录态里才有——用户要手敲密码换 token 才能接上外网 agent。
 // 这个端点把「公网地址 + 一个当场签发的令牌」一次给全，帮助页一键复制即完成配置。
 // 只认自用账号（试用账号的 subject 是 trial:<码>，403）。
+// 自用：看当前有哪些试用者在线 + 手动释放名额。
+// 为什么需要它：空闲超时是 45 分钟起步，试用者"人走了页面没关"期间名额被占着，
+// 自用者（也就是管理员）得能立刻腾出来，而不是等超时。
+app.MapGet("/api/accounts/trial-online", (HttpContext ctx, AuthSessions sessions) =>
+{
+    if ((ctx.Items["subject"] as string ?? (IsLoopback(ctx) ? "self" : "")) != "self")
+        return Results.StatusCode(403);
+    var online = sessions.ActiveTrials();
+    return Results.Ok(new
+    {
+        max = AuthSessions.MaxConcurrentTrials,
+        idleMinutes = (int)AuthSessions.IdleTimeout.TotalMinutes,
+        items = online.Select(t => new
+        {
+            code = t.Code,
+            sessions = t.Sessions,
+            since = t.Since.ToString("HH:mm"),
+            lastSeen = t.LastSeen.ToString("HH:mm"),
+        }),
+    });
+});
+
+// 走查询参数而不是 JSON body：空 body 会让模型绑定直接 400，
+// 而"不传 code = 全踢"本来就是最常用的那一次调用。
+app.MapPost("/api/accounts/trial-kick", (HttpContext ctx, AuthSessions sessions) =>
+{
+    if ((ctx.Items["subject"] as string ?? (IsLoopback(ctx) ? "self" : "")) != "self")
+        return Results.StatusCode(403);
+    var code = ctx.Request.Query["code"].ToString().Trim();
+    // 给了码只踢那个码；不给就全踢（"我不管谁在线，先空出来"）
+    var kicked = code.Length == 0 ? sessions.DropAllTrials() : sessions.DropSubject("trial:" + code);
+    return Results.Ok(new { kicked });
+});
+
 app.MapPost("/api/accounts/mcp-token", (HttpContext ctx, AuthSessions sessions) =>
 {
     if ((ctx.Items["subject"] as string ?? (IsLoopback(ctx) ? "self" : "")) != "self")

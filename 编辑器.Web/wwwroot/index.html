@@ -6,9 +6,12 @@
 <title>写作 · 网页版</title>
 <!-- 版本戳：手机浏览器（尤其微信/Safari）会强缓存静态文件，改了 css/js 它
      照样拿旧的，表现为「修好了他那边还是老样子」。改前端就递增这个号。 -->
-<link rel="stylesheet" href="/style.css?v=20261011d">
+<link rel="stylesheet" href="/style.css?v=20261011e">
 </head>
 <body>
+
+<!-- 顶部流光条：AI 生成 / agent 写稿这类"要等一会儿"的动作亮起（fx.top） -->
+<div id="fxTop"></div>
 
 <!-- 工具条：固定两行，各自单行横向滚动。
      手机上不再折成三四行；低频功能收进「更多」对话框——用原生 <dialog>
@@ -270,6 +273,8 @@
         <button id="chatClearBtn" class="mini-btn" title="清除与 AI 的对话记忆（已经写进章节的正文不受影响）">清空对话</button>
       </div>
       <div id="aiOut" class="ai-out"></div>
+      <!-- 流式计数器：生成时实时显示「已生成 N 字 · X.Xs」，结束几秒后自己收起 -->
+      <div id="aiMeter" class="ai-meter hidden"></div>
       <div class="ai-ops">
         <button id="aiAppendBtn" class="mini-btn" title="把结果追加到当前章末尾">追加到正文</button>
         <select id="aiApplyTo" title="把结果写入某一项设定（写入前会确认是否覆盖）">
@@ -301,7 +306,7 @@
   <span id="sbApi" class="muted" title="当前启用的 AI 配置方案"></span>
   <!-- 前端版本标记：改了 css/js 就递增。手机浏览器爱缓存旧页面，
        有它就能一眼分辨「用户看到的是不是改完的那版」。 -->
-  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v4</span>
+  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v5</span>
 </footer>
 
 <!-- AI 设置对话框 -->
@@ -709,8 +714,12 @@
 <!-- SignalR 前端库放本地，**不要用 CDN**：jsdelivr 在部分网络下不可达，
      一旦加载失败，connect() 第一行就 return，MCP 可视化/实时同步会整体哑火，
      而且表面上一点报错都没有（踩过）。 -->
+<!-- Toast 容器：右下角，压在浮岛与状态栏之上 -->
+<div id="fxToasts"></div>
+
 <script src="/vendor/signalr.min.js"></script>
 <script src="/appearance.js"></script>
-<script src="/app.js?v=20261011d"></script>
+<script src="/fx.js?v=20261011e"></script>
+<script src="/app.js?v=20261011e"></script>
 </body>
 </html>

@@ -181,6 +181,7 @@ function renderChapters() {
     if (c.n === current) li.classList.add('active');
     ul.appendChild(li);
   });
+  fx.stagger(ul);
 }
 
 async function openChapter(n) {
@@ -233,6 +234,7 @@ async function flushSave() {
     stamp = r.stamp;
     dirty = false;
     $('#saveState').textContent = '已保存';
+    fx.flash($('#saveState'));     // 「已保存」闪一下，不用盯着状态栏确认
   } catch (e) {
     $('#saveState').textContent = '保存失败：' + e.message;
   }
@@ -450,6 +452,7 @@ function renderOutline() {
     });
     cards.appendChild(d);
   });
+  fx.stagger(cards);
 
   if (!list.length && all.length) {
     cards.innerHTML = '<div class="muted" style="padding:8px 2px">没有符合条件的章节。</div>';
@@ -514,6 +517,7 @@ function renderCharacters(list) {
     d.querySelector('.char-edit').onclick = () => openCharDlg(c);
     cards.appendChild(d);
   });
+  fx.stagger(cards);
 }
 
 async function loadAppearances() {
@@ -614,6 +618,7 @@ function renderLiterature(list) {
     d.onclick = () => openLitDlg(e);
     box.appendChild(d);
   });
+  fx.stagger(box);
 }
 
 let editingLitId = null;
@@ -672,14 +677,16 @@ $('#bibGo').onclick = async () => {
     const r = await post('/api/literature/import-bibtex', { text: $('#bibText').value });
     $('#bibDlg').close();
     log(`BibTeX 导入 ${r.imported} 条`);
+    fx.toast(`BibTeX 导入 ${r.imported} 条`, 'ok');
     await refresh();
-  } catch (e) { alert('导入失败：' + e.message); }
+  } catch (e) { fx.toast('导入失败：' + e.message, 'err', 4200); }
 };
 
 $('#gbtCopyBtn').onclick = async () => {
   const d = await api('/api/literature/gbt');
   await navigator.clipboard.writeText(d.text || '');
   log('GB/T 7714 文献表已复制到剪贴板');
+  fx.toast('GB/T 7714 文献表已复制', 'ok');
 };
 
 $('#litSearchBtn').onclick = () => {
@@ -688,7 +695,10 @@ $('#litSearchBtn').onclick = () => {
 };
 $('#litSearchGo').onclick = async () => {
   const box = $('#litSearchResults');
-  box.innerHTML = '<span class="muted">检索中…</span>';
+  // 联网检索要等，摆骨架而不是一行「检索中…」——后者看着像卡住了
+  box.innerHTML = '<div class="ai-skel"><div class="ai-skel-label">' +
+    '<span class="dots"><i></i><i></i><i></i></span>检索中…</div>' +
+    '<i style="width:88%"></i><i style="width:72%"></i><i style="width:54%"></i></div>';
   try {
     const d = await api(`/api/literature/search?q=${encodeURIComponent($('#litSearchQ').value)}&source=${$('#litSearchSrc').value}`);
     box.innerHTML = '';
@@ -710,6 +720,7 @@ $('#litSearchGo').onclick = async () => {
       row.appendChild(btn);
       box.appendChild(row);
     });
+    fx.stagger(box);
   } catch (e) { box.innerHTML = '<span class="muted">检索失败：' + escapeHtml(e.message) + '</span>'; }
 };
 
@@ -759,6 +770,7 @@ function renderSnapshotInto(box, list, compact = false) {
     };
     box.appendChild(d);
   });
+  fx.stagger(box);
 }
 
 // ---------- 世界设定 / AI 记忆 ----------
@@ -800,6 +812,7 @@ $$('.export button').forEach(b => {
     if (!book) return;
     window.open(`/api/export?format=${b.dataset.fmt}`, '_blank');
     log(`导出 ${b.textContent} 已开始下载`);
+    fx.toast(`正在导出 ${b.textContent}，下载马上开始`, 'ok');
   };
 });
 
@@ -1156,16 +1169,36 @@ function addTokenTotal(inTok, outTok, cached) {
   tokenTotal.cached += cached || 0;
 }
 
+// 骨架屏上那句「在做什么」——生成动辄十几秒，屏幕上没动静就等于卡死了
+const TASK_LABEL = {
+  continue: '正在续写', polish: '正在润色', expand: '正在扩写',
+  name: '正在生成人名', chat: '正在写作', review: '正在逐条核对设定',
+  outline: '正在规划全文大纲', chapterOutline: '正在排章节大纲',
+  character: '正在生成人物设定', background: '正在生成背景设定',
+  style: '正在提炼文风', viewpoint: '正在判断叙事视角',
+};
+
 async function runAi(task, extra = {}) {
   // 审稿用独立报告框（对应桌面端 ReviewResultWindow），别的任务照旧写进 AI 面板
   const useReport = extra.report === true;
   const out = useReport ? $('#reportBody') : $('#aiOut');
-  out.textContent = '';
-  const go = $('#aiGoBtn'), stop = $('#aiStopBtn');
-  go.disabled = true; go.textContent = '生成中…';
+  const go = $('#aiGoBtn'), stop = $('#aiStopBtn'), box = $('.ai-box');
+  const t0 = performance.now();
+  let outcome = 'ok';          // ok / stopped / error
+  let chars = 0;
+
+  go.disabled = true; go.textContent = '生成中…'; go.classList.add('busy');
   stop.disabled = false;
+  box.classList.add('busy');
   lastTokens = '';
   updateChatInfo();
+
+  fx.begin(out, TASK_LABEL[task] || 'AI 正在构思');
+  const tick = txt => {
+    const s = txt !== undefined ? txt
+      : `已生成 ${chars} 字 · ${((performance.now() - t0) / 1000).toFixed(1)}s`;
+    if (useReport) $('#reportNote').textContent = s; else fx.meter(s);
+  };
 
   // 续写/润色吃服务器上的正文，先把编辑器里未保存的字落盘
   // （顺带保证服务器在生成前拍的那张快照是最新的）
@@ -1177,6 +1210,7 @@ async function runAi(task, extra = {}) {
     $('#reportNote').textContent = '只读分析：报告不会改动正文';
     $('#reportDlg').showModal();
   }
+  tick('正在准备上下文…');
 
   const isChat = task === 'chat';
   const body = {
@@ -1198,7 +1232,11 @@ async function runAi(task, extra = {}) {
       body: JSON.stringify(body),
       signal: aiAbort.signal,
     });
-    if (!res.ok) { out.textContent = await res.text(); return; }
+    if (!res.ok) {
+      fx.stream(out, await res.text());
+      outcome = 'error';
+      return;
+    }
 
     const reader = res.body.getReader();
     const dec = new TextDecoder();
@@ -1212,8 +1250,9 @@ async function runAi(task, extra = {}) {
       for (const p of parts) {
         if (!p.startsWith('data: ')) continue;
         const ev = JSON.parse(p.slice(6));
-        if (ev.type === 'text') out.textContent = ev.payload;
-        else if (ev.type === 'notice') out.textContent = `[${ev.payload}]\n` + out.textContent;
+        // 服务端每个 text 事件给的是**累计全文**，fx.stream 自己算增量做淡入
+        if (ev.type === 'text') { fx.stream(out, ev.payload); chars = (ev.payload || '').length; tick(); }
+        else if (ev.type === 'notice') { fx.notice(out, ev.payload); tick(`[${ev.payload}]`); }
         else if (ev.type === 'progress') {
           lastTokens = `${ev.payload.inTok} in / ${ev.payload.outTok} out`;
           updateChatInfo();
@@ -1222,7 +1261,8 @@ async function runAi(task, extra = {}) {
         }
         else if (ev.type === 'chatinfo') { chatInfo = ev.payload; updateChatInfo(); }
         else if (ev.type === 'done') {
-          out.textContent = ev.payload.text;
+          fx.stream(out, ev.payload.text);
+          chars = (ev.payload.text || '').length;
           // 最终用量（含缓存命中）→ 状态栏 + 会话累计（桌面端 ShowTokenUsage 同口径）
           const u = ev.payload;
           if (u.totalTokens > 0) {
@@ -1235,17 +1275,33 @@ async function runAi(task, extra = {}) {
             await refresh();
           }
         }
-        else if (ev.type === 'stopped') log('生成已停止，保留已生成的部分');
-        else if (ev.type === 'error') out.textContent = '出错：' + ev.payload;
+        else if (ev.type === 'stopped') { outcome = 'stopped'; log('生成已停止，保留已生成的部分'); }
+        else if (ev.type === 'error') {
+          outcome = 'error';
+          fx.stream(out, '出错：' + ev.payload);
+        }
       }
     }
   } catch (e) {
-    if (e.name === 'AbortError') log('已停止生成（保留已出来的部分）');
-    else out.textContent = '出错：' + e.message;
+    if (e.name === 'AbortError') { outcome = 'stopped'; log('已停止生成（保留已出来的部分）'); }
+    else { outcome = 'error'; fx.stream(out, '出错：' + e.message); }
   } finally {
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
     aiAbort = null;
-    go.disabled = false; go.textContent = '生成';
+    go.disabled = false; go.textContent = '生成'; go.classList.remove('busy');
     stop.disabled = true;
+    box.classList.remove('busy');
+    fx.end(out, outcome !== 'error');
+    if (outcome === 'stopped') {
+      fx.toast('已停止生成，保留已出来的部分', 'warn');
+      fx.meter(`已停止 · ${chars} 字 · ${secs}s`, 6000);
+    } else if (outcome === 'error') {
+      fx.toast('生成出错，详情见输出区', 'err', 4200);
+      fx.meter(null);
+    } else {
+      fx.toast(`生成完成 · ${chars} 字 · ${secs}s`, 'ok');
+      fx.meter(`生成完成 · ${chars} 字 · ${secs}s`, 6000);
+    }
   }
 }
 
@@ -1298,15 +1354,16 @@ document.querySelectorAll('.ai-chips [data-task]').forEach(b => {
 // ---------- AI 审稿 / 角色出场统计（桌面端顶栏同款两个按钮） ----------
 
 $('#reviewBtn').onclick = async () => {
-  if (current == null) return alert('先选一章，再对它审稿');
-  if (!($('#editor').value || '').trim()) return alert('本章还没有正文，无可审阅');
+  // 这类"还差一步"的提示用 Toast：alert 会打断正在写的东西
+  if (current == null) return fx.toast('先选一章，再对它审稿', 'warn');
+  if (!($('#editor').value || '').trim()) return fx.toast('本章还没有正文，无可审阅', 'warn');
   await runAi('review', { report: true });
 };
 
 $('#charAppearBtn').onclick = async () => {
   try {
     const r = await api('/api/character-appearances');
-    if (!r.report) return alert('还没有正文或角色名单，无从统计。');
+    if (!r.report) return fx.toast('还没有正文或角色名单，无从统计', 'warn');
     $('#reportTitle').textContent = `角色出场统计 · ${r.title}`;
     $('#reportNote').textContent = `${r.count || 0} 个角色 · 本地扫描，不花 token`;
     $('#reportBody').textContent = r.report || '';
@@ -1316,8 +1373,8 @@ $('#charAppearBtn').onclick = async () => {
 
 $('#reportCopy').onclick = async () => {
   const text = $('#reportBody').textContent || '';
-  try { await navigator.clipboard.writeText(text); log('报告已复制'); }
-  catch { alert('复制失败，请手动选中后复制'); }
+  try { await navigator.clipboard.writeText(text); log('报告已复制'); fx.toast('报告已复制', 'ok'); }
+  catch { fx.toast('复制失败，请手动选中后复制', 'err', 4200); }
 };
 $('#reportClose').onclick = () => $('#reportDlg').close();
 
@@ -1915,6 +1972,8 @@ function connect() {
 
     if (t === 'stream') {
       mcpBadgeShow('MCP 执行中', true, false);
+      fx.top(true);                 // 顶栏流光条：agent 在跑也要看得见
+      $('#aiOut').classList.add('streaming');
       if (ev.inputTokens || ev.outputTokens) {
         lastTokens = `MCP ${ev.inputTokens} in / ${ev.outputTokens} out`;
         updateChatInfo();
@@ -1923,7 +1982,9 @@ function connect() {
         showTokenStat(tokenLine(mcpCallTokens.inTok, mcpCallTokens.outTok, 0, null, 'MCP Token'));
       }
       if (ev.previewText) {
-        $('#aiOut').textContent = ev.previewText;
+        // 与网页自己点「生成」同一套流式观感（打字机光标 + 新字淡入）
+        fx.stream($('#aiOut'), ev.previewText);
+        fx.meter(`Agent 正在生成 · ${ev.previewText.length} 字`);
         // ★ 主编辑框里实时显示正文增长——桌面端就是这么做的，
         //   不然用户只能看着一个不动的屏幕猜 agent 有没有在干活
         if (ev.writeBack && ev.chapterNumber > 0) {
@@ -1932,6 +1993,7 @@ function connect() {
             mcpStreamBase = '';
           }
           const box = $('#editor');
+          box.classList.add('mcp-writing');   // 整块呼吸，标明"这块现在不是我在写"
           box.value = ev.writeMode === 'replace'
             ? ev.previewText
             : (mcpStreamBase ? mcpStreamBase.replace(/\n+$/, '') + '\n' + ev.previewText
@@ -1948,6 +2010,10 @@ function connect() {
     mcpStreaming = false;
     mcpStreamChapter = null;
     mcpStreamBase = '';
+    fx.top(false);
+    $('#editor').classList.remove('mcp-writing');
+    fx.end($('#aiOut'), t !== 'error');
+    if (ev.previewText) fx.meter(`Agent 生成完成 · ${ev.previewText.length} 字`, 6000);
     // MCP 用量结算：最后一次 stream 的累计值就是这次调用的最终值（done 事件不带 token），
     // 计入会话累计；主显示不动——桌面端 done 时也停在最后一次的值上
     if (mcpCallTokens) {
@@ -1958,7 +2024,7 @@ function connect() {
     }
     mcpBadgeShow(t === 'error' ? 'MCP 出错' : 'MCP 已同步', false, true);
     if (ev.summary) log(ev.summary, true);   // MCP 的消息都是 agent 发的，别标成「你」
-    if (ev.previewText) $('#aiOut').textContent = ev.previewText;
+    if (ev.previewText) fx.stream($('#aiOut'), ev.previewText);
     if (ev.projectModified) {
       // ★ 先让**服务器**重新从磁盘读一遍：stdio 的 agent 改的是文件，
       //   服务器内存里还是旧副本，只刷前端等于读了个旧的（字数全 0）。
@@ -2075,9 +2141,14 @@ async function saveSbContent(includeOnly) {
 
 $('#sbAiBtn').onclick = async () => {
   if (!sbCurrentId) return;
-  const btn = $('#sbAiBtn'), out = $('#sbState');
+  const btn = $('#sbAiBtn'), out = $('#sbState'), ta = $('#sbContent');
+  const t0 = performance.now();
   btn.disabled = true;
+  btn.classList.add('busy');
+  ta.classList.add('streaming');
   out.textContent = 'AI 生成中…';
+  fx.top(true);
+  fx.meter('设定集生成中…');
   try {
     const res = await fetch('/api/settingsbook/generate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2096,9 +2167,13 @@ $('#sbAiBtn').onclick = async () => {
       for (const p of parts) {
         if (!p.startsWith('data: ')) continue;
         const ev = JSON.parse(p.slice(6));
-        if (ev.type === 'text') { text = ev.payload; $('#sbContent').value = text; out.textContent = '生成中… ' + text.length + ' 字'; }
+        if (ev.type === 'text') {
+          text = ev.payload; $('#sbContent').value = text;
+          out.textContent = '生成中… ' + text.length + ' 字';
+          fx.meter(`设定集生成中 · ${text.length} 字 · ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+        }
         else if (ev.type === 'progress') showTokenStat(tokenLine(ev.payload.inTok, ev.payload.outTok, 0));
-        else if (ev.type === 'error') out.textContent = '出错：' + ev.payload;
+        else if (ev.type === 'error') { out.textContent = '出错：' + ev.payload; fx.toast('设定集生成出错', 'err', 4200); }
         else if (ev.type === 'done') {
           // 设定集生成同样消耗 token，结算进状态栏与会话累计
           const u = ev.payload;
@@ -2106,13 +2181,22 @@ $('#sbAiBtn').onclick = async () => {
             addTokenTotal(u.inputTokens, u.outputTokens, u.cachedInputTokens);
             showTokenStat(tokenLine(u.inputTokens, u.outputTokens, u.cachedInputTokens, u.totalTokens));
           }
-          if (ev.payload.saved) { out.textContent = '已生成并保存 ' + new Date().toLocaleTimeString(); log(`设定集「${$('#sbChTitle').value}」已由 AI 生成`, true); }
-          else out.textContent = '生成结果不可用';
+          if (ev.payload.saved) {
+            out.textContent = '已生成并保存 ' + new Date().toLocaleTimeString();
+            log(`设定集「${$('#sbChTitle').value}」已由 AI 生成`, true);
+            fx.toast(`设定集生成完成 · ${text.length} 字 · ${((performance.now() - t0) / 1000).toFixed(1)}s`, 'ok');
+            fx.meter(`设定集生成完成 · ${text.length} 字`, 6000);
+          } else { out.textContent = '生成结果不可用'; fx.meter(null); }
         }
       }
     }
-  } catch (e) { out.textContent = '出错：' + e.message; }
-  finally { btn.disabled = false; }
+  } catch (e) { out.textContent = '出错：' + e.message; fx.toast('设定集生成出错：' + e.message, 'err', 4200); }
+  finally {
+    btn.disabled = false;
+    btn.classList.remove('busy');
+    ta.classList.remove('streaming');
+    fx.top(false);
+  }
 };
 
 const sbExport = fmt => async () => {

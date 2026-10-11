@@ -601,6 +601,10 @@ dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
   display:flex;align-items:center;gap:2px;padding:0 8px;flex-shrink:0;
   background:var(--menu-solid,var(--panel));
   border-bottom:1px solid var(--line);font-size:12.5px;
+  /* 下拉菜单要盖过下面的 header 工具条（header 因材质加了 z-index:1，
+     菜单栏若不自己建立层叠上下文，下拉会被 header 压在底下——
+     手机窄屏 header 换行成三四行时，「文件」菜单的前几项直接看不见）。 */
+  position:relative;z-index:60;
 }
 #menubar .menu{position:relative}
 #menubar summary{

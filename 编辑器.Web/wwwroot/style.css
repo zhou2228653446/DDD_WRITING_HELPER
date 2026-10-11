@@ -800,7 +800,10 @@ body{
 }
 
 /* ── 顶栏：微影替代硬边线 ── */
-header,#menubar{
+/* ⚠ 只给 header。#menubar 不能在这里一起设 z-index——本节在文件后部，
+   会把 #menubar 自身的 z-index:9999（见菜单栏一节）覆盖掉，两者跌回同层，
+   header 靠 DOM 顺序压在下拉菜单上面，菜单前两项被盖住（踩过三次才找到）。 */
+header{
   border-bottom:1px solid var(--line-soft);
   box-shadow:0 1px 3px rgba(0,0,0,.04);
   position:relative; z-index:5;

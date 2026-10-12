@@ -295,6 +295,25 @@ app.MapPost("/api/accounts/trial-rotate", (HttpContext ctx, AccountStore account
 // 而令牌只有网页登录态里才有——用户要手敲密码换 token 才能接上外网 agent。
 // 这个端点把「公网地址 + 一个当场签发的令牌」一次给全，帮助页一键复制即完成配置。
 // 只认自用账号（试用账号的 subject 是 trial:<码>，403）。
+// 下载「Agent 接入助手」：一个自包含的小 exe，用户在自己设备上双击运行，
+// 输入账号密码 → 自动换令牌 → 自动写进本机 agent 客户端（Claude/Cursor/Codex…）。
+//
+// 为什么要有它：能打开这个网页的人本来就能手抄配置，但"找配置文件 + 拼 JSON +
+// 令牌写错一个字符"是接入路上最容易劝退的一段。让用户下载一个几百 KB 的
+// 工具跑一下，比让他去翻 Cursor 的配置目录现实得多。
+// 放在 /api 下：非本机访问同样要登录（没账号的人本来也接不了）。
+app.MapGet("/api/agent-setup/download", () =>
+{
+    var exe = Path.Combine("D:\\", "TdxClaw", "download", "TdxClaw.AgentSetup.exe");
+    if (!File.Exists(exe))
+        return Results.Json(new
+        {
+            error = "接入助手还没构建：在仓库根跑 web-service.bat publish（或 deploy.bat）会顺带生成。",
+            expected = exe,
+        }, statusCode: 404);
+    return Results.File(exe, "application/octet-stream", "TdxClaw.AgentSetup.exe");
+});
+
 // 自用：看当前有哪些试用者在线 + 手动释放名额。
 // 为什么需要它：空闲超时是 45 分钟起步，试用者"人走了页面没关"期间名额被占着，
 // 自用者（也就是管理员）得能立刻腾出来，而不是等超时。

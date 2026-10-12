@@ -2444,6 +2444,33 @@ $('#selfPwdSave').onclick = async () => {
   } catch (e) { st.textContent = '失败：' + errMsg(e); }
 };
 
+// 下载「Agent 接入助手」给另一台设备用。
+// ⚠ 用 fetch+blob 而不是 <a href>：下载端点非回环时要带登录头，a 标签带不上。
+$('#agentSetupBtn').onclick = async () => {
+  const st = $('#agentSetupState');
+  st.textContent = '正在准备下载…';
+  try {
+    const r = await fetch('/api/agent-setup/download', { headers: authHeaders() });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      st.textContent = d.error || ('下载失败 HTTP ' + r.status);
+      return;
+    }
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'TdxClaw.AgentSetup.exe';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 8000);
+    st.textContent = `已下载（${(blob.size / 1048576).toFixed(1)} MB）`;
+    log('已下载 Agent 接入助手');
+  } catch (e) {
+    st.textContent = '下载失败：' + errMsg(e);
+  }
+};
+
 let agentClientsLoaded = false;
 async function loadAgentClients() {
   if (agentClientsLoaded) return;

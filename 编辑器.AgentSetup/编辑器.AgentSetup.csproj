@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>编辑器.AgentSetup</RootNamespace>
+    <!-- 程序集/产品名刻意用英文：这个 exe 是发给外部用户在他们自己设备上跑的，
+         中文 exe 名在下载/杀软/命令行里都可能出幺蛾子。命名空间仍用中文保持工程一致。 -->
+    <AssemblyName>TdxClaw.AgentSetup</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- 单文件自包含：用户设备不用预装 .NET，下载完双击就能跑。
+         ⚠ 不开 Trim —— System.Text.Json 的反射序列化被裁会静默出问题，
+         多几 MB 换"不会莫名其妙坏"，值得。 -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+</Project>

@@ -59,6 +59,7 @@ BAT_SELF = ROOT / "web-service.bat"       # 入口 bat，下面要负责给它�
 OK = "[OK]"
 ERR = "[!!]"
 INFO = "[..]"
+WARN = "[~~]"
 
 
 # ---------------------------------------------------------------- 基础工具
@@ -240,7 +241,31 @@ def publish():
         say(ERR, "发布完成但目录里没找到可执行文件。")
         return False
     say(OK, f"发布完成：{exe.name}")
+    publish_agent_setup()
     return True
+
+
+# 「Agent 接入助手」：发给外部用户在他们自己设备上跑的独立小工具（HTTP 接 MCP）。
+# 发布失败不算致命——主服务已经好了，用户还能手动抄配置；所以这里只警告不返回 False。
+AGENT_SETUP_PROJ = ROOT / "编辑器.AgentSetup" / "编辑器.AgentSetup.csproj"
+AGENT_SETUP_OUT = Path(r"D:\TdxClaw\download")
+
+
+def publish_agent_setup():
+    if not AGENT_SETUP_PROJ.exists():
+        say(INFO, "没找到 Agent 接入助手工程，跳过。")
+        return
+    AGENT_SETUP_OUT.mkdir(parents=True, exist_ok=True)
+    code, out = run(
+        ["dotnet", "publish", str(AGENT_SETUP_PROJ), "-c", "Release",
+         "-r", "win-x64", "--self-contained", "true",
+         "-p:PublishSingleFile=true", "-o", str(AGENT_SETUP_OUT)],
+        timeout=600,
+    )
+    if code != 0:
+        say(WARN, "Agent 接入助手构建失败（不影响网站本身）：" + out[-300:].replace("\n", " "))
+        return
+    say(OK, f"Agent 接入助手已生成：{AGENT_SETUP_OUT / 'TdxClaw.AgentSetup.exe'}")
 
 
 def find_exe():

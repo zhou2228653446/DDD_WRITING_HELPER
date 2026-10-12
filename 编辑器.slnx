@@ -1,4 +1,6 @@
 <Solution>
+  <!-- Agent 接入助手：发给外部用户在他们设备上跑的独立小工具（HTTP 接 MCP） -->
+  <Project Path="编辑器.AgentSetup/编辑器.AgentSetup.csproj" />
   <Project Path="编辑器.Mcp/编辑器.Mcp.csproj" />
   <Project Path="编辑器.Tests/编辑器.Tests.csproj" />
   <Project Path="编辑器/编辑器.csproj" />

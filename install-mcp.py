@@ -43,6 +43,8 @@ NAME = "tdxclaw-writing"
 
 # kind: json（结构化合并）/ toml / yaml（片段追加）
 # key : JSON 里服务器表所在的键 —— VS Code 用 "servers"，其余用 "mcpServers"
+# ★ 同一份客户端清单在 编辑器.AgentSetup/Clients.cs 里还有一份（那份是 HTTP 接入版，
+#   给外部用户在他们自己设备上跑的 TdxClaw.AgentSetup.exe 用）。加客户端要两处一起改。
 CLIENTS = [
     dict(id="antigravity", name="Google Antigravity",
          path=lambda: Path.home() / ".gemini" / "config" / "mcp_config.json",

@@ -666,6 +666,26 @@ web-service.bat start / stop / log
 - 同机 agent 想省事就直接用 `http://127.0.0.1:5280/mcp`（回环免登录，连令牌都不用）：
   这也是 `install-mcp.bat` 走的 stdio 之外最省的一条路。
 
+### 给别人的设备：Agent 接入助手（一个 exe 搞定）
+
+别人（或你自己的另一台电脑）要接 agent，不用去翻 Cursor 的配置目录抄 JSON：
+
+1. 在那台设备上打开本服务的网页（登录后）→ **帮助 → 接入 Agent → 下载 Agent 接入助手**；
+   也可以直接下载 `D:\TdxClaw\download\TdxClaw.AgentSetup.exe`（由 `web-service.bat publish` 构建）。
+2. 在**那台设备**上双击运行，输入服务器地址（默认已填好公网域名，回车即用）、账号密码、
+   （试用再加四位个人码）。它会：
+   - 登录换一个访问令牌（密码只用一次，不落盘、不回显）
+   - 自动找到这台机器上装着的 Claude / Cursor / Codex / WorkBuddy / Cline / Antigravity 等客户端
+   - 把 `type=http` + 公网地址 + 令牌写进各自的配置（**改前自动备份**，只动 `tdxclaw` 一项，
+     别的 MCP 服务器原样保留；Continue 的 YAML 各家版本差异大，只打印片段不自动写）
+3. 重启对应客户端即可看到 `tdxclaw`。
+
+参数（一般用不上）：`--print` 只打印片段不写文件、`--dry-run` 演练、`--server/--user/--password/--code`
+非交互（给脚本用）。这个 exe 是自包含单文件（约 37MB，无需预装 .NET）；
+若 Windows 弹"已保护你的电脑"，点「更多信息 → 仍要运行」。
+
+⚠ 令牌是内存态：服务重启或重新发布后失效，重跑一次即可。
+
 ### 多账户与试用名额（最多 3 人同时在线）
 
 非本机访问要登录，身份分两类：

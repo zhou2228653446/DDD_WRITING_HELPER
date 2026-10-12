@@ -6,7 +6,7 @@
 <title>写作 · 网页版</title>
 <!-- 版本戳：手机浏览器（尤其微信/Safari）会强缓存静态文件，改了 css/js 它
      照样拿旧的，表现为「修好了他那边还是老样子」。改前端就递增这个号。 -->
-<link rel="stylesheet" href="/style.css?v=20261012a">
+<link rel="stylesheet" href="/style.css?v=20261012b">
 </head>
 <body>
 
@@ -306,7 +306,7 @@
   <span id="sbApi" class="muted" title="当前启用的 AI 配置方案"></span>
   <!-- 前端版本标记：改了 css/js 就递增。手机浏览器爱缓存旧页面，
        有它就能一眼分辨「用户看到的是不是改完的那版」。 -->
-  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v10</span>
+  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v11</span>
 </footer>
 
 <!-- AI 设置对话框 -->
@@ -427,6 +427,20 @@
       接上之后，你在 agent 里说一句「打开某某书稿，给第 3 章续写 800 字」，
       它就能直接读写你的稿子；网页此时会实时跟着切章、同步设定。
     </p>
+    <!-- 给「另一台设备」用的一键接入：下载一个小 exe，在那台机器上跑一次，
+         自动登录换令牌并写进它本机的 agent 客户端。 -->
+    <div class="help-p">
+      <button type="button" id="agentSetupBtn" class="mini-btn"
+        title="下载一个独立小工具：在另一台设备上运行，自动登录并把配置写进那台机器的 agent 客户端">
+        下载 Agent 接入助手（Windows）
+      </button>
+      <span id="agentSetupState" class="muted"></span>
+      <div class="muted" style="font-size:12px;margin-top:4px">
+        给另一台设备用：下载后在<strong>那台设备</strong>上运行，输入账号密码即可——
+        它自己会找到 Claude / Cursor / Codex / WorkBuddy 等客户端并写好配置（改前自动备份）。
+      </div>
+    </div>
+
     <div id="agentHint" class="muted"></div>
     <div id="agentList" class="agent-list"></div>
     <!-- ⚠ 这里必须是 div 不是 p：里面要塞 <pre> 和 <button>，
@@ -763,7 +777,7 @@
 
 <script src="/vendor/signalr.min.js"></script>
 <script src="/appearance.js"></script>
-<script src="/fx.js?v=20261012a"></script>
-<script src="/app.js?v=20261012a"></script>
+<script src="/fx.js?v=20261012b"></script>
+<script src="/app.js?v=20261012b"></script>
 </body>
 </html>

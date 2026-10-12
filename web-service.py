@@ -585,16 +585,58 @@ def start_service(wait=12):
     return False
 
 
-def stop_service():
-    pids = pid_on_port()
-    if not pids:
-        say(INFO, f"端口 {PORT} 上没有监听，无需停止。")
+def name_alive():
+    """是否还有同名进程活着。⚠ 只查端口不够：不占端口的残留/半死实例
+    同样把发布目标 dll 锁得死死的。"""
+    code, out = run(["tasklist", "/FI", f"IMAGENAME eq {APP_EXE}", "/FO", "CSV", "/NH"])
+    return code == 0 and APP_EXE.lower() in out.lower()
+
+
+def publish_target_locked():
+    """发布目标的主 dll 是否仍被锁（能拿到写句柄才算真解锁）。"""
+    p = INSTALL_DIR / "TdxClaw.Web.dll"
+    if not p.exists():
+        return False
+    try:
+        with open(p, "r+b"):
+            return False
+    except OSError:
         return True
-    for pid in pids:
-        code, out = run(["taskkill", "/PID", pid, "/F"])
-        say(OK if code == 0 else ERR, f"结束进程 {pid}：{out or 'done'}")
-    time.sleep(1)
-    return not pid_on_port()
+
+
+def stop_service():
+    """停服务。⚠ 只杀「端口上的进程」不够稳：不占端口的残留实例同样锁着
+    dll，publish 会卡在「文件被另一个进程使用」上重试十次然后失败
+    （2026-10-12 实际踩过一次，用户只能手动 taskkill 才发得出去）。
+    所以这里三重保险：端口 owner + 同名全杀 + 杀后等待并验证（端口空、
+    进程名消失、主 dll 可写）。返回 False = 没停干净，调用方别硬发。"""
+    pids = sorted(pid_on_port())
+    if pids:
+        for pid in pids:
+            code, out = run(["taskkill", "/PID", pid, "/F"])
+            say(OK if code == 0 else ERR, f"结束进程 {pid}：{out or 'done'}")
+    else:
+        say(INFO, f"端口 {PORT} 上没有监听。")
+    # 兜底：同名进程一并收掉（含没占端口、却把 dll 锁死的实例）
+    if name_alive():
+        run(["taskkill", "/IM", APP_EXE, "/F"])
+        say(INFO, f"按名称清理残留的 {APP_EXE} 进程。")
+    # 等待真正退出：进程终止到文件锁释放有个短暂窗口，而发布紧跟着就要写文件
+    for _ in range(10):
+        if not pid_on_port() and not name_alive():
+            break
+        time.sleep(0.5)
+    ok = not pid_on_port() and not name_alive()
+    if ok and publish_target_locked():
+        # 进程没了但文件还打不开：多半是杀进程后的短窗口，再等一小会儿
+        for _ in range(6):
+            time.sleep(0.5)
+            if not publish_target_locked():
+                break
+        ok = not publish_target_locked()
+    if not ok:
+        say(ERR, f"还有进程/文件锁没释放，发布大概率会失败——先手动 taskkill /IM {APP_EXE} /F 再重试。")
+    return ok
 
 
 # ---------------------------------------------------------------- 命令
@@ -658,7 +700,7 @@ def cmd_status(_a):
 def stop_before_publish():
     """发布会覆盖 dll，而运行中的进程一直锁着这些文件——不先停掉，
     publish 必然卡在「文件被另一个进程使用」上重试十次然后失败。"""
-    if alive():
+    if alive() or name_alive():
         say(INFO, "先停掉正在运行的服务：发布要覆盖 dll，运行中的进程锁着它们。")
         stop_service()
 
@@ -741,7 +783,9 @@ def cmd_uninstall(_a):
 
 def cmd_restart(a):
     print()
-    stop_service()
+    if not stop_service():
+        say(ERR, "服务没停干净（还有实例在锁文件），请按上面的提示处理后重试。")
+        return 1
     if not a.no_publish:
         if not publish():
             return 1

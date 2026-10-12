@@ -738,21 +738,6 @@ aside:not(.hidden){animation:fadeIn 180ms ease-out}
   border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);color:var(--ink);
 }
 
-/* ---------- 登录横幅（非本机访问时的登录/初始化入口） ---------- */
-#loginBanner{
-  position:fixed;top:0;left:0;right:0;z-index:120;
-  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
-  padding:10px 16px;background:var(--panel);
-  border-bottom:2px solid var(--accent);
-  box-shadow:0 6px 20px rgba(0,0,0,.28);
-}
-#loginBanner.hidden{display:none}
-#loginBanner input,#loginBanner select{
-  font:inherit;font-size:13px;padding:5px 9px;
-  border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);color:var(--ink);
-}
-#loginBanner .primary{cursor:pointer}
-
 /* ══════════════════════════════════════════════════════════════════
    现代化润色层 —— 只动形状 / 层次 / 间距 / 动效，不碰配色变量
    （外观系统的 8 套配色与材质照常生效；此处全部用已有变量派生）
@@ -888,9 +873,6 @@ dialog::backdrop{ background:rgba(0,0,0,.32); backdrop-filter:blur(2px); }
 .mcp-badge{ border-radius:999px; box-shadow:var(--shadow-1); }
 .badge{ border-radius:999px; }
 
-/* ── 帮助横幅 ── */
-#loginBanner{ box-shadow:var(--shadow-2); }
-
 /* ── 浮岛布局：三栏各自成卡片，间隙透出底色 ── */
 main{ gap:10px; padding:10px; }
 #chapters,#right,#center{
@@ -906,8 +888,6 @@ main{ gap:10px; padding:10px; }
 #right{ border-left:1px solid var(--line-soft); }
 /* 章节标题输入与编辑区融合 */
 .editor-bar{ background:transparent; border-bottom:1px solid var(--line-soft); }
-/* 帮助横幅压在浮岛之上 */
-#loginBanner{ z-index:130; }
 
 /* ── 细节：AI 面板分组分隔 + 纸上标题 ── */
 .ai-box>details+details,.ai-box .ai-sec+.ai-sec,.ai-box details+.ctx-gen{ }
@@ -1159,6 +1139,40 @@ button.busy::before{
 #mcpCfgNote{margin-top:2px}
 #mcpCfgBtn{white-space:nowrap}
 #mcpCfgState{margin-left:8px}
+
+/* ── 登录门 ──
+   未登录时整页盖住；body.locked 同时把 header/main/footer 藏掉，
+   免得后面的界面骨架透出来、或者 Tab 键能跑到后面的控件上。
+   配色走的是 :root 变量（登录前拿不到外观配置，用默认那套即可）。 */
+/* display:none 而不是 visibility:hidden：后者不占位但仍撑开文档宽度，
+   窄屏上登录卡片会被按"更宽的文档"居中，右半边跑出视口。 */
+body.locked{overflow:hidden}
+body.locked header,body.locked main,body.locked footer,body.locked #statusbar{display:none}
+#loginScreen{
+  position:fixed;inset:0;z-index:170;
+  display:flex;align-items:center;justify-content:center;
+  padding:20px;
+  background:var(--bg);
+}
+.login-card{
+  /* width:100% + max-width，而不是 min(420px,94vw)：vw 不含外层的 20px padding，
+     窄屏上会算多 40px 把卡片顶出屏幕（手机截图里右边被裁掉过）。 */
+  width:100%;max-width:420px;
+  background:var(--panel);color:var(--ink);
+  border:1px solid var(--line-soft);border-radius:14px;
+  box-shadow:var(--shadow-2);
+  padding:26px 24px 20px;
+}
+.login-brand{font-size:20px;font-weight:600;letter-spacing:.2px}
+.login-brand span{font-size:13px;font-weight:400;color:var(--muted);margin-left:6px}
+.login-sub{font-size:13px;color:var(--muted);margin:6px 0 18px}
+.login-field{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.login-field>span{flex:none;width:44px;font-size:13px;color:var(--muted)}
+.login-field input,.login-field select{flex:1;min-width:0}
+#loginGo{width:100%;margin-top:6px;padding:9px 0;font-size:14px}
+.login-err{min-height:18px;font-size:12.5px;color:var(--danger);margin-top:8px}
+.login-quota{font-size:12.5px;margin-top:2px}
+.login-hint{font-size:12px;color:var(--muted);margin-top:12px;line-height:1.6}
 
 /* ── 试用只读提示（提示词 / 技能对话框顶部） ── */
 .ro-hint{

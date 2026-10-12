@@ -6,7 +6,7 @@
 <title>写作 · 网页版</title>
 <!-- 版本戳：手机浏览器（尤其微信/Safari）会强缓存静态文件，改了 css/js 它
      照样拿旧的，表现为「修好了他那边还是老样子」。改前端就递增这个号。 -->
-<link rel="stylesheet" href="/style.css?v=20261011i">
+<link rel="stylesheet" href="/style.css?v=20261012a">
 </head>
 <body>
 
@@ -40,7 +40,7 @@
     <span id="mcpBadge" class="mcp-badge hidden" title="agent 正在通过 MCP 操作这本书">MCP 执行中</span>
     <span id="stats" class="muted" title="点击看最近 14 天"></span>
     <span id="meBadge" class="muted" title="当前登录身份">自用</span>
-    <button id="logoutBtn" class="hidden" title="退出登录">退出</button>
+    <button id="logoutBtn" class="hidden" title="退出登录，回到登录界面">退出登录</button>
     <button id="toggleChapters" class="vt-btn" title="显示 / 隐藏左侧章节栏">章节栏</button>
     <button id="toggleRight" class="vt-btn" title="显示 / 隐藏右侧 AI 面板">AI面板</button>
   </div>
@@ -306,7 +306,7 @@
   <span id="sbApi" class="muted" title="当前启用的 AI 配置方案"></span>
   <!-- 前端版本标记：改了 css/js 就递增。手机浏览器爱缓存旧页面，
        有它就能一眼分辨「用户看到的是不是改完的那版」。 -->
-  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v9</span>
+  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v10</span>
 </footer>
 
 <!-- AI 设置对话框 -->
@@ -487,20 +487,36 @@
 </dialog>
 
 <!-- 登录横幅（非本机访问时出现；登录成功整页刷新，避免任何弹窗状态机问题） -->
-<div id="loginBanner" class="hidden">
-  <b id="loginTitle">登录</b>
-  <select id="loginUser" title="账号类型">
-    <option value="self">自用</option>
-    <option value="trial">试用</option>
-  </select>
-  <input id="loginPassword" type="password" placeholder="密码" autocomplete="current-password">
-  <input id="loginCode" class="hidden" inputmode="numeric" maxlength="4"
-         placeholder="四位个人码（试用必填）" style="width:110px">
-  <button id="loginGo" class="primary">进入</button>
-  <span id="loginErr"></span>
-  <!-- 试用名额：在输密码之前就告诉你满没满（满员时后端也会 429 挡一次） -->
-  <span id="trialQuota" class="muted hidden"></span>
-  <span class="muted">试用账号的密码向管理员索取；个人码自己定四位数字，用来区分不同试用者。</span>
+<!-- 登录门：未登录时整页盖住（body.locked 还会把 header/main/footer 藏掉），
+     登录成功才 reload 进界面。书稿内容在登录前不会出现在页面上——
+     后端的 /api 与 /mcp 本来就要登录，这里补的是"界面也不露"这一层。 -->
+<div id="loginScreen" class="hidden">
+  <div class="login-card">
+    <div class="login-brand">TdxClaw <span>写作助手</span></div>
+    <div class="login-sub" id="loginSub">登录后查看书稿内容</div>
+
+    <label class="login-field">
+      <span>账号</span>
+      <select id="loginUser" title="账号类型">
+        <option value="self">自用</option>
+        <option value="trial">试用</option>
+      </select>
+    </label>
+    <label class="login-field">
+      <span>密码</span>
+      <input id="loginPassword" type="password" placeholder="密码" autocomplete="current-password">
+    </label>
+    <label class="login-field hidden" id="loginCodeField">
+      <span>个人码</span>
+      <input id="loginCode" inputmode="numeric" maxlength="4" placeholder="四位数字">
+    </label>
+
+    <button id="loginGo" class="primary">进入</button>
+    <div id="loginErr" class="login-err"></div>
+    <!-- 试用名额：在输密码之前就告诉你满没满（满员时后端也会 429 挡一次） -->
+    <div id="trialQuota" class="login-quota muted hidden"></div>
+    <div class="login-hint">试用账号的密码向管理员索取；个人码自己定四位数字，用来区分不同试用者。</div>
+  </div>
 </div>
 
 <!-- 「更多」：低频功能收在这里。按钮沿用原来的 id，点击后先关本框再执行，
@@ -747,7 +763,7 @@
 
 <script src="/vendor/signalr.min.js"></script>
 <script src="/appearance.js"></script>
-<script src="/fx.js?v=20261011i"></script>
-<script src="/app.js?v=20261011i"></script>
+<script src="/fx.js?v=20261012a"></script>
+<script src="/app.js?v=20261012a"></script>
 </body>
 </html>

@@ -37,11 +37,22 @@ const post = (url, body) => api(url, {
 const del = url => api(url, { method: 'DELETE' });
 
 let loginBusy = false;
-function showLoginBanner(msg) {
-  $('#loginBanner').classList.remove('hidden');
-  $('#loginErr').textContent = msg || '';
+
+// 登录门：盖住整页 + 把界面本体藏掉（body.locked）。
+// 任何 api() 拿到 401（会话过期、服务重启后令牌失效）都会回到这里，
+// 所以"登录完才看得到内容"这条对**中途掉线**同样成立。
+function showLoginScreen(msg) {
+  document.body.classList.add('locked');
+  const s = $('#loginScreen');
+  if (s) s.classList.remove('hidden');
+  const err = $('#loginErr');
+  if (err) err.textContent = msg || '';
+  const pwd = $('#loginPassword');
+  if (pwd && !pwd.value) setTimeout(() => pwd.focus(), 60);
   loadTrialQuota();
 }
+// 旧名保留：api() 等处按老名字调用
+const showLoginBanner = showLoginScreen;
 
 // 试用名额余量（未登录也能查：挂 /api/auth 放行段）。
 // 让试用者在输密码之前就看到"现在满了"，而不是白填一遍再被 429 挡回来。
@@ -61,7 +72,8 @@ async function loadTrialQuota() {
 }
 
 $('#loginUser').onchange = () =>
-  $('#loginCode').classList.toggle('hidden', $('#loginUser').value !== 'trial');
+  // 切的是外层那个 label（只藏 input 的话「个人码」三个字还会留在表单上）
+  $('#loginCodeField').classList.toggle('hidden', $('#loginUser').value !== 'trial');
 
 $('#loginGo').onclick = async () => {
   if (loginBusy) return;
@@ -103,18 +115,22 @@ $('#loginGo').onclick = async () => {
   }
 };
 
+// 顶栏身份徽标 + 登出按钮 + 只读状态 + 本地缓存键。
+// 抽出来是因为 boot() 已经拿到 me 了，不必再请求一次 /api/auth/me。
+function applyMe(me) {
+  const badge = $('#meBadge');
+  badge.textContent = me.isSelf ? '自用' : `试用 #${me.code}`;
+  $('#logoutBtn').classList.toggle('hidden', false);
+  window.__me = me;
+  // 账户标识落进 localStorage：外观等本地缓存按它分键（见 appearance.js 的 lsKey）。
+  // 同一台浏览器上自用与试用是两个账号，共用一个键会互相看到对方的配色。
+  try { localStorage.setItem('tdxSubject', me.subject || (me.isSelf ? 'self' : '')); } catch { }
+  applyTrialReadOnly(!me.isSelf);
+}
+
+// 兜底入口：万一别处需要一个"重新拉身份"的动作
 async function loadMe() {
-  try {
-    const me = await api('/api/auth/me');
-    const badge = $('#meBadge');
-    badge.textContent = me.isSelf ? '自用' : `试用 #${me.code}`;
-    $('#logoutBtn').classList.toggle('hidden', false);
-    window.__me = me;
-    // 账户标识落进 localStorage：外观等本地缓存按它分键（见 appearance.js 的 lsKey）。
-    // 同一台浏览器上自用与试用是两个账号，共用一个键会互相看到对方的配色。
-    try { localStorage.setItem('tdxSubject', me.subject || (me.isSelf ? 'self' : '')); } catch { }
-    applyTrialReadOnly(!me.isSelf);
-  } catch { /* 未登录：横幅已由 api() 显示 */ }
+  try { applyMe(await api('/api/auth/me')); } catch { /* 未登录：登录门已由 api() 显示 */ }
 }
 
 // 试用账号对「全局创作配置」（提示词方案 / 技能 / 润色预设）只读——它们与桌面端
@@ -2586,11 +2602,34 @@ document.addEventListener('keydown', e => {
   }
 });
 
-loadBooks().catch(e => console.error(e));
-loadSkills();
-loadPresetSelect();
-loadPolishPresets();
-loadAppearance().catch(e => console.error(e));
-loadStatusApi();
-loadMe();          // 顶栏身份徽标（未登录时静默，由首个 api() 调用触发登录框）
-connect();
+// ★ 入口：先验身份，再拉任何数据。
+//   未登录时一个数据请求都不发、界面也被登录门盖着——书稿内容在登录前
+//   不会出现在页面上（后端本来就要登录，这里补的是"界面也不露"这一层）。
+//   回环 = 自用，/api/auth/me 直接 200，行为与以前完全一样。
+async function boot() {
+  let me;
+  try {
+    const r = await fetch('/api/auth/me', { headers: authHeaders() });
+    if (r.status === 401) {
+      const d = await r.json().catch(() => ({}));
+      showLoginScreen(d.needInit ? '首次使用：设置自用密码后进入' : '登录后才能查看书稿内容');
+      return;
+    }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    me = await r.json();
+  } catch (e) {
+    showLoginScreen('连不上服务器：' + (e.message || e));
+    return;
+  }
+
+  applyMe(me);
+
+  loadBooks().catch(e => console.error(e));
+  loadSkills();
+  loadPresetSelect();
+  loadPolishPresets();
+  loadAppearance().catch(e => console.error(e));
+  loadStatusApi();
+  connect();
+}
+boot();

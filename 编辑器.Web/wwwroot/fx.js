@@ -16,9 +16,13 @@ window.fx = (function () {
 
   /* ══════════ ① 顶部流光进度条 ══════════ */
   // 不确定进度（不知道还要多久），所以是一条来回扫的光，不是一根涨的条。
-  function top(on) {
+  // mode: 'ai'（默认，暖色）/ 'mcp'（冷色，agent 在跑）
+  // 两条同屏时也要分得清：是"我在生成"还是"它在写"。
+  function top(on, mode) {
     const el = $('#fxTop');
-    if (el) el.classList.toggle('on', !!on);
+    if (!el) return;
+    el.classList.toggle('on', !!on);
+    if (on) el.classList.toggle('mcp', mode === 'mcp');
   }
 
   /* ══════════ ② Toast ══════════ */
@@ -274,12 +278,21 @@ window.fx = (function () {
     setTimeout(() => el.classList.remove('fx-pop'), 520);
   }
 
+  // 元素「弹出来」：配置片段这类"点了才冒出来的东西"，
+  // 直接显示会让人没注意到它出现（尤其是页面没滚动的时候）。
+  function reveal(el) {
+    if (!el || REDUCED) return;
+    el.classList.remove('fx-reveal');
+    void el.offsetWidth;
+    el.classList.add('fx-reveal');
+  }
+
   // spotlight：卡片鼠标柔光。pointermove 委托 + rAF 节流，坐标写进
   // --mx/--my，径向渐变跟着鼠标走（显隐交给 CSS :hover，JS 不管离开）。
   let spX = 0, spY = 0, spT = null, spPending = false;
   document.addEventListener('pointermove', e => {
     if (REDUCED) return;
-    const t = e.target.closest && e.target.closest('.card,.book-item');
+    const t = e.target.closest && e.target.closest('.card,.book-item,.agent-item');
     if (!t) return;
     spX = e.clientX; spY = e.clientY; spT = t;
     if (spPending) return;
@@ -293,5 +306,5 @@ window.fx = (function () {
     });
   }, { passive: true });
 
-  return { top, toast, begin, stream, notice, end, meter, stagger, flash, pop, glider, REDUCED };
+  return { top, toast, begin, stream, notice, end, meter, stagger, flash, pop, glider, reveal, REDUCED };
 })();

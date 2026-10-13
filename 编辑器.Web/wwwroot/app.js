@@ -1925,13 +1925,28 @@ let mcpStreamBase = '';        // append 模式下的基准正文
 let mcpCallTokens = null;      // 本次 MCP 调用的最新用量（done 时结算进会话累计）
 let mcpBadgeTimer = null;
 
+// 状态变了就重播一次入场动画（否则"MCP 执行中→已同步"只是文字换掉，
+// 眼睛扫不到——徽章得先动一下才抓得住注意力）。
+let mcpBadgeLast = '';
 function mcpBadgeShow(text, busy, autoHide) {
   const b = $('#mcpBadge');
   b.textContent = text;
   b.classList.toggle('busy', !!busy);
+  b.classList.toggle('ok', !busy && text.indexOf('同步') >= 0);
+  b.classList.toggle('err', !busy && text.indexOf('出错') >= 0);
   b.classList.remove('hidden');
+  if (text !== mcpBadgeLast) {
+    mcpBadgeLast = text;
+    b.classList.remove('fx-enter');
+    void b.offsetWidth;
+    b.classList.add('fx-enter');
+    b.addEventListener('animationend', () => b.classList.remove('fx-enter'), { once: true });
+  }
   clearTimeout(mcpBadgeTimer);
-  if (autoHide) mcpBadgeTimer = setTimeout(() => b.classList.add('hidden'), 4000);
+  if (autoHide) mcpBadgeTimer = setTimeout(() => {
+    b.classList.add('hidden');
+    mcpBadgeLast = '';
+  }, 4000);
 }
 
 async function loadMcpFollow() {
@@ -2047,7 +2062,9 @@ function connect() {
 
     if (t === 'stream') {
       mcpBadgeShow('MCP 执行中', true, false);
-      fx.top(true);                 // 顶栏流光条：agent 在跑也要看得见
+      // 'mcp' = 冷色流光条：和网页自己点「生成」的暖色区分开，
+      // 一眼看出"这次是 agent 在生成，不是我点的"。
+      fx.top(true, 'mcp');
       $('#aiOut').classList.add('streaming');
       if (ev.inputTokens || ev.outputTokens) {
         lastTokens = `MCP ${ev.inputTokens} in / ${ev.outputTokens} out`;
@@ -2068,6 +2085,8 @@ function connect() {
             mcpStreamBase = '';
           }
           const box = $('#editor');
+          // 光轨与角标挂在外层容器上（textarea 撑不起伪元素）
+          $('#editorWrap').classList.add('mcp-writing');
           box.classList.add('mcp-writing');   // 整块呼吸，标明"这块现在不是我在写"
           box.value = ev.writeMode === 'replace'
             ? ev.previewText
@@ -2087,6 +2106,7 @@ function connect() {
     mcpStreamBase = '';
     fx.top(false);
     $('#editor').classList.remove('mcp-writing');
+    $('#editorWrap').classList.remove('mcp-writing');
     fx.end($('#aiOut'), t !== 'error');
     if (ev.previewText) fx.meter(`Agent 生成完成 · ${ev.previewText.length} 字`, 6000);
     // MCP 用量结算：最后一次 stream 的累计值就是这次调用的最终值（done 事件不带 token），
@@ -2098,6 +2118,10 @@ function connect() {
       if (el) el.title = sessionTokenTip();
     }
     mcpBadgeShow(t === 'error' ? 'MCP 出错' : 'MCP 已同步', false, true);
+    // 只在"真的生成了内容"或"出错"时弹 Toast：agent 改个设定这种高频
+    // 调用每来一条都弹，很快就成噪音了。
+    if (t === 'error') fx.toast('Agent 调用出错了，看活动日志', 'err', 5000);
+    else if (ev.previewText) fx.toast(`Agent 写完了 · ${ev.previewText.length} 字`, 'ok');
     if (ev.summary) log(ev.summary, true);   // MCP 的消息都是 agent 发的，别标成「你」
     if (ev.previewText) fx.stream($('#aiOut'), ev.previewText);
     if (ev.projectModified) {
@@ -2331,6 +2355,7 @@ $('#httpMcpHint').innerHTML =
 $('#mcpCfgBtn').onclick = async () => {
   const btn = $('#mcpCfgBtn'), st = $('#mcpCfgState');
   btn.disabled = true;
+  btn.classList.add('busy');          // 转圈小点：签发是网络往返，要有"在动"的反馈
   st.textContent = '正在签发令牌…';
   try {
     const d = await post('/api/accounts/mcp-token', {});
@@ -2349,6 +2374,7 @@ $('#mcpCfgBtn').onclick = async () => {
     const box = $('#mcpCfgBox');
     box.textContent = text;
     box.classList.remove('hidden');
+    fx.reveal(box);                   // 弹一下：页面没滚动时"东西冒出来了"要看得见
 
     // 剪贴板 API 只在安全上下文可用：本机 127.0.0.1 算安全，用域名/IP 打开就不算，
     // 这时退回"选中文本 + execCommand"，用户至少能直接 Ctrl+C。
@@ -2366,10 +2392,12 @@ $('#mcpCfgBtn').onclick = async () => {
     $('#mcpCfgNote').textContent = (d.note || '') +
       (copied ? '　已复制到剪贴板，粘进客户端的 mcpServers 一节即可。'
               : '　浏览器不让自动复制，已替你选中下面这段，按 Ctrl+C 即可。');
+    btn.classList.remove('busy');
     st.textContent = copied ? '已复制' : '请手动复制';
     log('MCP 配置已生成（含令牌）：' + d.url);
     fx.toast(copied ? 'MCP 配置已复制，粘进 agent 客户端即可' : '配置已生成，见下方文本框', copied ? 'ok' : 'warn', 4200);
   } catch (e) {
+    btn.classList.remove('busy');
     st.textContent = '';
     const msg = errMsg(e);
     // 试用账号会被后端 403 挡下——这不是错误，是权限边界，说清楚就行
@@ -2449,6 +2477,8 @@ $('#selfPwdSave').onclick = async () => {
 // 下载「Agent 接入助手」给另一台设备用。
 // ⚠ 用 fetch+blob 而不是 <a href>：下载端点非回环时要带登录头，a 标签带不上。
 $('#agentSetupBtn').onclick = async () => {
+  const btn = $('#agentSetupBtn');
+  btn.classList.add('busy');       // 37MB 要下载几秒，按钮上转个圈
   const st = $('#agentSetupState');
   st.textContent = '正在准备下载…';
   try {
@@ -2468,8 +2498,11 @@ $('#agentSetupBtn').onclick = async () => {
     setTimeout(() => URL.revokeObjectURL(a.href), 8000);
     st.textContent = `已下载（${(blob.size / 1048576).toFixed(1)} MB）`;
     log('已下载 Agent 接入助手');
+    fx.toast('接入助手已下载：在那台设备上运行即可', 'ok');
   } catch (e) {
     st.textContent = '下载失败：' + errMsg(e);
+  } finally {
+    btn.classList.remove('busy');
   }
 };
 
@@ -2514,12 +2547,20 @@ function renderAgentClients(clients) {
       `<div class="agent-path">${escapeHtml(c.configPath)}</div>` +
       (c.note ? `<div class="agent-note">${escapeHtml(c.note)}</div>` : '') +
       `<pre>${escapeHtml(c.snippet)}</pre>`;
-    d.querySelector('[data-copy]').onclick = async () => {
-      await navigator.clipboard.writeText(c.snippet);
+    const cp = d.querySelector('[data-copy]');
+    cp.onclick = async () => {
+      try { await navigator.clipboard.writeText(c.snippet); }
+      catch { /* 非安全上下文：下面照旧提示，用户可以手动选中 <pre> */ }
+      cp.textContent = '已复制 ✓';
+      cp.classList.remove('copied'); void cp.offsetWidth;
+      cp.classList.add('copied');
+      setTimeout(() => { cp.textContent = '复制配置片段'; cp.classList.remove('copied'); }, 1600);
       log(`已复制「${c.name}」的 MCP 配置片段`);
     };
     list.appendChild(d);
   });
+  // 检测完才渲染：按顺序浮上来（"扫了一眼发现装了三家"这个动作要看得见）
+  fx.stagger(list, 10);
 }
 
 // ---------- 视图开关（对应桌面端「视图」菜单的项目管理器 / AI助手面板） ----------

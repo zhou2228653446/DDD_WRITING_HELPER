@@ -238,5 +238,60 @@ window.fx = (function () {
     b.addEventListener('animationend', () => b.classList.remove('rippling'), { once: true });
   }, true);
 
-  return { top, toast, begin, stream, notice, end, meter, stagger, flash, REDUCED };
+  /* ══════════ ⑤ v12：现代感动效 ══════════ */
+
+  // Tab 滑行指示条：把 #tabGlider 平移到当前激活标签下面。
+  // 位置用 offsetLeft/offsetWidth（相对 .tabs 定位容器），横滚时一起走。
+  function glider() {
+    const t = document.querySelector('.tabs .tab.active');
+    const g = $('#tabGlider');
+    if (!t || !g) return;
+    // 祖先 display:none（登录门盖着）时 offset 全是 0，此时不定位——
+    // 等门揭开时由下面的 observer 重算
+    if (!t.offsetWidth) { g.classList.remove('on'); return; }
+    g.style.left = t.offsetLeft + 'px';
+    g.style.width = t.offsetWidth + 'px';
+    g.classList.add('on');
+  }
+  window.addEventListener('resize', () => glider());
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => glider());
+  // 登录门揭开（body.locked 移除）的那一帧 tab 才有尺寸，自动补一次定位
+  new MutationObserver(() => {
+    if (!document.body.classList.contains('locked')) glider();
+  }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+  // 值变化的弹跳（字数这类数字变了"跳"一下）。同一元素 2.5s 冷却：
+  // 输入时字数每个键都在变，不冷却就是一直在弹，反而烦人。
+  const popCool = new WeakMap();
+  function pop(el) {
+    if (!el || REDUCED) return;
+    const now = performance.now();
+    if (now - (popCool.get(el) || 0) < 2500) return;
+    popCool.set(el, now);
+    el.classList.remove('fx-pop');
+    void el.offsetWidth;
+    el.classList.add('fx-pop');
+    setTimeout(() => el.classList.remove('fx-pop'), 520);
+  }
+
+  // spotlight：卡片鼠标柔光。pointermove 委托 + rAF 节流，坐标写进
+  // --mx/--my，径向渐变跟着鼠标走（显隐交给 CSS :hover，JS 不管离开）。
+  let spX = 0, spY = 0, spT = null, spPending = false;
+  document.addEventListener('pointermove', e => {
+    if (REDUCED) return;
+    const t = e.target.closest && e.target.closest('.card,.book-item');
+    if (!t) return;
+    spX = e.clientX; spY = e.clientY; spT = t;
+    if (spPending) return;
+    spPending = true;
+    requestAnimationFrame(() => {
+      spPending = false;
+      if (!spT || !spT.isConnected) return;
+      const r = spT.getBoundingClientRect();
+      spT.style.setProperty('--mx', (spX - r.left) + 'px');
+      spT.style.setProperty('--my', (spY - r.top) + 'px');
+    });
+  }, { passive: true });
+
+  return { top, toast, begin, stream, notice, end, meter, stagger, flash, pop, glider, REDUCED };
 })();

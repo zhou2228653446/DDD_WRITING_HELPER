@@ -1181,6 +1181,104 @@ body.locked header,body.locked main,body.locked footer,body.locked #statusbar{di
   padding:5px 9px;margin:-6px 0 10px;
 }
 
+/* ════════════════════════════════════════════════════════════════════
+   v12 现代质感 · 灵动动效 —— 弹簧曲线 / 卡片浮起 / 鼠标柔光 / Tab 滑行
+   全部从已有变量派生（8 套配色与材质照常生效）；
+   prefers-reduced-motion 由文末通配规则统一压平。
+   ════════════════════════════════════════════════════════════════════ */
+:root{
+  --spring:cubic-bezier(.34,1.45,.5,1);   /* 轻微过冲的弹簧：登场类 */
+  --glide:cubic-bezier(.22,.61,.25,1);    /* 顺滑减速：位移/浮起 */
+}
+
+/* ── Tab：色块切换 → 滑行指示条 ── */
+.tabs{position:relative}
+.tabs .tab.active::after{display:none}   /* 旧静态短线退役，接力棒交给 #tabGlider */
+.tab.active{
+  color:var(--accent);
+  border-color:color-mix(in srgb, var(--accent) 20%, transparent);
+}
+#tabGlider{
+  position:absolute;bottom:0;height:2.5px;border-radius:3px 3px 0 0;
+  background:linear-gradient(90deg,
+    color-mix(in srgb, var(--accent) 55%, transparent), var(--accent) 70%);
+  box-shadow:0 0 9px color-mix(in srgb, var(--accent) 40%, transparent);
+  transition:left .32s var(--glide), width .32s var(--glide), opacity .25s ease;
+  opacity:0;pointer-events:none;
+}
+#tabGlider.on{opacity:1}
+
+/* ── 卡片语言：hover 从「变色」升级为「浮起」 ── */
+.card,.book-item,.lit-item,.snap-item{
+  transition:transform .2s var(--glide), box-shadow .2s var(--glide),
+             border-color .2s ease, background-color .2s ease;
+}
+.card:hover,.book-item:hover{
+  transform:translateY(-2px);
+  box-shadow:var(--shadow-1);
+  border-color:var(--accent-mid);
+}
+.card:active,.book-item:active{transform:none;transition-duration:.07s}
+
+/* ── spotlight：鼠标位置柔光（坐标由 fx.js 写进 --mx/--my） ── */
+.card,.book-item{position:relative;overflow:hidden}
+.card::after,.book-item::after{
+  content:"";position:absolute;inset:0;border-radius:inherit;
+  background:radial-gradient(150px circle at var(--mx,50%) var(--my,50%),
+    color-mix(in srgb, var(--accent) 9%, transparent), transparent 68%);
+  opacity:0;transition:opacity .3s ease;pointer-events:none;
+}
+.card:hover::after,.book-item:hover::after{opacity:1}
+
+/* ── 主按钮：hover 一道斜光扫过 ── */
+button.primary,.primary{position:relative;overflow:hidden}
+button.primary::after,.primary::after{
+  content:"";position:absolute;top:-2px;bottom:-2px;left:-75%;width:46%;
+  background:linear-gradient(105deg,transparent,rgba(255,255,255,.38),transparent);
+  transform:skewX(-18deg);opacity:0;pointer-events:none;
+}
+button.primary:hover::after,.primary:hover::after{animation:sheen .75s var(--glide)}
+@keyframes sheen{from{left:-75%;opacity:.95}to{left:135%;opacity:0}}
+
+/* ── 对话框：背景磨砂 + 弹簧登场 ── */
+dialog[open]{animation:dlgSpring .34s var(--spring)}
+@keyframes dlgSpring{from{opacity:0;transform:translateY(-12px) scale(.96)}to{opacity:1;transform:none}}
+dialog::backdrop{
+  background:rgba(24,18,12,.35);
+  backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);
+}
+
+/* ── Toast：弹簧入场 ── */
+.toast{animation:toastSpring .4s var(--spring)}
+@keyframes toastSpring{from{opacity:0;transform:translateX(30px) scale(.92)}to{opacity:1;transform:none}}
+
+/* ── 视图切换：内容轻轻浮起（display 切换会自动重播） ── */
+.view{animation:viewIn .3s var(--glide)}
+@keyframes viewIn{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+
+/* ── 值变化的弹跳（字数等，配合 fx.pop，内部有冷却防输入时狂弹） ── */
+.fx-pop{display:inline-block;animation:fxPop .5s var(--spring)}
+@keyframes fxPop{0%{transform:scale(1)}35%{transform:scale(1.14)}100%{transform:scale(1)}}
+
+/* ── 章节选中态：实底色块 → 渐变纸签 ── */
+#chList li.active{
+  background:linear-gradient(90deg,
+    color-mix(in srgb, var(--accent) 16%, transparent),
+    color-mix(in srgb, var(--accent) 5%, transparent));
+}
+
+/* ── AI 主按钮与生成键：hover 轻浮 ── */
+.ai-main-btns button,#aiGoBtn.primary{
+  transition:transform .18s var(--glide), box-shadow .2s var(--glide),
+             border-color .15s ease, color .15s ease, filter .2s ease;
+}
+.ai-main-btns button:hover{transform:translateY(-1px);box-shadow:var(--shadow-1)}
+#aiGoBtn.primary:hover{transform:translateY(-1.5px);filter:brightness(1.05)}
+#aiGoBtn.primary:active,.ai-main-btns button:active{transform:none;transition-duration:.07s}
+
+/* ── 面板头标题：多一点存在感 ── */
+.panel-head{font-weight:600;letter-spacing:.04em}
+
 /* ── 系统开了「减弱动效」：全部压平，只留功能 ── */
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{

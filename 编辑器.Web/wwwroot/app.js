@@ -273,6 +273,7 @@ async function openChapter(n) {
 function updateWords() {
   const t = $('#editor').value.replace(/\s/g, '');
   $('#chWords').textContent = `${t.length} 字`;
+  fx.pop($('#chWords'));
   updateStatusBar(t.length);
 }
 
@@ -2123,6 +2124,7 @@ function switchView(v) {
   if (v === 'literature') loadLiterature();
   if (v === 'snapshots') loadSnapshots();
   if (v === 'sbook') loadSettingsBook();
+  if (window.fx) fx.glider();          // Tab 指示条滑到新位置
 }
 $$('.tab').forEach(t => t.onclick = () => switchView(t.dataset.view));
 
@@ -2650,6 +2652,7 @@ async function boot() {
   }
 
   applyMe(me);
+  fx.glider();                          // Tab 指示条就位（resize/字体就绪时 fx 内部会自校）
 
   loadBooks().catch(e => console.error(e));
   loadSkills();

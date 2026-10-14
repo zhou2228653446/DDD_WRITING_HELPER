@@ -1093,9 +1093,12 @@ $('#profSave').onclick = async () => {
       activate: true,
     });
   } catch (e) { alert(errMsg(e)); return; }
-  $('#testResult').textContent = `已保存并启用方案「${name}」`;
   log(`AI 方案已切换：${name}`);
   await openAiDlg();
+  // ⚠ 提示必须放在 openAiDlg **之后**：它末尾会把 testResult 清空，
+  //   先写的话用户根本看不到「已保存」——眼前只剩一个空 Key 框，
+  //   很容易误以为没存上、配置被清了（用户实际就这么误解过一次）。
+  $('#testResult').textContent = `已保存并启用方案「${name}」`;
 };
 
 $('#profDelete').onclick = async () => {

@@ -1277,9 +1277,15 @@ async function runAi(task, extra = {}) {
   updateChatInfo();
 
   fx.begin(out, TASK_LABEL[task] || 'AI 正在构思');
+  // ★ 推理模型（带思维链）会先"想"上一两分钟再动笔：这段时间正文长度为 0，
+  //   界面要是照旧显示「已生成 0 字」，配上骨架屏一动不动，看着就是卡死——
+  //   「审稿死循环」的观感多半来自这里。所以没正文时改说「正在思考」，
+  //   并且把已经烧掉的 token 数报出来（它在涨，就说明确实在干活）。
   const tick = txt => {
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
     const s = txt !== undefined ? txt
-      : `已生成 ${chars} 字 · ${((performance.now() - t0) / 1000).toFixed(1)}s`;
+      : chars > 0 ? `已生成 ${chars} 字 · ${secs}s`
+                  : `正在思考… ${secs}s`;
     if (useReport) $('#reportNote').textContent = s; else fx.meter(s);
   };
 
@@ -1341,6 +1347,8 @@ async function runAi(task, extra = {}) {
           updateChatInfo();
           // 状态栏实时跑数（桌面端 _tokenProgress 同格式，流式期间输出为估值）
           showTokenStat(tokenLine(ev.payload.inTok, ev.payload.outTok, 0));
+          // 思考阶段（还没有任何正文）把 token 数顶到进度位上：数字在涨 = 没卡死
+          if (!chars) tick(`正在思考… 已 ${ev.payload.outTok} token`);
         }
         else if (ev.type === 'chatinfo') { chatInfo = ev.payload; updateChatInfo(); }
         else if (ev.type === 'done') {

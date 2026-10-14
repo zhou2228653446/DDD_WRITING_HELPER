@@ -215,10 +215,15 @@ internal static class AiTools
         // 润色/审稿按原文字数动态算（8192 ~ 16384），其余设定任务默认 8192。
         if (maxTokens <= 0)
         {
+            // ★ 推理模型（DeepSeek-R1 / v4 这类带思维链的）的**思考过程也算进 max_tokens**。
+            //   审稿原来按「正文字数×3」给、下限只有 8192：思考一上来就把额度吃光，
+            //   服务端 finish_reason=length 但正文一个字都没有，外层又当成"被截断"去
+            //   自动续写，于是连转三轮、每轮几十秒，最后还是空手——用户看到的就是
+            //   「审稿死循环」。所以这里下限必须和续写齐平（16384），上限再抬一档。
             maxTokens = task switch
             {
                 "continue" or "expand" or "chat" or "setting_book" => 16384,
-                "polish" or "review" => Math.Clamp((chapter?.WordCount ?? 2000) * 3, 8192, 16384),
+                "polish" or "review" => Math.Clamp((chapter?.WordCount ?? 2000) * 3, 16384, 24576),
                 _ => 8192,
             };
         }
@@ -234,6 +239,12 @@ internal static class AiTools
         int latestOutTokens = 0;
         string latestStreamText = "";
         long lastStreamPublishTick = 0;
+
+        // 生成进度的说法：正文还没出来时（推理模型在思考）别报「0 字」——
+        // 那会让界面像是卡住了。见上面 OnProgress / OnStreamText 的调用。
+        static string StreamPhase(int outTok, int chars) =>
+            chars > 0 ? $"已生成 {outTok} token · {chars} 字"
+                      : $"正在思考… 已 {outTok} token";
 
         void PublishStream(string statusMsg, bool force = false)
         {
@@ -283,12 +294,14 @@ internal static class AiTools
                         latestInTokens = inTok;
                         latestOutTokens = outTok;
                         Report(outTok, maxTokens, $"已生成 {outTok} token");
-                        PublishStream($"🤖 MCP AI 正在{taskLabel}{(number > 0 ? $"第 {number} 章" : "")}（已生成 {outTok} token · {latestStreamText.Length} 字）");
+                        // 推理模型思考期：正文还是空的，报「已生成 0 字」会让人以为卡死——
+                        // 改成「正在思考」并把 token 数报出来（它在涨就说明在干活）。
+                        PublishStream($"🤖 MCP AI 正在{taskLabel}{(number > 0 ? $"第 {number} 章" : "")}（{StreamPhase(outTok, latestStreamText.Length)}）");
                     },
                     OnStreamText = text =>
                     {
                         latestStreamText = text;
-                        PublishStream($"🤖 MCP AI 正在{taskLabel}{(number > 0 ? $"第 {number} 章" : "")}（已生成 {latestOutTokens} token · {text.Length} 字）");
+                        PublishStream($"🤖 MCP AI 正在{taskLabel}{(number > 0 ? $"第 {number} 章" : "")}（{StreamPhase(latestOutTokens, text.Length)}）");
                     },
                 });
         }
@@ -301,6 +314,18 @@ internal static class AiTools
         {
             // 出错时把服务端/本地的原因带出来——只说「没有可用内容」等于让 agent 瞎猜重试。
             var why = string.IsNullOrWhiteSpace(result.Text) ? "" : $"返回内容：{Session.Truncate(result.Text, 300)}\n";
+
+            // ★ 推理模型把预算全花在思考上了（自动加大预算重试后仍然不够）。
+            //   这种情况跟 Key / 地址无关，按「检查 Key」去排查纯属误导——
+            //   给的是能直接照做的建议：让调用方显式传一个更大的 maxTokens。
+            if (result.ReasoningExhausted)
+                return ToolResult.Fail(
+                    $"推理模型的思考过程把输出额度（{result.OutputTokens} token）用光了，正文还一个字没写。\n" +
+                    "这不是 Key 或网络问题。可选做法：\n" +
+                    $"· 本次调用显式传更大的 maxTokens（例如 {Math.Max(result.OutputTokens * 2, 16384)}）；\n" +
+                    "· 或换用不带思维链的普通模型做这类短输出任务（审稿 / 润色尤其明显）；\n" +
+                    "· 长章节先分段再审，别一次塞整章。");
+
             return ToolResult.Fail(
                 $"模型没有返回可用内容。{(result.IsCanceled ? "（已取消）" : "（出错）")}\n{why}" +
                 $"输出 token：{result.OutputTokens}\n" +

@@ -260,6 +260,17 @@ namespace 编辑器.Services
         public bool Truncated { get; set; }
 
         /// <summary>
+        /// ★ 推理模型把整个输出预算都花在**思考**上了，正文一个字没出来
+        /// （finish_reason=length 且 <see cref="Reasoning"/> 有内容、正文为空）。
+        ///
+        /// 它看着像「被截断」，但性质完全不同：截断意味着"正文写了一半，接着写还有用"，
+        /// 而这个是"压根没开始写"——按截断去自动续写只会重复同样的失败，
+        /// 每轮再烧一遍 max_tokens 和几十秒。调用方见到这个标记应当**加大预算重试**，
+        /// 而不是续写、更不是直接把失败甩给用户。
+        /// </summary>
+        public bool ReasoningExhausted { get; set; }
+
+        /// <summary>
         /// 用户停止时**保住了已经生成的那部分正文**（<see cref="Text"/> 非空）。
         ///
         /// 停止不等于丢弃：已经流式收到的内容在用户眼里就是"写出来的东西"，

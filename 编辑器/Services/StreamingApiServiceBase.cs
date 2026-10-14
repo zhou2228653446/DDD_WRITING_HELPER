@@ -81,6 +81,12 @@ namespace 编辑器.Services
         private const int MaxContinuations = 2;
 
         /// <summary>
+        /// 推理模型「思考耗尽」后自动加大预算的上限。
+        /// 只加一次、且封顶，避免一次误判就把额度翻上天烧掉一堆钱。
+        /// </summary>
+        private const int ReasoningRetryCap = 32768;
+
+        /// <summary>
         /// 续写时的提示词。要点是**别让它重来一遍** —— 模型天然倾向于
         /// "重新完整地写一次"，那样会把已经拿到的内容重复输出，反而更糟。
         /// </summary>
@@ -121,6 +127,7 @@ namespace 编辑器.Services
             int totalInput = 0, totalOutput = 0, totalCached = 0;
             var reasoning = new StringBuilder();
             int continuations = 0;
+            bool budgetBoosted = false;   // 见下面「思考耗尽自动加大预算」：只加一次
 
             // 调用方想要的输出预算。每次请求都要拿它重新夹一次窗口 ——
             // 因为续写会让输入变长，留给输出的空间随之变小。
@@ -141,6 +148,23 @@ namespace 编辑器.Services
                 totalOutput += result.OutputTokens;
                 totalCached += result.CachedInputTokens;
                 if (result.Reasoning.Length > 0) reasoning.Append(result.Reasoning);
+
+                // ★ 推理模型把整个预算花在思考上、正文一个字没出来（见 AiResult.ReasoningExhausted）。
+                //   这不是真的失败：加大输出预算再来一次通常就成了。
+                //   绝不能走下面的"自动续写"——它压根没开始写正文，续写只会原样再烧一遍
+                //   max_tokens 和几十秒，用户看到的就是转半天最后还是空的（"审稿死循环"）。
+                if (result.ReasoningExhausted && !budgetBoosted)
+                {
+                    budgetBoosted = true;
+                    var boosted = Math.Min(desiredMaxTokens * 2, ReasoningRetryCap);
+                    if (boosted > desiredMaxTokens)
+                    {
+                        desiredMaxTokens = boosted;
+                        options.OnNotice?.Invoke(
+                            $"思考过程用完了输出额度，正在加大到 {boosted} 重试…");
+                        continue;
+                    }
+                }
 
                 if (result.IsError || result.IsCanceled)
                 {
@@ -439,6 +463,8 @@ namespace 编辑器.Services
             //   调用方拿空字符串写回就是**把整章正文清空** —— 数据安全阀，别删。
             if (text.Length == 0 && !options.AllowEmptyResponse)
             {
+                // 正文为空 + 思考有内容 + 撞到长度上限 = 预算全喂给思考了（见 AiResult.ReasoningExhausted）
+                bool starved = state.Truncated && state.Reasoning.Length > 0;
                 return new AiResult
                 {
                     Text = DescribeEmptyResponse(state),
@@ -447,6 +473,7 @@ namespace 编辑器.Services
                     OutputTokens = state.OutputTokens,
                     CachedInputTokens = state.CachedInputTokens,
                     Reasoning = state.Reasoning.ToString(),
+                    ReasoningExhausted = starved,
                 };
             }
 

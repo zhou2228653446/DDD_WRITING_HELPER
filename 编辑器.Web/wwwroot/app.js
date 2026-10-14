@@ -974,7 +974,7 @@ async function openAiDlg() {
 
   // 预选当前方案；没有方案就按当前服务商把表单填一遍，省得从空开始
   if (profs.active || (profs.profiles || []).length) loadProfileForm(profs);
-  else fillFromProvider(sel.value);
+  else fillFromProvider(sel.value, true);
 
   const mcpBox = $('#mcpLiveSync');
   if (mcpBox) mcpBox.checked = mcpFollow;
@@ -1001,11 +1001,19 @@ function renderModelPresets(list) {
   });
 }
 
-function fillFromProvider(pid) {
+// ⚠ overwrite 参数很关键：填 endpoint / 模型这两个**输入框**只在两种情况下做——
+// 用户主动换了服务商、或者这是一张全新空表单。加载已存方案时必须传 false：
+// 否则每次打开对话框（以及每次保存后重建）都会把用户存好的自定义地址与模型名
+// 顶成服务商默认值，界面看着就像"保存没生效、自动恢复默认"，而服务端其实存住了。
+// （认证下拉曾经踩过同一个坑——被复位成「自动」——下面 loadProfileForm 里补了一次
+//   回显，但 apiUrl / model 这两个一直漏着，所以这次从源头分开。）
+function fillFromProvider(pid, overwrite) {
   const p = providers.find(x => x.id === pid);
   if (!p) return;
-  $('#profUrl').value = p.endpoint || '';
-  $('#profModel').value = p.defaultModel || '';
+  if (overwrite !== false) {
+    $('#profUrl').value = p.endpoint || '';
+    $('#profModel').value = p.defaultModel || '';
+  }
   $('#modelList').innerHTML = (p.models || []).map(m => `<option value="${escapeHtml(m)}">`).join('');
   renderModelPresets(p.models || []);
   $('#provNote').textContent = p.note || '';
@@ -1021,12 +1029,12 @@ function loadProfileForm(profs) {
   $('#profUrl').value = cur.apiUrl || '';
   $('#profModel').value = cur.model || '';
   $('#profKey').value = '';
-  fillFromProvider(cur.provider);
+  fillFromProvider(cur.provider, false);   // false = 别顶掉上面刚填好的 apiUrl / model
   // ⚠ 认证的回显必须排在 fillFromProvider 之后——它会把认证复位成「自动」
   $('#authSel').value = cur.authOverride || '';
 }
 
-$('#provSel').onchange = () => fillFromProvider($('#provSel').value);
+$('#provSel').onchange = () => fillFromProvider($('#provSel').value, true);
 $('#profSel').onchange = async () => {
   const profs = await api('/api/ai/profiles');
   loadProfileForm(profs);

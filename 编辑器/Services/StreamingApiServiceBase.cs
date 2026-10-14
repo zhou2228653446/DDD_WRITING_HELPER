@@ -81,10 +81,49 @@ namespace 编辑器.Services
         private const int MaxContinuations = 2;
 
         /// <summary>
-        /// 推理模型「思考耗尽」后自动加大预算的上限。
-        /// 只加一次、且封顶，避免一次误判就把额度翻上天烧掉一堆钱。
+        /// 推理模型「思考耗尽」后自动加大预算的上限。只加一次、且封顶。
         /// </summary>
-        private const int ReasoningRetryCap = 32768;
+        private const int ReasoningRetryCap = CompletionOptions.GenerousBudget;
+
+        /// <summary>
+        /// 服务端不接受我们给的 max_tokens 时降档到这个值再试。
+        /// 取 16384：这是本次统一放开预算之前全线验证过的量级，各家都能接受。
+        /// </summary>
+        private const int FallbackMaxTokens = 16_384;
+
+        /// <summary>
+        /// 400 的正文看着像"max_tokens 给大了"吗？
+        /// 各家文案不同（"exceeds the maximum" / "不得超过" / "at most" …），
+        /// 只认"同时提到 max_tokens 且在抱怨大小"这一种组合，避免把别的 400
+        /// 误判成超限而白白重试一遍。
+        /// </summary>
+        private static bool LooksLikeOversizedMaxTokens(string? body)
+        {
+            if (string.IsNullOrWhiteSpace(body)) return false;
+            var b = body.ToLowerInvariant();
+
+            // ① 得是在说"输出预算"这件事。各家措辞差别很大，除了 max_tokens 之外，
+            //    也有只写 "The maximum number of tokens is 32768" 的（单测抓到过）。
+            bool aboutOutputBudget =
+                b.Contains("max_tokens") || b.Contains("max_completion_tokens")
+                || b.Contains("maximum number of tokens") || b.Contains("max output")
+                || b.Contains("maximum output") || b.Contains("output tokens");
+            if (!aboutOutputBudget) return false;
+
+            // ② 排除"输入太长"：那是 prompt 的问题，降档输出预算救不了，
+            //    硬要重试只是多烧一次请求。
+            bool aboutInput = b.Contains("context length") || b.Contains("context_length")
+                || b.Contains("prompt is too long") || b.Contains("input tokens")
+                || b.Contains("prompt tokens") || b.Contains("上下文长度") || b.Contains("输入");
+            if (aboutInput) return false;
+
+            // ③ 还得是在抱怨"大小"。"less than or equal to 65536" 是 OpenAI 家的标准说法。
+            return b.Contains("exceed") || b.Contains("too large") || b.Contains("too big")
+                || b.Contains("greater than") || b.Contains("larger than") || b.Contains("at most")
+                || b.Contains("less than") || b.Contains("maximum")
+                || b.Contains("上限") || b.Contains("过大") || b.Contains("超过")
+                || b.Contains("不得超过") || b.Contains("最大");
+        }
 
         /// <summary>
         /// 续写时的提示词。要点是**别让它重来一遍** —— 模型天然倾向于
@@ -128,6 +167,7 @@ namespace 编辑器.Services
             var reasoning = new StringBuilder();
             int continuations = 0;
             bool budgetBoosted = false;   // 见下面「思考耗尽自动加大预算」：只加一次
+            bool shrunk = false;          // 见下面「max_tokens 超限自动降档」：只降一次
 
             // 调用方想要的输出预算。每次请求都要拿它重新夹一次窗口 ——
             // 因为续写会让输入变长，留给输出的空间随之变小。
@@ -142,7 +182,18 @@ namespace 编辑器.Services
 
                 var json = BuildRequestBody(prompt, systemPrompt, options, history, assistantSoFar);
 
-                var result = await RunWithRetryAsync(json, idle, options).ConfigureAwait(false);
+                var (result, oversized) = await RunWithRetryAsync(json, idle, options).ConfigureAwait(false);
+
+                // ★ 我们给的 max_tokens 超过该模型的硬上限（各家不同，常见 32K/64K，返 400）。
+                //   统一给到 10 万预算之后，硬上限更小的服务商全靠这条兜底，
+                //   否则它们会一律 400，等于彻底用不了。降档再走一轮即可。
+                if (oversized && !shrunk && desiredMaxTokens > FallbackMaxTokens)
+                {
+                    shrunk = true;
+                    desiredMaxTokens = FallbackMaxTokens;
+                    options.OnNotice?.Invoke($"该模型不接受这么大的 max_tokens，已降到 {FallbackMaxTokens} 重试…");
+                    continue;
+                }
 
                 totalInput += result.InputTokens;
                 totalOutput += result.OutputTokens;
@@ -250,16 +301,20 @@ namespace 编辑器.Services
         /// <summary>
         /// 发一次（含瞬时错误重试与退避）。这是原本堆在 <c>CompleteTextAsync</c> 里的那层。
         /// </summary>
-        private async Task<AiResult> RunWithRetryAsync(string json, TimeSpan idle, CompletionOptions options)
+        private async Task<(AiResult Result, bool Oversized)> RunWithRetryAsync(string json, TimeSpan idle, CompletionOptions options)
         {
             for (int attempt = 0; ; attempt++)
             {
                 var state = new StreamState();
-                var (result, retryable, serverHint) = await SendOnceAsync(json, idle, options, state)
+                var (result, retryable, serverHint, oversized) = await SendOnceAsync(json, idle, options, state)
                     .ConfigureAwait(false);
 
+                // ★ 「参数给大了」不是瞬时故障：退避重试多少次都还是 400，
+                //   立刻交回外层去降档，别白等四轮退避。
+                if (oversized) return (result, true);
+
                 if (!retryable || attempt >= MaxRetries)
-                    return result;
+                    return (result, false);
 
                 // 服务端给了 Retry-After 就听它的（429 限流时它比我们的退避更准）；
                 // 否则按退避序列走。取两者里更长的那个，别在人家说"等 30 秒"时 800ms 就撞回去。
@@ -273,7 +328,7 @@ namespace 编辑器.Services
                 }
                 catch (OperationCanceledException)
                 {
-                    return result;
+                    return (result, false);
                 }
 
                 options.OnNotice?.Invoke($"连接不稳定，正在重试（{attempt + 1}/{MaxRetries}）…");
@@ -283,7 +338,7 @@ namespace 编辑器.Services
         /// <summary>
         /// 发一次并读完流。后两个返回值表示"这次失败值得重试吗"与"服务端建议等多久"。
         /// </summary>
-        private async Task<(AiResult Result, bool Retryable, TimeSpan? ServerHint)> SendOnceAsync(
+        private async Task<(AiResult Result, bool Retryable, TimeSpan? ServerHint, bool Oversized)> SendOnceAsync(
             string json, TimeSpan idle, CompletionOptions options, StreamState state)
         {
             var ct = options.CancellationToken;
@@ -316,9 +371,17 @@ namespace 编辑器.Services
                     // 401/403/404/400 是配置或请求本身的问题，重试只是浪费时间。
                     bool retryable = IsTransientStatus(response.StatusCode);
 
+                    // ★ 例外：400 里有一类"我们自己的参数给大了"（max_tokens 超过该模型的
+                    //   硬上限，各家不同，常见 32K/64K）。这不是用户配置错误，重试没有意义，
+                    //   但**降档后重试**是有意义的——否则统一给到 10 万预算之后，凡是硬上限
+                    //   更小的服务商都会彻底用不了。交给外层降到 FallbackMaxTokens 再试一次。
+                    bool oversized = response.StatusCode == HttpStatusCode.BadRequest
+                                     && LooksLikeOversizedMaxTokens(body);
+
                     return (new AiResult { Text = text, IsError = true },
                             retryable,
-                            retryable ? RetryAfterDelay(response) : null);
+                            retryable ? RetryAfterDelay(response) : null,
+                            oversized);
                 }
 
                 using var stream = await response.Content.ReadAsStreamAsync(idleCts.Token).ConfigureAwait(false);
@@ -357,7 +420,7 @@ namespace 编辑器.Services
 
                 FinalizeState(state);
 
-                return (BuildResult(state, options), false, null);
+                return (BuildResult(state, options), false, null, false);
             }
             catch (OperationCanceledException)
             {
@@ -375,7 +438,7 @@ namespace 编辑器.Services
                         CachedInputTokens = state.CachedInputTokens,
                         TotalTokens = state.InputTokens + state.OutputTokens,
                         IsCanceled = true,
-                    }, false, null);
+                    }, false, null, false);
                 }
 
                 // 空闲超时 / 总超时：服务器不发数据了。
@@ -387,7 +450,7 @@ namespace 编辑器.Services
                     {
                         Text = $"连接超时：服务器超过 {idle.TotalSeconds:0} 秒没有返回数据",
                         IsError = true,
-                    }, true, null);
+                    }, true, null, false);
                 }
 
                 // 已经有内容了：**不重试**。重试会从头再生成一遍，
@@ -401,7 +464,7 @@ namespace 编辑器.Services
                     CachedInputTokens = state.CachedInputTokens,
                     TotalTokens = state.InputTokens + state.OutputTokens,
                     IsError = true,
-                }, false, null);
+                }, false, null, false);
             }
             catch (Exception ex) when (IsTransientException(ex))
             {
@@ -421,11 +484,11 @@ namespace 编辑器.Services
                         IsError = true,
                     };
 
-                return (result, retryable, null);
+                return (result, retryable, null, false);
             }
             catch (Exception ex)
             {
-                return (new AiResult { Text = $"API调用失败: {ex.Message}", IsError = true }, false, null);
+                return (new AiResult { Text = $"API调用失败: {ex.Message}", IsError = true }, false, null, false);
             }
         }
 

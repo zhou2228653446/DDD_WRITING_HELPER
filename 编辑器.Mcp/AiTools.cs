@@ -215,17 +215,18 @@ internal static class AiTools
         // 润色/审稿按原文字数动态算（8192 ~ 16384），其余设定任务默认 8192。
         if (maxTokens <= 0)
         {
-            // ★ 推理模型（DeepSeek-R1 / v4 这类带思维链的）的**思考过程也算进 max_tokens**。
-            //   审稿原来按「正文字数×3」给、下限只有 8192：思考一上来就把额度吃光，
-            //   服务端 finish_reason=length 但正文一个字都没有，外层又当成"被截断"去
-            //   自动续写，于是连转三轮、每轮几十秒，最后还是空手——用户看到的就是
-            //   「审稿死循环」。所以这里下限必须和续写齐平（16384），上限再抬一档。
-            maxTokens = task switch
-            {
-                "continue" or "expand" or "chat" or "setting_book" => 16384,
-                "polish" or "review" => Math.Clamp((chapter?.WordCount ?? 2000) * 3, 16384, 24576),
-                _ => 8192,
-            };
+            // 输出预算统一给足（CompletionOptions.GenerousBudget = 10 万）：
+            // 用户用的是便宜模型，输出这块不省——宁可一次写完，也不要被截断后
+            // 走"自动续写"（慢，且两段接缝最容易出问题）。
+            //
+            // ★ 这里原本按任务分档，其中审稿/润色只给 8192~16384，撞上一个致命问题：
+            //   推理模型（DeepSeek-R1 / v4 这类带思维链的）**思考过程也占 max_tokens**，
+            //   额度被思考吃光后正文一个字都出不来，外层又当成"被截断"去自动续写，
+            //   于是连转三轮、每轮几十秒仍是空手——用户看到的就是「审稿死循环」。
+            //   统一给足之后这个问题自然消失：思考与正文都装得下。
+            //
+            // 真正的夹取在下游两处：按模型上下文窗口夹一次；服务端不接受则自动降档。
+            maxTokens = CompletionOptions.GenerousBudget;
         }
 
         IApiService service = IsAnthropic(config)

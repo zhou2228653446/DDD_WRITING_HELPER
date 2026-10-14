@@ -285,7 +285,27 @@ namespace 编辑器.Services
 
     public class CompletionOptions
     {
-        public int MaxTokens { get; set; } = 8192;
+        /// <summary>
+        /// ★ 生成类任务（续写 / 润色 / 审稿 / 扩写 / 对话 / 大纲 / 人物 / 设定 …）
+        /// 统一给到 10 万 token 的输出预算。
+        ///
+        /// 用户明确要求：用的都是便宜模型，输出这块不省。宁可让它一次写完，
+        /// 也不要因为额度不够被截断再去走"自动续写"——续写慢，而且两次生成的
+        /// 接缝处最容易出问题。
+        ///
+        /// ⚠ 它**只是上限**，不是目标：模型写完自然会停，不会因为上限给大了
+        ///   就硬凑字数。真正的保护在两处，缺一不可：
+        ///   ① <c>StreamingApiServiceBase.ClampOutputBudget</c> 按模型上下文窗口夹一次；
+        ///   ② 服务端若不接受这么大的值（各家硬上限不同，常见 32K/64K，会返 400），
+        ///      <c>StreamingApiServiceBase</c> 会自动降档重试，不会让请求直接失败。
+        ///
+        /// ⚠ 不适用：对话压缩摘要、AI 记忆更新、连通性探测这类**越短越好**的任务。
+        ///   给它们 10 万只会让摘要/记忆写得又长又烂，反而污染后续所有生成——
+        ///   这些保持各自的小值。
+        /// </summary>
+        public const int GenerousBudget = 100_000;
+
+        public int MaxTokens { get; set; } = GenerousBudget;
         public double Temperature { get; set; } = 0.7;
         public string Model { get; set; } = "";
         public CancellationToken CancellationToken { get; set; } = default;
@@ -323,10 +343,10 @@ namespace 编辑器.Services
         /// 再加上思考模型（GLM / DeepSeek-R1 / Kimi 等）动辄 2000~4000 token 的思考链，
         /// 这里按原文长度留 3 倍余量，并夹在 [floor, 16384]。
         /// </summary>
-        public static int BudgetForRewrite(string? source, int floor = 8192)
+        public static int BudgetForRewrite(string? source, int floor = GenerousBudget)
         {
             long estimate = (long)Math.Ceiling((source?.Length ?? 0) * 3.0);
-            return (int)Math.Clamp(estimate, floor, 16384);
+            return (int)Math.Clamp(estimate, floor, GenerousBudget);
         }
     }
 

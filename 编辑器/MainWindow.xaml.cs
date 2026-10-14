@@ -911,7 +911,7 @@ namespace 编辑器
                 await apiService.CompleteTextAsync(userPrompt, systemPrompt,
                     new CompletionOptions
                     {
-                        MaxTokens = 16384,
+                        MaxTokens = CompletionOptions.GenerousBudget,
                         CancellationToken = _aiCts!.Token,
                         OnNotice = _aiNotice,
                         OnProgress = _tokenProgress
@@ -1091,7 +1091,7 @@ namespace 编辑器
                 var systemPrompt = AppendChatSummaryBlock(baseSystemPrompt);
 
                 return await apiService.CompleteTextAsync(userPrompt, systemPrompt,
-                    new CompletionOptions { MaxTokens = 16384, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress },
+                    new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress },
                     history);
             });
             if (IsUsable(result))
@@ -1162,7 +1162,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 8192, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.FullOutline, result.Text);
@@ -1198,7 +1198,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 8192, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.CharacterSettings, result.Text);
@@ -1234,7 +1234,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 8192, Temperature = 0.4, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, Temperature = 0.4, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.BackgroundSettings, result.Text);
@@ -1274,7 +1274,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 8192, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.ChapterOutline, result.Text);
@@ -1318,7 +1318,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = 8192, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.WritingStyle, result.Text);
@@ -1368,7 +1368,7 @@ namespace 编辑器
             var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(
                 userPrompt, systemPrompt, new CompletionOptions
                 {
-                    MaxTokens = 4096,
+                    MaxTokens = CompletionOptions.GenerousBudget,
                     Temperature = 0.4,
                     CancellationToken = _aiCts!.Token,
                     OnNotice = _aiNotice,
@@ -2423,7 +2423,7 @@ namespace 编辑器
                     includeSettingsBook: false),
                 new CompletionOptions
                 {
-                    MaxTokens = 16384,
+                    MaxTokens = CompletionOptions.GenerousBudget,
                     Temperature = 0.3,          // 审稿要稳定，不给发挥空间
                     CancellationToken = _aiCts!.Token,
                     OnNotice = _aiNotice,
@@ -2622,7 +2622,7 @@ namespace 编辑器
                     includeSettingsBook: false),
                 new CompletionOptions
                 {
-                    MaxTokens = 16384,
+                    MaxTokens = CompletionOptions.GenerousBudget,
                     Temperature = 0.5,
                     CancellationToken = _aiCts!.Token,
                     OnNotice = _aiNotice,

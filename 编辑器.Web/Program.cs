@@ -463,6 +463,28 @@ app.MapPost("/api/books/open", async (WorkspaceService ws, BookNameReq req) =>
     return Results.Ok(new { name = ws.Current?.ProjectName, stamp = StampToken.From(ws.Stamp()) });
 });
 
+// 删一整本书。不是硬删——BookDeleter 把整本书（含 .bak / 对话记忆 / 快照）
+// 移入书库旁的 .trash/，照着里面的 _删除信息.txt 能原样搬回。
+// 正打开着的书拒绝删：前端还抱着它，删了下次一保存又把书写回来。
+app.MapPost("/api/books/delete", async (WorkspaceService ws, BookNameReq req) =>
+{
+    var name = (req.Name ?? "").Trim();
+    var openPath = ws.Current?.FilePath;
+    var r = BookDeleter.Delete(ws.BooksDir, name, p => openPath != null
+        && string.Equals(Path.GetFullPath(p), Path.GetFullPath(openPath), StringComparison.OrdinalIgnoreCase));
+    if (!r.Ok) return Results.BadRequest(new { error = r.Message });
+
+    await ws.BroadcastAsync("books-changed", new { });
+    return Results.Ok(new
+    {
+        trash = r.TrashDir,
+        moved = r.Moved,
+        bytes = r.Bytes,
+        leftoverExports = r.LeftoverExports,
+        message = r.Message,
+    });
+});
+
 // ══════════════════════════════════════════════════════════════════
 // 当前这本书
 // ══════════════════════════════════════════════════════════════════

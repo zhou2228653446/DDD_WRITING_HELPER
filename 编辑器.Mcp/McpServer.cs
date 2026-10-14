@@ -682,6 +682,25 @@ internal static class McpServer
                 },
             },
         },
+        new ToolDef
+        {
+            name = "project_delete",
+            description =
+                "删除一整本书（不可逆操作，需二次确认）。" +
+                "★ confirm 必须原样回传目标文件名（project_list 里看到的那个，如 \"守灯人.tdxproj\"）才会真删——" +
+                "这是防止 agent 听错一个书名就删掉整部稿子的保险。" +
+                "删除不是硬删：整本书（含 .bak / 对话记忆 / 快照）移入书库旁的 .trash/，照着里面的 _删除信息.txt 可原样搬回。" +
+                "正打开着的书拒绝删。同名导出文件（.txt/.docx）不随书删，会在结果里说明。",
+            inputSchema = new ToolSchema
+            {
+                properties = new Dictionary<string, ToolProp>
+                {
+                    ["name"] = new() { description = "书名或文件名（如 守灯人 或 守灯人.tdxproj）" },
+                    ["confirm"] = new() { description = "二次确认：必须与目标文件名完全一致（如 \"守灯人.tdxproj\"）。不一致就不删" },
+                },
+                required = new List<string> { "name", "confirm" },
+            },
+        },
     };
 
     // ==================================================================
@@ -730,6 +749,14 @@ internal static class McpServer
                 {
                     var r0 = NovelTools.CreateProject(_session, args);
                     PublishToolDone(name, args, r0, projectModified: !r0.IsError);
+                    return ToolText(r0.Text, r0.IsError);
+                }
+                case "project_delete":
+                {
+                    // 删书不需要先打开项目（删的往往正是"没打开的那本"），
+                    // 但它自己会拒绝删当前打开着的书。
+                    var r0 = NovelTools.DeleteProject(_session, args);
+                    PublishToolDone(name, args, r0, projectModified: false);
                     return ToolText(r0.Text, r0.IsError);
                 }
                 case "ai_config_check":
@@ -810,6 +837,7 @@ internal static class McpServer
         var summary = name switch
         {
             "project_create" => $"🤖 MCP 正在新建项目「{NovelTools.Str(args, "name", "新项目")}」…",
+            "project_delete" => $"🤖 MCP 正在删除作品「{NovelTools.Str(args, "name")}」…",
             "project_open" => "🤖 MCP 正在打开项目…",
             "chapter_create" => $"🤖 MCP 正在新建章节「{NovelTools.Str(args, "title")}」…",
             "chapter_write" => $"🤖 MCP 正在写入第 {chNum} 章…",
@@ -859,6 +887,7 @@ internal static class McpServer
             summary = name switch
             {
                 "project_create" => $"🤖 MCP 已新建项目《{p?.ProjectName ?? ""}》",
+                "project_delete" => $"🤖 MCP 已删除作品《{NovelTools.Str(args, "name")}》（已移入回收站）",
                 "project_open" => $"🤖 MCP 已打开项目《{p?.ProjectName ?? ""}》",
                 "chapter_create" => ch != null
                     ? $"🤖 MCP 已新建第 {ch.ChapterNumber} 章「{ch.Title}」"

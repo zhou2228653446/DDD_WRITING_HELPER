@@ -1236,4 +1236,95 @@ internal static class NovelTools
             return ToolResult.Fail($"写入记忆失败：{ex.Message}");
         }
     }
+
+    // ==================================================================
+    // 删项目
+    // ==================================================================
+
+    /// <summary>
+    /// project_delete：删掉一整本书。
+    ///
+    /// ★ 两道保险，缺一不可：
+    ///   ① <c>confirm</c> 必须与目标**文件名**完全一致（如 "守灯人.tdxproj"）——
+    ///      agent 凭空说"删掉守灯人"然后真删了，是这类工具最危险的事故形态；
+    ///      让调用方把 project_list 里看到的文件名原样回传，杜绝 hallucinate。
+    ///   ② 正打开着的书拒绝删（会话还抱着它，删了下次 Save 会把书又写回来）。
+    ///
+    /// 删除本身不是硬删：整本书移入书库旁的 .trash/（见 BookDeleter），
+    /// 误删照着里面的 _删除信息.txt 就能搬回来。
+    /// </summary>
+    public static ToolResult DeleteProject(Session s, JsonElement args)
+    {
+        var name = Str(args, "name").Trim();
+        var confirm = Str(args, "confirm").Trim();
+
+        if (string.IsNullOrWhiteSpace(name))
+            return ToolResult.Fail("没给书名。传文件名（project_list 里看到的那个，如 守灯人.tdxproj）。");
+
+        var dir = ResolveProjectsDirectory();
+        if (!Directory.Exists(dir))
+            return ToolResult.Fail($"书库目录不存在：{dir}");
+
+        // ── 定位：文件名直接命中；否则按项目名（书在界面里显示的名字）扫一遍 ──
+        string fileName;
+        if (name.EndsWith(".tdxproj", StringComparison.OrdinalIgnoreCase))
+        {
+            fileName = Path.GetFileName(name);
+        }
+        else
+        {
+            var direct = Path.GetFileName(name) + ".tdxproj";
+            fileName = File.Exists(Path.Combine(dir, direct)) ? direct : "";
+        }
+
+        if (fileName.Length == 0)
+        {
+            var matches = new List<string>();
+            foreach (var f in Directory.GetFiles(dir, "*.tdxproj"))
+            {
+                try
+                {
+                    if (NovelProject.Load(f).ProjectName.Equals(name, StringComparison.OrdinalIgnoreCase))
+                        matches.Add(Path.GetFileName(f));
+                }
+                catch { /* 读不动的跳过 */ }
+            }
+            if (matches.Count == 1) fileName = matches[0];
+            else if (matches.Count > 1)
+                return ToolResult.Fail(
+                    $"书库里有 {matches.Count} 本书的项目名都叫「{name}」，请改用文件名：\n  " +
+                    string.Join("\n  ", matches));
+            else
+            {
+                var have = Directory.GetFiles(dir, "*.tdxproj").Select(Path.GetFileName).Take(20);
+                return ToolResult.Fail(
+                    $"书库里找不到「{name}」。当前有：\n  " + string.Join("\n  ", have) +
+                    "\n（也可以用 project_list 看全）");
+            }
+        }
+
+        // ── 确认：必须原样回传文件名 ──
+        if (string.IsNullOrWhiteSpace(confirm)
+            || !confirm.Equals(fileName, StringComparison.OrdinalIgnoreCase))
+        {
+            return ToolResult.Fail(
+                $"删除一本书不可逆，需要二次确认。\n" +
+                $"请把 confirm 设为 \"{fileName}\"（project_list 里看到的文件名，原样回传）再调用。\n" +
+                "本次没有删除任何东西。");
+        }
+
+        // ── 正打开着的书不删 ──
+        var target = Path.GetFullPath(Path.Combine(dir, fileName));
+        if (!string.IsNullOrEmpty(s.Path)
+            && string.Equals(Path.GetFullPath(s.Path), target, StringComparison.OrdinalIgnoreCase))
+        {
+            return ToolResult.Fail(
+                $"「{fileName}」正是当前打开着的书。先 project_open 打开别的书，再删它——" +
+                "否则会话还抱着这本书，下次一保存又会把它写回书库。");
+        }
+
+        var r = BookDeleter.Delete(dir, fileName, p => !string.IsNullOrEmpty(s.Path)
+                && string.Equals(Path.GetFullPath(s.Path), Path.GetFullPath(p), StringComparison.OrdinalIgnoreCase));
+        return r.Ok ? ToolResult.Ok(r.Message) : ToolResult.Fail(r.Message);
+    }
 }

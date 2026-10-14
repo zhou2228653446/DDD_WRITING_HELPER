@@ -2619,9 +2619,9 @@ $$('#moreDlg button[id]').forEach(b => {
 
 // 打开项目：列出书库里所有的书。此前菜单里这一项只是把焦点挪到左上角下拉
 // 并打一行提示，等于什么都没做——现在是真的能选。
-$('#openBookBtn').onclick = async () => {
-  $('#openBookList').innerHTML = '<div class="empty">载入中…</div>';
-  $('#openBookDlg').showModal();
+// 列表加载抽成函数：删完一本书要原样重刷一遍（顺手就把"删了没"显示出来）。
+async function loadOpenBookList() {
+  $('#openBookDir').textContent = '书库：载入中…';
   try {
     const d = await api('/api/books');
     $('#openBookDir').textContent = '书库：' + d.dir;
@@ -2646,11 +2646,42 @@ $('#openBookBtn').onclick = async () => {
         $('#openBookDlg').close();
         await openBook(b.fileName);
       };
+
+      // 删除按钮。★ 删书不可逆，所以：confirm 里把规模说清楚 + 后端还会
+      //   拒绝删"正打开着"的那本（删了下次保存又把书写回来）。
+      //   不是硬删——整本书移入书库旁的 .trash/，可手动搬回。
+      const del = document.createElement('button');
+      del.className = 'book-del';
+      del.textContent = '🗑';
+      const opening = b.fileName === cur;
+      del.title = opening
+        ? '正打开的书不能删——先切换到别的书'
+        : `删除《${b.name}》（移入回收站，可搬回）`;
+      del.disabled = opening;
+      del.onclick = async ev => {
+        ev.stopPropagation();   // 别触发父级的"打开这本书"
+        if (!confirm(`确定删除《${b.name}》？\n\n` +
+            `${b.chapters} 章 · ${b.words} 字\n\n` +
+            '整本书（含备份、对话记忆、快照）会移入书库旁的回收站，需要时可手动搬回；\n' +
+            '同名导出文件（.txt/.docx）不会删。')) return;
+        try {
+          await post('/api/books/delete', { name: b.fileName });
+          await loadOpenBookList();   // 重刷：这本书消失即证明删掉了
+        } catch (e) { alert(errMsg(e)); }
+      };
+      it.insertBefore(del, it.querySelector('.bmeta'));
+
       list.appendChild(it);
     });
   } catch (e) {
     $('#openBookList').innerHTML = `<div class="empty">读不到书库：${e.message}</div>`;
   }
+}
+
+$('#openBookBtn').onclick = async () => {
+  $('#openBookList').innerHTML = '<div class="empty">载入中…</div>';
+  $('#openBookDlg').showModal();
+  await loadOpenBookList();
 };
 
 $('#saveBtn').onclick = () => flushSave();

@@ -50,11 +50,36 @@ public class OutputBudgetTests
     // ---- 预算常量本身 ----
 
     [Fact]
-    public void 生成类预算给到十万()
+    public void 生成类预算给到模型上限()
     {
-        Assert.Equal(100_000, CompletionOptions.GenerousBudget);
+        // 384K = DeepSeek-V4.1-Flash / v4-pro / gemini / gpt-4.1 这一级的公开最大输出
+        Assert.Equal(384_000, CompletionOptions.GenerousBudget);
         // CompletionOptions 的默认值也要跟上：调用点没显式设时不能退回 8192
         Assert.Equal(CompletionOptions.GenerousBudget, new CompletionOptions().MaxTokens);
+    }
+
+    // ---- 上下文窗口：窗口登记错了，ClampOutputBudget 夹出来的预算就跟着错 ----
+
+    [Theory]
+    [InlineData("deepseek-v4.1-flash", 1_000_000)]   // 用户当前用的就是这个
+    [InlineData("deepseek-v4-pro", 1_000_000)]
+    [InlineData("deepseek-flash", 1_000_000)]        // 官方模型名 = V4.1-Flash
+    [InlineData("gpt-4.1", 1_000_000)]
+    [InlineData("gemini-2.5-pro", 1_000_000)]
+    [InlineData("qwen-long", 1_000_000)]
+    public void 一M窗口的模型登记正确(string model, int expected)
+        => Assert.Equal(expected, ModelContextCatalog.Resolve(model));
+
+    [Theory]
+    [InlineData("deepseek-v3")]
+    [InlineData("deepseek-v3.2")]
+    [InlineData("deepseek-chat")]
+    [InlineData("deepseek-reasoner")]
+    public void 老模型不会被误抬到一M(string model)
+    {
+        // V3 / V3.2 是 128K，代码按 200K 的统一假定处理。不能因为登记了 v4
+        // 就把整族抬到 1M——那会让老模型的请求直接超出真实窗口。
+        Assert.Equal(ModelContextCatalog.AssumedContextWindow, ModelContextCatalog.Resolve(model));
     }
 
     [Fact]

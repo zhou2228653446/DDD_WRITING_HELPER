@@ -88,10 +88,15 @@ namespace 编辑器.Services
         /// <summary>
         /// 关键词 → 窗口，**只登记窗口明显大于 200K 的模型**。
         ///
-        /// 其余常见模型（Claude / o 系 / DeepSeek / GLM / Qwen / Kimi / 豆包 / 文心 / 混元 /
+        /// 其余常见模型（Claude / o 系 / GLM / Qwen / Kimi / 豆包 / 文心 / 混元 /
         /// Llama / Mistral / MiniMax …，公开文档里的常见值为 128K~200K）一律按
         /// <see cref="AssumedContextWindow"/> 处理，不需要也不应该出现在这里 ——
         /// 登记了也会被下限抬平，只是噪音。
+        ///
+        /// ⚠ **DeepSeek 是例外，必须单独登记**：V3 / V3.2 确实是 128K，但 **V4 这一代
+        ///   已经是 1M**（deepseek-v4.1-flash / deepseek-v4-pro 皆是）。早先把它整族
+        ///   归进上面那句「常见值 128K~200K」，长篇场景下可分配的输出空间被平白算小
+        ///   了 5 倍——窗口一错，`ClampOutputBudget` 夹出来的预算就跟着错。
         ///
         /// **顺序有意义**：先匹配到的先用，所以更具体的规则要排在前面
         /// （例如 <c>qwen-long</c> 必须排在 <c>qwen</c> 之类之前）。
@@ -106,6 +111,16 @@ namespace 编辑器.Services
 
             // ── 阿里通义 ──────────────────────────────────────────────
             ("qwen-long", 1_000_000),  // 长文本专用版
+
+            // ── DeepSeek ─────────────────────────────────────────────
+            // ★ V4 这一代是 1M 上下文 / 384K 最大输出（DeepSeek 官方、阿里云百炼、
+            //   火山方舟三方文档一致）。V3 / V3.2 才是 128K——所以这里只认 v4 与
+            //   现用的 deepseek-flash（官方模型名，对应 DeepSeek-V4.1-Flash），
+            //   老的 deepseek-chat / deepseek-reasoner / v3 仍走 200K 假定，
+            //   别一刀切把老模型也抬到 1M。
+            // ⚠ 顺序有意义：更具体的排前面。
+            ("deepseek-v4", 1_000_000),
+            ("deepseek-flash", 1_000_000),
         };
     }
 }

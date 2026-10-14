@@ -86,10 +86,15 @@ namespace 编辑器.Services
         private const int ReasoningRetryCap = CompletionOptions.GenerousBudget;
 
         /// <summary>
-        /// 服务端不接受我们给的 max_tokens 时降档到这个值再试。
-        /// 取 16384：这是本次统一放开预算之前全线验证过的量级，各家都能接受。
+        /// 服务端不接受我们给的 max_tokens 时，逐级往下退的档位。
+        ///
+        /// ★ 为什么是"逐级"而不是一次性降到 16384：各家硬上限差别很大
+        ///   （8K / 32K / 64K / 128K / 384K 都有）。一次性砸到 16384 虽然一定能成，
+        ///   但对硬上限 128K 的模型是白白浪费——它本来能一次写完 10 万字，
+        ///   结果被压到 1.6 万又得去走"自动续写"。
+        ///   逐级退让能用上该模型真正允许的最大额度。
         /// </summary>
-        private const int FallbackMaxTokens = 16_384;
+        private static readonly int[] MaxTokensFallbacks = { 131_072, 65_536, 32_768, 16_384 };
 
         /// <summary>
         /// 400 的正文看着像"max_tokens 给大了"吗？
@@ -167,7 +172,7 @@ namespace 编辑器.Services
             var reasoning = new StringBuilder();
             int continuations = 0;
             bool budgetBoosted = false;   // 见下面「思考耗尽自动加大预算」：只加一次
-            bool shrunk = false;          // 见下面「max_tokens 超限自动降档」：只降一次
+            int shrinkStep = 0;           // 见下面「max_tokens 超限自动降档」：已退到第几档
 
             // 调用方想要的输出预算。每次请求都要拿它重新夹一次窗口 ——
             // 因为续写会让输入变长，留给输出的空间随之变小。
@@ -187,12 +192,17 @@ namespace 编辑器.Services
                 // ★ 我们给的 max_tokens 超过该模型的硬上限（各家不同，常见 32K/64K，返 400）。
                 //   统一给到 10 万预算之后，硬上限更小的服务商全靠这条兜底，
                 //   否则它们会一律 400，等于彻底用不了。降档再走一轮即可。
-                if (oversized && !shrunk && desiredMaxTokens > FallbackMaxTokens)
+                if (oversized)
                 {
-                    shrunk = true;
-                    desiredMaxTokens = FallbackMaxTokens;
-                    options.OnNotice?.Invoke($"该模型不接受这么大的 max_tokens，已降到 {FallbackMaxTokens} 重试…");
-                    continue;
+                    while (shrinkStep < MaxTokensFallbacks.Length
+                           && MaxTokensFallbacks[shrinkStep] >= desiredMaxTokens)
+                        shrinkStep++;
+                    if (shrinkStep < MaxTokensFallbacks.Length)
+                    {
+                        desiredMaxTokens = MaxTokensFallbacks[shrinkStep++];
+                        options.OnNotice?.Invoke($"该模型不接受这么大的 max_tokens，已降到 {desiredMaxTokens} 重试…");
+                        continue;
+                    }
                 }
 
                 totalInput += result.InputTokens;

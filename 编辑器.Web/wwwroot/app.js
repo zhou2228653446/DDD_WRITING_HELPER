@@ -186,7 +186,7 @@ $('#appearanceBtn').onclick = openAppearanceDlg;
 
 // ---------- 书目 ----------
 
-async function loadBooks() {
+async function loadBooks(opts = {}) {
   const d = await api('/api/books');
   const sel = $('#bookSel');
   sel.innerHTML = '';
@@ -195,7 +195,10 @@ async function loadBooks() {
     o.value = b.fileName; o.textContent = `${b.name}（${b.chapters}章）`;
     sel.appendChild(o);
   });
-  if (d.books.length && !book) await openBook(d.books[0].fileName);
+  if (book) sel.value = book.fileName;
+  // 没打开任何书时兜底开第一本——但调用方明确说"别动我当前的书"时不这么做
+  // （收到 books-changed 就自动开一本会打断正在打字的人）
+  if (d.books.length && !book && !opts.noAutoOpen) await openBook(d.books[0].fileName);
 }
 
 async function openBook(fileName) {
@@ -209,6 +212,14 @@ async function openBook(fileName) {
 
 async function refresh() {
   book = await api('/api/book');
+  // 后端在这里顺手做了自愈：当前打开的 .tdxproj 在磁盘上已经没了
+  //（多半是 agent 通过 MCP 把用户正看着的那本删了）→ 它把状态清掉并回报书名。
+  // 这时必须**明确告诉用户**，否则界面只是默默清空，看起来像加载失败。
+  if (book.dropped) {
+    fx.toast(`《${book.dropped}》已被 agent 删除`, 'err', 8000);
+    log(`当前打开的《${book.dropped}》已不在磁盘上（多半是 agent 删的），已关闭`, true);
+    await loadBooks({ noAutoOpen: true });
+  }
   if (!book.open) { book = null; return; }
   stamp = book.stamp;
   renderChapters();
@@ -2018,6 +2029,17 @@ function connect() {
     log('AI 记忆已更新'); loadMemory();
   });
 
+  // 书目变了（人新建/删除，或 agent 通过 MCP 建了/删了书）→ 重拉下拉框。
+  // ★ 刻意**不受 mcpFollow 约束**：关掉"实时跟随"是用户不想被打断，
+  //   不等于"我不想知道多了一本新书"。所以这里只刷列表，不自动切书。
+  conn.on('books-changed', async () => {
+    await loadBooks({ noAutoOpen: true });
+    if ($('#openBookDlg')?.open) await loadOpenBookList();
+    // 顺带做一次自愈检查：agent 删掉的"可能正是当前这本"。
+    // /api/book 里的 DropIfMissing 会把状态清干净并回报书名，前端据此提示。
+    if (book) await refresh();
+  });
+
   conn.on('live', e => {   // 第二个 live 处理器：SignalR 允许同一事件多次注册
     if (!mcpFollow) return;
     if (e.kind === 'settingsbook-changed' && !$('#view-sbook').classList.contains('hidden')) {
@@ -2052,20 +2074,9 @@ function connect() {
       mcpCallTokens = null;      // 新一次调用，用量从头计
       if (ev.summary) log(ev.summary, true);
 
-      // ★ 跟着 agent 切书：它换了项目，界面还停在上本书的话，
-      //   用户看到的就是「agent 在动、但界面纹丝不动」。
-      //   桌面端 SyncProjectFromDisk 做的就是这件事。
-      if (ev.projectPath) {
-        const want = ev.projectPath.split(/[\\/]/).pop();
-        if (want && book?.fileName && book.fileName !== want) {
-          try {
-            await post('/api/books/open', { name: want });
-            await loadBooks();
-            await refresh();
-            log(`已跟着 agent 切到《${want.replace(/\.tdxproj$/i, '')}》`, true);
-          } catch (e) { log('跟随切书失败：' + errMsg(e), true); }
-        }
-      }
+      // ★ 跟着 agent 切书**挪到 done 分支做**了（原来在 start）：
+      //   start 事件是在工具执行**之前**发的，project_create 那一刻书
+      //   还没落盘，跟着去 open 必然 404，还会留下一条"不在书库里"的误报。
 
       // 切到 agent 正在操作的那一章（章节可能刚被建出来，失败就算了）
       if (ev.chapterNumber > 0 && current !== ev.chapterNumber) {
@@ -2120,6 +2131,30 @@ function connect() {
     }
 
     // done / error
+    // ★ 跟着 agent 切书（放在 done：此刻文件一定已经落盘了）。
+    //   agent 换了项目、界面还停在上本书的话，用户看到的就是
+    //   「agent 在动、但界面纹丝不动」。桌面端 SyncProjectFromDisk 同款。
+    //   ⚠ 判断只能是「和当前不同」：原来写成 `book?.fileName && ...`，
+    //   用户一本都没打开时 book 是 null，整个条件短路——agent 新建的书
+    //   就这么被吞掉了（列表不更新，得手动刷新才看得到）。
+    if (t === 'done' && ev.projectPath) {
+      const want = ev.projectPath.split(/[\\/]/).pop();
+      if (want && book?.fileName !== want) {
+        try {
+          await post('/api/books/open', { name: want });
+          // noAutoOpen：书已经切过去了，别让 loadBooks 的兜底逻辑
+          // 又把服务器切回「列表里的第一本」（那本未必是 agent 动的那本）
+          await loadBooks({ noAutoOpen: true });
+          await refresh();
+          log(`已跟着 agent 切到《${want.replace(/\.tdxproj$/i, '')}》`, true);
+        } catch (e) {
+          // 多半是 agent 打开了本机书库以外的书（自己传了别的目录），
+          // 网页版看不到是正常的——说清楚，别让用户以为是故障
+          log(`agent 打开了《${want.replace(/\.tdxproj$/i, '')}》，但它不在网页版的书库里：${errMsg(e)}`, true);
+        }
+      }
+    }
+
     mcpStreaming = false;
     mcpStreamChapter = null;
     mcpStreamBase = '';

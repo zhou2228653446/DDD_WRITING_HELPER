@@ -396,22 +396,33 @@ McpServer.SetNotifier(o =>
 //   一个不确定点：管道客户端连到哪个监听实例不受控——桌面端也开着时可能被它
 //   抢走，网页端一条都收不到。所以本进程发的事件走 InProcessEvent 直达；
 //   管道再回来的同一份（连回了自己）用 SourcePid 跳过，不会重复广播。
-void BroadcastMcpLive(McpLiveEvent ev) => _ = hubProvider.Clients.All.SendAsync("mcpLive", new
+void BroadcastMcpLive(McpLiveEvent ev)
 {
-    eventType = ev.EventType,
-    toolName = ev.ToolName,
-    taskName = ev.TaskName,
-    projectPath = ev.ProjectPath,
-    chapterNumber = ev.ChapterNumber,
-    settingField = ev.SettingField,
-    summary = ev.Summary,
-    previewText = ev.PreviewText,
-    inputTokens = ev.InputTokens,
-    outputTokens = ev.OutputTokens,
-    projectModified = ev.ProjectModified,
-    writeBack = ev.WriteBack,
-    writeMode = ev.WriteMode,
-});
+    _ = hubProvider.Clients.All.SendAsync("mcpLive", new
+    {
+        eventType = ev.EventType,
+        toolName = ev.ToolName,
+        taskName = ev.TaskName,
+        projectPath = ev.ProjectPath,
+        chapterNumber = ev.ChapterNumber,
+        settingField = ev.SettingField,
+        summary = ev.Summary,
+        previewText = ev.PreviewText,
+        inputTokens = ev.InputTokens,
+        outputTokens = ev.OutputTokens,
+        projectModified = ev.ProjectModified,
+        writeBack = ev.WriteBack,
+        writeMode = ev.WriteMode,
+    });
+
+    // ★ agent 建了 / 删了书，书目变了 → 单独通知前端重拉列表。
+    //   以前只有"人在网页上新建/删除"才广播（/api/books 那两个端点），
+    //   agent 走 MCP 建的書前端完全不知情：下拉框里不出现，用户得手动刷新。
+    //   两条 MCP 通道（stdio 命名管道 / HTTP 同进程）最终都走到这个函数，
+    //   所以判一次 ToolName 就够了，不必去改 MCP 侧。
+    if (ev.ToolName is "project_create" or "project_delete")
+        _ = hubProvider.Clients.All.SendAsync("books-changed", new { });
+}
 McpLiveBridge.InProcessEvent += BroadcastMcpLive;
 
 _ = McpLiveBridge.StartServer(ev =>
@@ -491,12 +502,16 @@ app.MapPost("/api/books/delete", async (WorkspaceService ws, BookNameReq req) =>
 
 app.MapGet("/api/book", (WorkspaceService ws) =>
 {
+    // 顺手自愈：当前打开的那本已经被 agent 从磁盘上删掉了（见 DropIfMissing 注释）。
+    // 这里报上去，前端据此提示用户，而不是让它抱着一个幽灵文件继续写。
+    var dropped = ws.DropIfMissing();
     var p = ws.Current;
-    if (p == null) return Results.Ok(new { open = false });
+    if (p == null) return Results.Ok(new { open = false, dropped });
 
     return Results.Ok(new
     {
         open = true,
+        dropped,
         name = p.ProjectName,
         // 文件名要给出来：前端靠它判断「agent 正在操作的是不是另一本书」，
         // 是的话得跟着切过去（桌面端 SyncProjectFromDisk 干的就是这件事）

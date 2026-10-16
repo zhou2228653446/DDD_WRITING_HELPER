@@ -243,6 +243,31 @@ public sealed class WorkspaceService
         }
     }
 
+    /// <summary>
+    /// 当前打开的那本书还在不在？不在就把状态清掉，返回被清掉的书名（没有则 null）。
+    ///
+    /// ★ 为什么需要它：网页端的「正打开的书不删」检查只看**自己**的当前书，
+    ///   而 agent 走 MCP 删书时查的是**agent 那边的会话**——它不知道网页上正
+    ///   看着哪一本。于是完全可能出现"agent 删了用户正在看的那本"，
+    ///   _project 抱着一个已删除的文件对象；用户下一次点保存，Save() 会
+    ///   把这个文件**重新写出来**，等于删了个寂寞。
+    ///
+    ///   做成惰性自愈：每次读当前状态时顺手看一眼磁盘，谁先发现谁纠正。
+    /// </summary>
+    public string? DropIfMissing()
+    {
+        lock (_gate)
+        {
+            var path = _project?.FilePath;
+            if (path == null || File.Exists(path)) return null;
+
+            var name = _project!.ProjectName;
+            _project = null;
+            _chat = null;
+            return name;
+        }
+    }
+
     public long Stamp()
     {
         lock (_gate)

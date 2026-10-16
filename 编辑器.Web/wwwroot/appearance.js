@@ -264,6 +264,9 @@ async function loadAppearance() {
   applyAppearance(appearanceDraft);
   localStorage.setItem(lsKey('appearance'), JSON.stringify(appearanceDraft));
   fillSchemeSelect();
+
+  // 正文排版随外观一起加载（同一份主体目录、同样"缓存画首帧、服务器为准"）
+  await loadTypo();
 }
 
 const pick = a => ({ scheme: a.scheme, material: a.material, intensity: a.intensity, bgUrl: a.bgUrl });
@@ -285,8 +288,12 @@ function fillSchemeSelect() {
 function openAppearanceDlg() {
   if (!appearance) return;
   appearanceDraft = pick(appearance);   // 每次打开都从"生效值"起，草稿不改动已保存的
+  typoDraft = typo ? { ...typo } : null; // 排版同款草稿语义
   renderAppearanceDlg();
+  if (typoDraft) renderTypoUi();
+  document.getElementById('typoState').textContent = '';
   applyAppearance(appearanceDraft);     // 实时预览
+  applyTypo(typoDraft);
   document.getElementById('appearanceDlg').showModal();
 }
 
@@ -391,15 +398,178 @@ document.getElementById('apOk').onclick = async () => {
   applyAppearance(appearanceDraft);
   localStorage.setItem(lsKey('appearance'), JSON.stringify(appearanceDraft));
   fillSchemeSelect();
+
+  // 排版一起落盘。字体栈不合法时**不发请求**——服务端会把它打回默认值，
+  // 那等于悄悄把用户前面设的字体清了；宁可保持原样并说清楚。
+  let typoNote = '';
+  if (typoDraft) {
+    if (!fontStackOk(typoDraft.fontFamily)) {
+      typoNote = '；排版未保存（字体栈含不支持的字符）';
+    } else {
+      try {
+        const tr = await post('/api/typo', typoDraft);
+        typo = pickTypo(tr);
+        typoDraft = { ...typo };
+        applyTypo(typo);
+        localStorage.setItem(lsKey('typo'), JSON.stringify(typo));
+      } catch (e) {
+        typoNote = '；排版保存失败：' + errMsg(e);
+      }
+    }
+  }
+
   document.getElementById('appearanceDlg').close();
-  log(`外观已保存：${schemeName(r.scheme)} + ${materialName(r.material)}（强度 ${r.intensity}）`);
+  log(`外观已保存：${schemeName(r.scheme)} + ${materialName(r.material)}（强度 ${r.intensity}）`
+      + (typo ? `；正文 ${typo.fontSize}px / 行距 ${typo.lineHeight}` : '') + typoNote);
 };
 
 document.getElementById('apCancel').onclick = () => {
   appearanceDraft = pick(appearance);   // 放弃草稿，回到生效值
   applyAppearance(appearanceDraft);
+  typoDraft = typo ? { ...typo } : null;
+  applyTypo(typoDraft);
   document.getElementById('appearanceDlg').close();
 };
 
 const schemeName = id => appearance.schemes.find(s => s.name === id)?.displayName || id;
 const materialName = id => appearance.materials.find(m => m.name === id)?.displayName || id;
+
+/* ══════════════════════════════════════════════════════════════════════════
+   正文排版：字体 / 字号 / 行距 / 字距（只作用于写作区 #editor）
+
+   存的是服务端 typo.json，**刻意与 appearance.json 分开**：
+   桌面端保存外观时是全量序列化，往同一个文件加字段会被它抹掉；而且桌面端
+   是 WPF 字体体系（XAML FontFamily），这组数据对它也没有意义。
+   外观两边共享，排版网页端独占。
+
+   ⚠ 默认值不在本文件里抄一份——由 /api/typo 的 defaults 下发（服务端
+      EditorTypographyConfig 是唯一真源）。样式表里 var() 的 fallback 写的
+     就是那组默认值，所以"没设置过"和"设置成默认"渲染结果完全一致。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+let typo = null;         // 服务器上生效的排版
+let typoDraft = null;    // 对话框里的草稿（实时预览用，点确定才落盘）
+let typoDefaults = null; // 服务端下发的默认值（「恢复默认排版」用）
+let typoPresets = [];    // 服务端下发的字体预设（唯一定义在 EditorTypographyConfig）
+
+const pickTypo = t => ({
+  fontFamily: t.fontFamily, fontSize: t.fontSize,
+  lineHeight: t.lineHeight, letterSpacing: t.letterSpacing,
+});
+
+/**
+ * 字体栈的**客户端**再清洗一遍。服务端已经挡过（EditorTypographyConfig.
+ * SanitizeFontStack），这里重复一道是因为它最终会进 CSS 变量——输入框里的
+ * 内容在打字过程中就会实时预览，那一瞬间的中间态还没经过服务端。
+ * 同一个黑白名单：字母（含中文）、数字、空格、逗号、引号、连字符、下划线、点。
+ */
+const fontStackOk = s =>
+  typeof s === 'string' && s.trim().length > 0 && s.length <= 200 &&
+  /^[A-Za-z0-9 \-_,.'"\u4e00-\u9fff]+$/.test(s);
+
+/** 把排版写进 CSS 变量。传 null 表示"清掉"——样式表的 var() fallback 就是
+ *  原来的硬编码值，效果等同"没设置过"。 */
+function applyTypo(t) {
+  const r = document.documentElement.style;
+  const keys = ['--editor-font', '--editor-font-size', '--editor-line-height', '--editor-letter-spacing'];
+  if (!t || !fontStackOk(t.fontFamily)) { keys.forEach(k => r.removeProperty(k)); return; }
+  r.setProperty('--editor-font', t.fontFamily);
+  r.setProperty('--editor-font-size', t.fontSize + 'px');
+  r.setProperty('--editor-line-height', String(t.lineHeight));
+  r.setProperty('--editor-letter-spacing', t.letterSpacing + 'em');
+}
+
+async function loadTypo() {
+  // 首帧用缓存：否则会"先按默认字体画一帧、服务器值到了再跳一下"
+  try {
+    const cached = JSON.parse(localStorage.getItem(lsKey('typo')) || 'null');
+    if (cached) { if (!typoDraft) typoDraft = cached; applyTypo(cached); }
+  } catch { /* 缓存坏了就当没有 */ }
+
+  try {
+    const r = await api('/api/typo');
+    typo = pickTypo(r);
+    typoDefaults = r.defaults || null;
+    typoPresets = r.presets || [];
+    typoDraft = { ...typo };
+    applyTypo(typo);
+    localStorage.setItem(lsKey('typo'), JSON.stringify(typo));
+  } catch {
+    // 拉不到就保持样式表的默认（= 原来的样子），不弹错——这是非关键设置
+  }
+}
+
+/** 把草稿同步到界面控件与预览块。 */
+function renderTypoUi() {
+  const t = typoDraft;
+  if (!t) return;
+
+  const sel = document.getElementById('typoFontPreset');
+  if (sel && !sel.options.length) {
+    // 预设由服务端下发；末尾补一个纯界面概念的「自定义」（它不是一种字体，
+    // 所以不在服务端那份里）
+    typoPresets.forEach(p => {
+      const o = document.createElement('option');
+      o.value = p.id; o.textContent = p.name;
+      sel.appendChild(o);
+    });
+    const o = document.createElement('option');
+    o.value = 'custom'; o.textContent = '自定义（用下方字体栈）';
+    sel.appendChild(o);
+  }
+  const hit = typoPresets.find(p => p.stack === t.fontFamily);
+  if (sel) sel.value = hit ? hit.id : 'custom';
+
+  const stack = document.getElementById('typoFontStack');
+  if (stack && document.activeElement !== stack) stack.value = t.fontFamily;
+
+  const size = document.getElementById('typoSize');
+  size.value = t.fontSize;
+  document.getElementById('typoSizeText').textContent = t.fontSize;
+
+  const line = document.getElementById('typoLine');
+  line.value = t.lineHeight;
+  document.getElementById('typoLineText').textContent = Number(t.lineHeight).toFixed(2);
+
+  const letter = document.getElementById('typoLetter');
+  letter.value = t.letterSpacing;
+  document.getElementById('typoLetterText').textContent = Number(t.letterSpacing).toFixed(2);
+}
+
+/** 草稿动一下就预览一次（不落盘，与配色/材质的交互一致）。 */
+function previewTypo() {
+  applyTypo(typoDraft);
+  renderTypoUi();
+  const st = document.getElementById('typoState');
+  if (st) st.textContent = fontStackOk(typoDraft.fontFamily) ? '' : '字体栈里有不支持的字符，已按默认字体预览';
+}
+
+document.getElementById('typoFontPreset').addEventListener('change', e => {
+  const p = typoPresets.find(x => x.id === e.target.value);
+  if (p?.stack) { typoDraft.fontFamily = p.stack; previewTypo(); }
+  else document.getElementById('typoFontStack').focus();   // 选「自定义」→ 光标进输入框
+});
+
+document.getElementById('typoFontStack').addEventListener('input', e => {
+  typoDraft.fontFamily = e.target.value;
+  previewTypo();
+});
+
+// 滑块拖动即预览；数值实时显示
+['typoSize', 'typoLine', 'typoLetter'].forEach((id, i) => {
+  document.getElementById(id).addEventListener('input', e => {
+    const v = Number(e.target.value);
+    if (i === 0) typoDraft.fontSize = v;
+    else if (i === 1) typoDraft.lineHeight = v;
+    else typoDraft.letterSpacing = v;
+    previewTypo();
+  });
+});
+
+document.getElementById('typoReset').onclick = () => {
+  // 默认值由服务端下发；万一还没到手就什么都不做（别猜一份写死在 JS 里的）
+  if (!typoDefaults) return;
+  typoDraft = pickTypo(typoDefaults);
+  previewTypo();
+  document.getElementById('typoState').textContent = '已还原为默认排版（点「确定」后保存）';
+};

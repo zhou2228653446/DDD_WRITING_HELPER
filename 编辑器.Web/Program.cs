@@ -1924,6 +1924,75 @@ app.MapDelete("/api/appearance/bg", (HttpContext ctx) =>
 });
 
 // ══════════════════════════════════════════════════════════════════
+// 正文排版：字体 / 字号 / 行距 / 字距（网页端专有）
+//
+// ★ 刻意**不**并入 appearance.json 而是单独 typo.json：
+//   桌面端 AppearanceManager.Save 是全量序列化——它读进来时忽略未知字段，
+//   再保存时就把它们写没了。往外观文件里加字段，用户在桌面端切一次配色，
+//   网页端设的排版会被悄悄抹掉。而桌面端是 WPF 字体体系（XAML FontFamily
+//   资源），这组数据对它也没有意义。两者的取舍正好相反：
+//   外观共享（两边同源），排版网页端独占。
+// ══════════════════════════════════════════════════════════════════
+
+app.MapGet("/api/typo", (HttpContext ctx) =>
+{
+    var cfg = LoadTypo(SubjectConfigDir(SubjectOfCtx(ctx)));
+    return Results.Ok(new
+    {
+        fontFamily = cfg.FontFamily,
+        fontSize = cfg.FontSize,
+        lineHeight = cfg.LineHeight,
+        letterSpacing = cfg.LetterSpacing,
+        // 默认值一起给前端：界面上的「恢复默认」按钮据此还原，不在 JS 里
+        // 另抄一份常量——两处各写一份迟早对不上（改了一边忘了另一边）。
+        defaults = new
+        {
+            fontFamily = EditorTypographyConfig.DefaultFontFamily,
+            fontSize = EditorTypographyConfig.DefaultFontSize,
+            lineHeight = EditorTypographyConfig.DefaultLineHeight,
+            letterSpacing = EditorTypographyConfig.DefaultLetterSpacing,
+        },
+        // 字体预设同样由服务端下发（唯一定义在 EditorTypographyConfig，
+        // MCP 的 ui_typography 按名字选字体时用的是同一份）
+        presets = EditorTypographyConfig.FontPresets.Select(p => new
+        {
+            id = p.Id, name = p.Name, stack = p.Stack,
+        }),
+    });
+});
+
+app.MapPost("/api/typo", (HttpContext ctx, TypoReq req) =>
+{
+    var dir = SubjectConfigDir(SubjectOfCtx(ctx));
+    var cur = LoadTypo(dir);
+    var cfg = new EditorTypographyConfig
+    {
+        FontFamily = req.FontFamily ?? cur.FontFamily,
+        FontSize = req.FontSize ?? cur.FontSize,
+        LineHeight = req.LineHeight ?? cur.LineHeight,
+        LetterSpacing = req.LetterSpacing ?? cur.LetterSpacing,
+    }.Normalized();   // 越界夹取、字体栈非法则回退默认——别把坏值写进盘
+
+    try
+    {
+        SaveTypo(dir, cfg);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = "保存失败：" + ex.Message });
+    }
+
+    return Results.Ok(new
+    {
+        ok = true,
+        fontFamily = cfg.FontFamily,
+        fontSize = cfg.FontSize,
+        lineHeight = cfg.LineHeight,
+        letterSpacing = cfg.LetterSpacing,
+    });
+});
+
+// ══════════════════════════════════════════════════════════════════
 // 设定集（SettingsBook：把各类设定统合成一本可编辑、可导出的资料书）
 // ══════════════════════════════════════════════════════════════════
 
@@ -2238,6 +2307,14 @@ static string? WebBgFile(string dir)
     return Directory.GetFiles(dir, "web_bg.*").FirstOrDefault();
 }
 
+// ── 正文排版（typo.json）────────────────────────────────────────────
+// 与外观分开存的原因见 /api/typo 上方的说明；读写的实现收在
+// EditorTypographyConfig 里（MCP 的 ui_typography 用同一份，避免两处各写一遍）。
+
+static EditorTypographyConfig LoadTypo(string dir) => EditorTypographyConfig.LoadFrom(dir);
+
+static void SaveTypo(string dir, EditorTypographyConfig cfg) => EditorTypographyConfig.SaveTo(dir, cfg);
+
 static ApiConfig? LoadApiConfig(string subject)
 {
     try
@@ -2302,6 +2379,14 @@ public record SaveChapterReq(
 public record BibReq([property: JsonPropertyName("text")] string? Text);
 
 public record EnabledReq([property: JsonPropertyName("enabled")] bool? Enabled);
+
+/// <summary>正文排版保存请求。字段可空：缺的**沿用现值**而不是重置为默认
+/// （前端目前总是全量提交，但接口不该因为少传一个字段就把用户的字体清掉）。</summary>
+public record TypoReq(
+    [property: JsonPropertyName("fontFamily")] string? FontFamily,
+    [property: JsonPropertyName("fontSize")] double? FontSize,
+    [property: JsonPropertyName("lineHeight")] double? LineHeight,
+    [property: JsonPropertyName("letterSpacing")] double? LetterSpacing);
 
 public record ProfileSaveReq(
     [property: JsonPropertyName("name")] string? Name,

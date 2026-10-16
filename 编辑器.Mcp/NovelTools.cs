@@ -1327,4 +1327,160 @@ internal static class NovelTools
                 && string.Equals(Path.GetFullPath(s.Path), Path.GetFullPath(p), StringComparison.OrdinalIgnoreCase));
         return r.Ok ? ToolResult.Ok(r.Message) : ToolResult.Fail(r.Message);
     }
+
+    // ==================================================================
+    // 界面排版（网页版「外观设置 → 正文排版」）
+    // ==================================================================
+
+    /// <summary>
+    /// 读写网页版的正文排版：字体 / 字号 / 行距 / 字距。
+    ///
+    /// 界面里能做的操作 MCP 也要能做——否则用户说一句「把字号调大点」，
+    /// agent 只能回「请你自己去外观设置里改」。设置存在服务器上（typo.json），
+    /// 改完网页端会自动应用（前端收到工具完成事件后重拉一次）。
+    /// 不传任何参数 = 只读当前值 + 列出可用字体预设名。
+    /// </summary>
+    public static ToolResult Typography(JsonElement args)
+    {
+        var dir = ResolveConfigDirectory();
+        var cfg = EditorTypographyConfig.LoadFrom(dir);
+
+        bool wantsChange = Bool(args, "reset", false)
+            || HasProp(args, "preset") || HasProp(args, "font") || HasProp(args, "fontFamily")
+            || HasProp(args, "fontSize") || HasProp(args, "fontSizePx")
+            || HasProp(args, "lineHeight") || HasProp(args, "lineSpacing")
+            || HasProp(args, "letterSpacing");
+
+        if (!wantsChange) return ToolResult.Ok(DescribeTypography(cfg));
+
+        var next = new EditorTypographyConfig
+        {
+            FontFamily = cfg.FontFamily,
+            FontSize = cfg.FontSize,
+            LineHeight = cfg.LineHeight,
+            LetterSpacing = cfg.LetterSpacing,
+        };
+        var notes = new List<string>();
+
+        if (Bool(args, "reset", false))
+        {
+            next = new EditorTypographyConfig();
+            notes.Add("已恢复全部默认排版");
+        }
+        else
+        {
+            // 预设优先于自定义字体栈：agent 同时传了以预设为准（它更明确，也更好校验）
+            var key = StrAny(args, "", "preset", "font");
+            if (key.Length > 0)
+            {
+                var preset = EditorTypographyConfig.FindPreset(key);
+                if (preset == null)
+                {
+                    var names = string.Join(" / ", EditorTypographyConfig.FontPresets.Select(p => p.Name));
+                    return ToolResult.Fail($"没有叫「{key}」的字体预设。可用：{names}。");
+                }
+                next.FontFamily = preset.Stack;
+                notes.Add($"字体 → {preset.Name}");
+            }
+            else
+            {
+                var stack = StrAny(args, "", "fontFamily", "fontStack");
+                if (stack.Length > 0)
+                {
+                    if (EditorTypographyConfig.SanitizeFontStack(stack) == null)
+                        return ToolResult.Fail(
+                            "字体栈不合法。只能包含字母（含中文）、数字、空格、逗号、引号、连字符、下划线、点——" +
+                            "分号 / 花括号 / 反斜杠等会破坏样式表，一律拒绝。\n" +
+                            "多数情况直接用 preset 参数按预设名选更省事（不传参数能看到可用名单）。");
+                    next.FontFamily = stack;
+                    notes.Add($"字体 → {stack}");
+                }
+            }
+
+            var askSize = Num(args, "fontSize", "fontSizePx");
+            if (askSize != null)
+            {
+                next.FontSize = askSize.Value;
+                notes.Add($"字号 → {askSize.Value}px");
+            }
+            var askLine = Num(args, "lineHeight", "lineSpacing");
+            if (askLine != null)
+            {
+                next.LineHeight = askLine.Value;
+                notes.Add($"行距 → {askLine.Value}");
+            }
+            var askLetter = Num(args, "letterSpacing");
+            if (askLetter != null)
+            {
+                next.LetterSpacing = askLetter.Value;
+                notes.Add($"字距 → {askLetter.Value}em");
+            }
+        }
+
+        var before = next;                 // 记录归一化前的意图，用于提示哪些被夹了
+        next = next.Normalized();
+        try
+        {
+            EditorTypographyConfig.SaveTo(dir, next);
+        }
+        catch (Exception ex)
+        {
+            return ToolResult.Fail($"写入排版配置失败：{ex.Message}");
+        }
+
+        var clamped = new List<string>();
+        if (Math.Abs(before.FontSize - next.FontSize) > 0.001)
+            clamped.Add($"字号 {before.FontSize} → {next.FontSize}（允许范围 {EditorTypographyConfig.MinFontSize}~{EditorTypographyConfig.MaxFontSize}）");
+        if (Math.Abs(before.LineHeight - next.LineHeight) > 0.001)
+            clamped.Add($"行距 {before.LineHeight} → {next.LineHeight}（允许范围 {EditorTypographyConfig.MinLineHeight}~{EditorTypographyConfig.MaxLineHeight}）");
+        if (Math.Abs(before.LetterSpacing - next.LetterSpacing) > 0.001)
+            clamped.Add($"字距 {before.LetterSpacing} → {next.LetterSpacing}（允许范围 {EditorTypographyConfig.MinLetterSpacing}~{EditorTypographyConfig.MaxLetterSpacing}）");
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("已更新网页端正文排版：" + string.Join("，", notes));
+        if (clamped.Count > 0)
+        {
+            sb.AppendLine("其中被夹到允许范围内的：");
+            foreach (var c in clamped) sb.AppendLine("  · " + c);
+        }
+        sb.AppendLine();
+        sb.Append(DescribeTypography(next));
+        sb.AppendLine();
+        sb.AppendLine("（网页端打开着的话会自动应用；字体需要设备上装有——手机上缺宋体/楷体时会按字体栈往后回退。）");
+        return ToolResult.Ok(sb.ToString());
+    }
+
+    private static string DescribeTypography(EditorTypographyConfig cfg)
+    {
+        var hit = EditorTypographyConfig.FontPresets.FirstOrDefault(p => p.Stack == cfg.FontFamily);
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("网页端正文排版（只作用于写作区）：");
+        sb.AppendLine($"  字体   {cfg.FontFamily}" + (hit != null ? $"（预设：{hit.Name}）" : "（自定义）"));
+        sb.AppendLine($"  字号   {cfg.FontSize}px（{EditorTypographyConfig.MinFontSize}~{EditorTypographyConfig.MaxFontSize}）");
+        sb.AppendLine($"  行距   {cfg.LineHeight}（{EditorTypographyConfig.MinLineHeight}~{EditorTypographyConfig.MaxLineHeight}）");
+        sb.AppendLine($"  字距   {cfg.LetterSpacing}em（{EditorTypographyConfig.MinLetterSpacing}~{EditorTypographyConfig.MaxLetterSpacing}）");
+        sb.AppendLine("可用字体预设：" + string.Join(" / ",
+            EditorTypographyConfig.FontPresets.Select(p => p.Name)));
+        sb.AppendLine("改法：传 preset=\"楷体\" 或 fontSize=20 这类参数；传 reset=true 恢复默认。");
+        return sb.ToString();
+    }
+
+    internal static bool HasProp(JsonElement a, string key) =>
+        a.ValueKind == JsonValueKind.Object && a.TryGetProperty(key, out _);
+
+    /// <summary>读一个数值参数（多个候选键，取第一个存在的）。不是数字返回 null
+    /// ——"用户没要求改"和"要求改成 0"要分得清（字距 0 是合法值）。</summary>
+    internal static double? Num(JsonElement a, params string[] keys)
+    {
+        if (a.ValueKind != JsonValueKind.Object) return null;
+        foreach (var k in keys)
+        {
+            if (!a.TryGetProperty(k, out var v)) continue;
+            if (v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d)) return d;
+            if (v.ValueKind == JsonValueKind.String && double.TryParse(
+                    v.GetString(), System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var s)) return s;
+        }
+        return null;
+    }
 }

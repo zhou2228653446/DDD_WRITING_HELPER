@@ -70,6 +70,7 @@ TdxClaw 写作助手 MCP 服务器：直接读写 .tdxproj 长篇写作项目（
 | `project_create` | 新建一本（自动补设定集 12 章骨架；同名文件存在时报错而不是覆盖） |
 | `project_delete` | 删一整本书。★ `confirm` 必须原样回传文件名（`project_list` 里看到的那个）才真删——别凭记忆猜书名。不是硬删：整本书（含 .bak / 对话记忆 / 快照）移入书库旁的 `.trash/`，照 `_删除信息.txt` 可搬回；同名导出文件（.txt/.docx）不删。正打开着的书拒绝删 |
 | `project_status` | 进度画像 + 「下一步该做什么」的建议；用户问"写到哪了"先用它 |
+| `ui_typography` | 网页端正文排版：字体 / 字号 / 行距 / 字距。用户说「字太小」「行距太挤」「换成楷体」时用它，别让他自己去外观设置里翻。不传参数 = 查看当前值 + 可用字体预设；传 `preset="楷体"` / `fontSize=20` / `lineHeight=2.2` 等即改，`reset=true` 回默认。改完网页端会自动应用 |
 
 **读（7）**
 `chapters_list`（目录）/ `chapter_read`（单章，可 `maxChars` 截断）/ `chapter_search`（全书搜词，查伏笔与矛盾）/ `settings_get`（五项贯穿设定 + 视角 + 简介）/ `settings_book_get`（设定集清单或单章）/ `characters_list`（人物卡）/ `memory_get`（AI 写作记忆）

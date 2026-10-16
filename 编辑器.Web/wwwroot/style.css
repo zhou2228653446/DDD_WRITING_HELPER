@@ -120,7 +120,14 @@ aside,section{overflow:auto}
 .editor-bar{display:flex;align-items:center;gap:10px;margin-bottom:8px}
 .editor-bar input{flex:1;max-width:320px}
 #editor{
-  flex:1;resize:none;font:16px/1.9 "Songti SC","SimSun",serif;
+  flex:1;resize:none;
+  /* 正文排版：字体 / 字号 / 行距 / 字距可在「外观设置 → 正文排版」调。
+     ⚠ 每个 var() 的 fallback 都写成原来硬编码的值（font:16px/1.9 …/.02em），
+       这样即使 JS 没跑、typo.json 缺失或读坏了，编辑区仍是用户熟悉的样子。 */
+  font-family:var(--editor-font,"Songti SC","SimSun",serif);
+  font-size:var(--editor-font-size,16px);
+  line-height:var(--editor-line-height,1.9);
+  letter-spacing:var(--editor-letter-spacing,.02em);
   color:var(--ink);background:var(--editor-bg);border:1px solid var(--line);
   border-radius:var(--radius);padding:18px 22px;outline:none;
 }
@@ -499,6 +506,24 @@ dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
 
 .ap-slider{display:flex;align-items:center;gap:10px}
 .ap-slider input[type=range]{flex:1}
+/* ── 正文排版区块 ── */
+.ap-typo{display:flex;flex-direction:column;gap:8px}
+.ap-typo-row{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted);margin:0}
+.ap-typo-row select,.ap-typo-row input[type=text],.ap-typo-row input:not([type]){
+  flex:1;font-size:12.5px;
+}
+.ap-typo-label{flex:none;width:34px}
+.ap-typo-row .ap-slider{flex:1}
+.ap-typo-row .ap-slider span{flex:none;width:38px;text-align:right;font-variant-numeric:tabular-nums}
+/* 预览块：跟编辑区吃同一组排版变量，改什么立刻在这里看出来。
+   用 --editor-* 而不是另起一套，保证预览与真实写作区不会走偏。 */
+.ap-typo-preview{
+  border:1px solid var(--line);border-radius:var(--radius);
+  background:var(--editor-bg,#fff);color:var(--ink);
+  padding:10px 12px;margin:2px 0 8px;
+  max-height:96px;overflow:hidden;
+}
+.ap-typo-foot{display:flex;align-items:center;gap:10px;margin-top:2px}
 .ap-bg{display:flex;align-items:center;gap:10px;margin:6px 0}
 .ap-bg-preview{
   width:96px;height:54px;border-radius:6px;border:1px solid var(--line);
@@ -886,9 +911,10 @@ input,select,textarea{
 }
 
 /* ── 编辑器：纸面感 ── */
-#editor-wrap,#editor{
-  line-height:1.9; letter-spacing:.02em;
-}
+/* ⚠ 此处原写作 #editor-wrap（连字符）——实际元素是 #editorWrap，这个选择器
+   从来没匹配过任何人；行距/字距真正生效的是 #editor 那条。现在排版值统一走
+   CSS 变量，定义在 #editor 上，这里不再重复一遍（重复就会出现两个来源，
+   改一处忘一处时对不上）。 */
 #editor-bar{ border-bottom:1px solid var(--line-soft); }
 
 /* ── 对话框：浮层质感 ── */

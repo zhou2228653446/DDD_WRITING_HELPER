@@ -2179,6 +2179,18 @@ function connect() {
       }
     }
 
+    // ★ agent 调 ui_typography 改了正文排版 → 立刻重拉并应用。
+    //   不重拉的话用户得刷新页面才看得到，而"agent 说改好了、屏幕没变"
+    //   是最容易让人以为失灵的情形。刻意不受 mcpFollow 约束：那开关管的是
+    //   "别动我的稿子"，排版是用户自己让 agent 改的，没有理由不生效。
+    if (t === 'done' && ev.toolName === 'ui_typography') {
+      try {
+        await loadTypo();
+        const fontName = typoPresets.find(p => p.stack === typo.fontFamily)?.name;
+        log(`agent 调整了正文排版：${fontName || typo.fontFamily} · ${typo.fontSize}px · 行距 ${typo.lineHeight}`, true);
+      } catch { /* 拉不到就算了，下次刷新会带上 */ }
+    }
+
     mcpStreaming = false;
     mcpStreamChapter = null;
     mcpStreamBase = '';

@@ -701,6 +701,28 @@ internal static class McpServer
                 required = new List<string> { "name", "confirm" },
             },
         },
+        new ToolDef
+        {
+            name = "ui_typography",
+            description =
+                "读写网页版的正文排版（字体 / 字号 / 行距 / 字距，只作用于写作区）。" +
+                "用户说「字太小」「行距太挤」「换成楷体」这类话时用它，别让他自己去外观设置里翻。" +
+                "不传参数 = 查看当前值 + 列出可用字体预设；传了参数 = 修改并立即生效（网页端开着会自动应用）。" +
+                "传 reset=true 恢复默认。允许范围：" + EditorTypographyConfig.RangeHint + "。",
+            inputSchema = new ToolSchema
+            {
+                properties = new Dictionary<string, ToolProp>
+                {
+                    ["preset"] = new() { description = "字体预设名或 id：宋体 / 黑体 / 楷体 / 仿宋 / 圆体 / 西文衬线 / 等宽 / 系统默认" },
+                    ["fontFamily"] = new() { description = "自定义字体栈（一般用 preset 就够）。只能含字母、数字、空格、逗号、引号、连字符、下划线、点" },
+                    ["fontSize"] = new() { type = "number", description = "正文字号 px，如 20。允许范围见预设说明（不传参数调用可看到）" },
+                    ["lineHeight"] = new() { type = "number", description = "行距倍率，如 2.2" },
+                    ["letterSpacing"] = new() { type = "number", description = "字距 em，默认 0.02" },
+                    ["reset"] = new() { type = "boolean", description = "true = 恢复全部默认排版" },
+                },
+                required = new List<string>(),   // 一个都不传 = 只读（看当前值与可用预设）
+            },
+        },
     };
 
     // ==================================================================
@@ -762,6 +784,14 @@ internal static class McpServer
                 case "ai_config_check":
                 {
                     var r0 = await AiTools.ConfigCheckAsync(args);
+                    PublishToolDone(name, args, r0, projectModified: false);
+                    return ToolText(r0.Text, r0.IsError);
+                }
+                case "ui_typography":
+                {
+                    // 改的是服务器上的排版配置（typo.json），不碰项目文件——
+                    // 所以 projectModified=false。网页端收到 done 会重拉一次排版。
+                    var r0 = NovelTools.Typography(args);
                     PublishToolDone(name, args, r0, projectModified: false);
                     return ToolText(r0.Text, r0.IsError);
                 }
@@ -850,6 +880,7 @@ internal static class McpServer
             "character_upsert" => $"🤖 MCP 正在更新人物卡「{NovelTools.Str(args, "name")}」…",
             "character_delete" => $"🤖 MCP 正在删除人物卡「{NovelTools.Str(args, "name")}」…",
             "memory_set" => "🤖 MCP 正在更新 AI 写作记忆…",
+            "ui_typography" => "🤖 MCP 正在调整网页端正文排版…",
             "snapshot_restore" => "🤖 MCP 正在恢复历史快照…",
             "project_export" => $"🤖 MCP 正在导出项目（{NovelTools.Str(args, "format", "txt").ToUpperInvariant()}）…",
             "ai_write" => $"🤖 MCP AI 正在{AiTools.TaskDisplayLabel(task ?? "continue")}{(chNum > 0 ? $"（第 {chNum} 章）" : "")}…",
@@ -906,6 +937,7 @@ internal static class McpServer
                 "character_upsert" => $"🤖 MCP 已更新人物卡「{NovelTools.Str(args, "name")}」",
                 "character_delete" => $"🤖 MCP 已删除人物卡「{NovelTools.Str(args, "name")}」",
                 "memory_set" => "🤖 MCP 已更新 AI 写作记忆",
+                "ui_typography" => "🤖 MCP 已调整网页端正文排版",
                 "snapshot_restore" => "🤖 MCP 已恢复历史版本快照",
                 "project_export" => $"🤖 MCP 已导出项目（{NovelTools.Str(args, "format", "txt").ToUpperInvariant()}）",
                 "ai_write" => $"🤖 MCP AI 已完成{AiTools.TaskDisplayLabel(task ?? "continue")}{(ch != null ? $" · 第 {ch.ChapterNumber} 章「{ch.Title}」（{ch.WordCount} 字）" : "")}",

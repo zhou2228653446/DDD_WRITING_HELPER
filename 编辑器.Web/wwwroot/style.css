@@ -296,6 +296,18 @@ hr{border:none;border-top:1px solid var(--line);margin:16px 0}
 dialog{
   background:var(--panel);color:var(--ink);border:1px solid var(--line);
   border-radius:12px;padding:20px 24px;min-width:520px;max-width:680px;
+  /* ★ 高度上限 + 可滚动：不给上限时，对话框按内容撑高，手机上底部直接掉到
+     折叠线以下（实测 390×560 视口：对话框 scrollHeight 619 > 视口 420，
+     而「MCP 实时跟随」恰在 top=519，永远看不到）。上限按视口留出边距。 */
+  max-height:calc(100vh - 32px);overflow-y:auto;overscroll-behavior:contain;
+}
+/* 滚动时别让第一条贴边（内容溢出时收紧上下留白） */
+@media (max-height:700px){
+  dialog{padding-top:14px;padding-bottom:14px}
+}
+/* 手机上 520px 的下限会直接顶出视口（实测 360px 宽时左右被切掉） */
+@media (max-width:560px){
+  dialog{min-width:0;width:calc(100vw - 20px);padding:16px 14px}
 }
 dialog::backdrop{background:rgba(0,0,0,.45)}
 dialog h3{margin:0 0 14px;font-size:16px}
@@ -552,6 +564,14 @@ dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
 #reportDlg{width:min(760px,94vw)}
 .ai-check{display:flex;align-items:center;gap:7px;font-size:12px;margin:8px 0 4px}
 .ai-check input{width:auto;flex:none}
+/* MCP 实时跟随的独立区块：跟上面的 API 表单隔开，别再像长表单末尾的杂项 */
+.ai-follow-box{
+  margin:12px 0 2px;padding:9px 11px;
+  border:1px solid var(--line);border-radius:var(--radius);
+  background:var(--bg);
+}
+.ai-follow-box .ai-check{margin:0}
+.ai-follow-note{font-size:11.5px;margin-top:5px;line-height:1.6}
 .ai-empty{
   font-size:12px;color:var(--muted);background:var(--bg);
   border:1px dashed var(--line);border-radius:var(--radius);
@@ -604,6 +624,20 @@ dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
 #statusbar #sbApi{color:var(--accent)}
 /* Token 用量（对应桌面端 TokenUsageTextBlock）：窄屏下允许收缩省略，别把状态栏挤爆 */
 #statusbar #sbTokens{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* MCP 跟随开关（常驻状态栏）：开着=accent 实色，关闭=置灰。
+   状态必须一眼可辨——关掉后 agent 的一切都不进界面，是最容易"以为坏了"的时候。 */
+.sb-toggle{
+  font:inherit;font-size:12px;cursor:pointer;flex:none;
+  padding:2px 9px;border-radius:11px;
+  border:1px solid var(--accent);color:var(--accent);background:transparent;
+  transition:background .15s,color .15s,border-color .15s;
+}
+.sb-toggle:hover{background:var(--accent);color:var(--panel)}
+.sb-toggle[aria-pressed="false"]{border-color:var(--line);color:var(--muted)}
+.sb-toggle[aria-pressed="false"]:hover{background:var(--bg);color:var(--ink)}
+.sb-toggle[aria-pressed="false"]::before{content:"✕ ";}
+.sb-toggle[aria-pressed="true"]::before{content:"● ";}
 
 /* ---------- 「更多」对话框 / 打开项目对话框 ---------- */
 .more-grid{display:grid;grid-template-columns:repeat(2,minmax(150px,1fr));gap:8px}

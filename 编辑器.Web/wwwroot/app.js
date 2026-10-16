@@ -987,8 +987,8 @@ async function openAiDlg() {
   if (profs.active || (profs.profiles || []).length) loadProfileForm(profs);
   else fillFromProvider(sel.value, true);
 
-  const mcpBox = $('#mcpLiveSync');
-  if (mcpBox) mcpBox.checked = mcpFollow;
+  // AI 设置重建时把开关状态带回去（跟状态栏同一份）
+  syncMcpFollowUi();
 
   $('#testResult').textContent = '';
   $('#aiDlg').showModal();
@@ -1979,26 +1979,50 @@ function mcpBadgeShow(text, busy, autoHide) {
   }, 4000);
 }
 
+// 把当前开关状态同步到**两处**入口（状态栏按钮 + AI 设置里的 checkbox）。
+// 两处读写的是同一个 settings.json 键，必须同步，否则会出现"状态栏说开着、
+// AI 设置里显示关着"这种自相矛盾。
+function syncMcpFollowUi() {
+  const box = $('#mcpLiveSync');
+  if (box) box.checked = mcpFollow;
+  const btn = $('#sbMcpFollow');
+  if (btn) {
+    btn.setAttribute('aria-pressed', mcpFollow ? 'true' : 'false');
+    btn.textContent = mcpFollow ? 'MCP 跟随' : 'MCP 跟随已关';
+  }
+}
+
 async function loadMcpFollow() {
   try {
     const r = await api('/api/settings/mcp-live-sync');
     mcpFollow = r.enabled !== false;
   } catch { mcpFollow = true; }
-  const box = $('#mcpLiveSync');
-  if (box) box.checked = mcpFollow;
+  syncMcpFollowUi();
 }
 
-$('#mcpLiveSync').onchange = async () => {
-  const want = $('#mcpLiveSync').checked;
+// 两处入口共用一个 setter：服务端存 → 更新内存 → 同步两处 UI。
+// 存失败时回滚到原状态，**不弹 alert**——状态栏随手一点就弹窗太吵，
+// 记一行日志即可。
+async function setMcpFollow(want) {
+  if (want === mcpFollow) { syncMcpFollowUi(); return; }
+  const prev = mcpFollow;
+  mcpFollow = want;
+  syncMcpFollowUi();
   try {
     await post('/api/settings/mcp-live-sync', { enabled: want });
-    mcpFollow = want;
     log(want ? '已开启 MCP 实时跟随' : '已关闭 MCP 实时跟随：MCP 的改动不再自动刷新界面');
   } catch (e) {
-    alert(errMsg(e));
-    $('#mcpLiveSync').checked = mcpFollow;   // 没存住就别让界面显示成开着的
+    mcpFollow = prev;
+    syncMcpFollowUi();
+    log('切换 MCP 跟随失败：' + errMsg(e), true);
   }
-};
+}
+
+// 状态栏按钮：点一下就切。这是主要入口——原来唯一的 checkbox 在 AI 设置
+// 对话框最底部，手机上落在折叠线以下，等于没有入口。
+$('#sbMcpFollow').onclick = () => setMcpFollow(!mcpFollow);
+
+$('#mcpLiveSync').onchange = () => setMcpFollow($('#mcpLiveSync').checked);
 
 function connect() {
   if (typeof signalR === 'undefined') return;

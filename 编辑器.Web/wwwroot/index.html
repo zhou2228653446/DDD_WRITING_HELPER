@@ -6,7 +6,7 @@
 <title>写作 · 网页版</title>
 <!-- 版本戳：手机浏览器（尤其微信/Safari）会强缓存静态文件，改了 css/js 它
      照样拿旧的，表现为「修好了他那边还是老样子」。改前端就递增这个号。 -->
-<link rel="stylesheet" href="/style.css?v=20261016a">
+<link rel="stylesheet" href="/style.css?v=20261016b">
 </head>
 <body>
 
@@ -310,9 +310,15 @@
   <span class="grow"></span>
   <span id="sbSave" class="muted"></span>
   <span id="sbApi" class="muted" title="当前启用的 AI 配置方案"></span>
+  <!-- ★ MCP 实时跟随：原来只有 AI 设置对话框最底部一个 checkbox（在长表单末尾，
+       手机上直接落在折叠线以下，实测 390×560 视口 top=519 > 可视 420），
+       等于藏起来了。而这个开关很关键——关掉之后 agent 的改动完全不进界面，
+       界面上却毫无痕迹。现常驻状态栏，一眼看到状态、点一下就切。 -->
+  <button type="button" id="sbMcpFollow" class="sb-toggle"
+          title="agent 通过 MCP 改动这本书时，界面是否实时显示并跟随（自动切章 / 同步设定）">MCP 跟随</button>
   <!-- 前端版本标记：改了 css/js 就递增。手机浏览器爱缓存旧页面，
        有它就能一眼分辨「用户看到的是不是改完的那版」。 -->
-  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v20</span>
+  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v21</span>
 </footer>
 
 <!-- AI 设置对话框 -->
@@ -357,11 +363,19 @@
       <span id="modelStatus" class="muted"></span>
     </div>
 
-    <!-- 与桌面端 AI 设置里的 McpLiveSyncCheckBox 同一个开关、同一份 settings.json -->
-    <label class="ai-check">
-      <input type="checkbox" id="mcpLiveSync">
-      通过 MCP 操作时，在界面实时显示并跟随（自动切章 / 同步设定）
-    </label>
+    <!-- MCP 实时跟随：与桌面端 AI 设置里的 McpLiveSyncCheckBox 同一个开关、
+         同一份 settings.json（状态栏也有一个，两处联动）。
+         加了分隔与标题——它夹在一长串 API 表单末尾，不像杂项而像个被忘了的东西。
+         状态栏那个是主要入口，这里保留是因为它属于"设置"，两边都能改。 -->
+    <div class="ai-follow-box">
+      <label class="ai-check">
+        <input type="checkbox" id="mcpLiveSync">
+        通过 MCP 操作时，在界面实时显示并跟随（自动切章 / 同步设定）
+      </label>
+      <div class="muted ai-follow-note">
+        关掉后 agent 的改动不再自动显示，状态栏也会显示「MCP 跟随已关」。
+      </div>
+    </div>
 
     <div class="dlg-btns">
       <button type="button" id="profDelete" class="danger">删除方案</button>
@@ -783,7 +797,7 @@
 
 <script src="/vendor/signalr.min.js"></script>
 <script src="/appearance.js"></script>
-<script src="/fx.js?v=20261016a"></script>
-<script src="/app.js?v=20261016a"></script>
+<script src="/fx.js?v=20261016b"></script>
+<script src="/app.js?v=20261016b"></script>
 </body>
 </html>

@@ -550,8 +550,17 @@ document.getElementById('typoFontPreset').addEventListener('change', e => {
   else document.getElementById('typoFontStack').focus();   // 选「自定义」→ 光标进输入框
 });
 
+// 字体栈输入框：打字过程中**不要**逐字符应用——写到一半的值（比如引号还没
+// 闭合的 `"Kaiti SC`）会让 font-family 变成无效声明，编辑区字体在打字期间
+// 一闪一闪的。停顿 250ms 或失焦时再应用。
+let typoStackTimer = null;
 document.getElementById('typoFontStack').addEventListener('input', e => {
   typoDraft.fontFamily = e.target.value;
+  clearTimeout(typoStackTimer);
+  typoStackTimer = setTimeout(previewTypo, 250);
+});
+document.getElementById('typoFontStack').addEventListener('blur', () => {
+  clearTimeout(typoStackTimer);
   previewTypo();
 });
 

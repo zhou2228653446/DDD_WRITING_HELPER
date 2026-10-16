@@ -517,11 +517,29 @@ dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
 .ap-typo-row .ap-slider span{flex:none;width:38px;text-align:right;font-variant-numeric:tabular-nums}
 /* 预览块：跟编辑区吃同一组排版变量，改什么立刻在这里看出来。
    用 --editor-* 而不是另起一套，保证预览与真实写作区不会走偏。 */
+/* 预览块：跟编辑区**吃同一组变量**——这正是它存在的意义，漏掉字体属性
+   就成了"改字体预览不动"（第一版就是这么错的：只给了背景色）。
+   ⚠ 四个 var() 的 fallback 必须与 #editor 那条逐字一致，否则默认状态下
+     预览和真实写作区会长得不一样，反而误导。 */
 .ap-typo-preview{
+  position:relative;
+  font-family:var(--editor-font,"Songti SC","SimSun",serif);
+  font-size:var(--editor-font-size,16px);
+  line-height:var(--editor-line-height,1.9);
+  letter-spacing:var(--editor-letter-spacing,.02em);
   border:1px solid var(--line);border-radius:var(--radius);
   background:var(--editor-bg,#fff);color:var(--ink);
   padding:10px 12px;margin:2px 0 8px;
-  max-height:96px;overflow:hidden;
+  /* 不给 max-height：字号调到 30 / 行距 3 时会被裁掉半行，看着像"预览坏了"。
+     对话框本身能滚动，撑高就撑高。 */
+}
+/* 角标：让它一眼被认出是"预览"，而不是一个普通的输入框 */
+.ap-typo-preview::after{
+  content:"预览";
+  position:absolute;top:6px;right:9px;
+  font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  font-size:10px;line-height:1;letter-spacing:0;
+  color:var(--muted);opacity:.75;
 }
 .ap-typo-foot{display:flex;align-items:center;gap:10px;margin-top:2px}
 .ap-bg{display:flex;align-items:center;gap:10px;margin:6px 0}

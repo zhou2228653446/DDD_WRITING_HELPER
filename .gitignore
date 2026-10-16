@@ -397,3 +397,5 @@ pdf_pages/
 
 # 一键发布产物（deploy.bat 输出）
 dist/
+# 生成素材候选（未定稿的图像生成产物，不入库）
+docs/preview/pet/

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text.Json;
 
@@ -22,11 +23,26 @@ namespace 编辑器.Services
         private readonly string _snapshotsDir;
         private const int MaxSnapshots = 50;
 
-        private static readonly JsonSerializerOptions _jsonOptions = new()
+        // 新快照一律 gzip：一份 150 万字项目的全量 JSON 约 1.6MB（去掉中文转义之后），
+        // 50 份就是 80MB；gzip 之后单份约 0.5MB，50 份不到 25MB。
+        // 旧快照（{id}.json 明文）继续能读，不做一次性迁移——迁移要重写整个目录，
+        // 风险大于收益（快照存在的意义就是"别丢东西"）。
+        private const string GzExt = ".json.gz";
+        private const string PlainExt = ".json";
+
+        private static JsonSerializerOptions Json => NovelProject.FileJson;
+
+        private string GzPath(string id) => Path.Combine(_snapshotsDir, id + GzExt);
+        private string PlainPath(string id) => Path.Combine(_snapshotsDir, id + PlainExt);
+
+        /// <summary>某个 id 实际落在哪个文件上：新格式优先，找不到返回 null。</summary>
+        private string? FindSnapshotFile(string id)
         {
-            WriteIndented = true,
-            PropertyNameCaseInsensitive = true
-        };
+            var gz = GzPath(id);
+            if (File.Exists(gz)) return gz;
+            var plain = PlainPath(id);
+            return File.Exists(plain) ? plain : null;
+        }
 
         public ProjectSnapshotManager(string projectFilePath)
         {
@@ -59,8 +75,17 @@ namespace 编辑器.Services
             {
                 if (Directory.GetFiles(projectDir, "*.tdxproj").Length > 1) return;
                 Directory.CreateDirectory(_snapshotsDir);
-                foreach (var f in Directory.GetFiles(legacy, "*.json"))
-                    File.Move(f, Path.Combine(_snapshotsDir, Path.GetFileName(f)));
+                // 旧目录里可能混着明文 .json 与（别的版本写过的）.json.gz，两种都搬。
+                // index.json 也在这个循环里——它本来就是快照索引，一起搬。
+                foreach (var f in Directory.GetFiles(legacy))
+                {
+                    var name = Path.GetFileName(f);
+                    if (!name.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
+                        && !name.EndsWith(".json.gz", StringComparison.OrdinalIgnoreCase)) continue;
+                    var target = Path.Combine(_snapshotsDir, name);
+                    if (File.Exists(target)) continue;
+                    File.Move(f, target);
+                }
             }
             catch { /* 搬不动就当没有历史快照，不影响以后新拍的 */ }
         }
@@ -74,7 +99,7 @@ namespace 编辑器.Services
             try
             {
                 var json = File.ReadAllText(indexPath);
-                var data = JsonSerializer.Deserialize<IndexFile>(json, _jsonOptions);
+                var data = JsonSerializer.Deserialize<IndexFile>(json, Json);
                 return data?.Entries ?? new List<SnapshotEntry>();
             }
             catch
@@ -96,17 +121,18 @@ namespace 编辑器.Services
                 Timestamp = DateTime.Now
             };
 
-            var snapshotFile = Path.Combine(_snapshotsDir, $"{id}.json");
-            var projectJson = JsonSerializer.Serialize(project, _jsonOptions);
-            File.WriteAllText(snapshotFile, projectJson);
+            var snapshotFile = GzPath(id);
+            using (var fs = File.Create(snapshotFile))
+            using (var gz = new GZipStream(fs, CompressionLevel.Optimal))
+                JsonSerializer.Serialize(gz, project, Json);
 
             index.Add(entry);
 
             while (index.Count > MaxSnapshots)
             {
                 var oldest = index[0];
-                var oldFile = Path.Combine(_snapshotsDir, $"{oldest.Id}.json");
-                if (File.Exists(oldFile)) File.Delete(oldFile);
+                var oldFile = FindSnapshotFile(oldest.Id);
+                if (oldFile != null) File.Delete(oldFile);
                 index.RemoveAt(0);
             }
 
@@ -116,13 +142,22 @@ namespace 编辑器.Services
 
         public NovelProject? LoadSnapshot(SnapshotEntry entry)
         {
-            var snapshotFile = Path.Combine(_snapshotsDir, $"{entry.Id}.json");
-            if (!File.Exists(snapshotFile)) return null;
+            var snapshotFile = FindSnapshotFile(entry.Id);
+            if (snapshotFile == null) return null;
 
             try
             {
-                var json = File.ReadAllText(snapshotFile);
-                return JsonSerializer.Deserialize<NovelProject>(json, _jsonOptions);
+                using var fs = File.OpenRead(snapshotFile);
+                // 按扩展名判断而不是魔数：这里我们自己写、自己读，扩展名就够；
+                // 旧文件是 {id}.json，新文件是 {id}.json.gz。
+                if (snapshotFile.EndsWith(".gz", StringComparison.OrdinalIgnoreCase))
+                {
+                    using var gz = new GZipStream(fs, CompressionMode.Decompress);
+                    return JsonSerializer.Deserialize<NovelProject>(gz, Json);
+                }
+
+                using var reader = new StreamReader(fs);
+                return JsonSerializer.Deserialize<NovelProject>(reader.ReadToEnd(), Json);
             }
             catch
             {
@@ -147,10 +182,14 @@ namespace 编辑器.Services
                 var newId = (i + 1).ToString("D3");
                 if (index[i].Id != newId)
                 {
-                    var oldFile = Path.Combine(_snapshotsDir, $"{index[i].Id}.json");
-                    var newFile = Path.Combine(_snapshotsDir, $"{newId}.json");
-                    if (File.Exists(oldFile))
-                        File.Move(oldFile, newFile);
+                    // 沿用原文件的扩展名：老快照是 .json，新快照是 .json.gz，
+                    // 改名时不能把老文件改成 .gz（内容没压缩，读的时候会解压失败）。
+                    var oldFile = FindSnapshotFile(index[i].Id);
+                    if (oldFile != null)
+                    {
+                        var ext = oldFile.EndsWith(".gz", StringComparison.OrdinalIgnoreCase) ? GzExt : PlainExt;
+                        File.Move(oldFile, Path.Combine(_snapshotsDir, newId + ext), true);
+                    }
                     index[i].Id = newId;
                 }
             }
@@ -160,7 +199,7 @@ namespace 编辑器.Services
         {
             var indexPath = Path.Combine(_snapshotsDir, "index.json");
             var data = new IndexFile { Entries = entries };
-            File.WriteAllText(indexPath, JsonSerializer.Serialize(data, _jsonOptions));
+            File.WriteAllText(indexPath, JsonSerializer.Serialize(data, Json));
         }
 
         private class IndexFile

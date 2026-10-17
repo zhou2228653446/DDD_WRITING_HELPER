@@ -210,25 +210,39 @@ internal static class SelfTest
             //   平铺会让 A 书的快照出现在 B 书的「恢复」列表里）。这里递归找，既不去猜
             //   具体层级，也能逮到「快照写到别处去了」这种真问题。
             var snapRoot = Path.Combine(Path.GetDirectoryName(projPath)!, ".snapshots");
+            // 快照有两种落盘形式：老的 {id}.json 明文，新的 {id}.json.gz（gzip）。
+            // 用 *.json* 一次覆盖，index.json 等索引文件排除在外。
             var snapFiles = Directory.Exists(snapRoot)
-                ? Directory.GetFiles(snapRoot, "*.json", SearchOption.AllDirectories)
-                           .Where(f => !string.Equals(Path.GetFileName(f), "index.json", StringComparison.OrdinalIgnoreCase))
+                ? Directory.GetFiles(snapRoot, "*.json*", SearchOption.AllDirectories)
+                           .Where(f => !Path.GetFileName(f).StartsWith("index.json", StringComparison.OrdinalIgnoreCase))
                            .ToList()
                 : new List<string>();
             Assert("改稿前存了快照（agent 改坏能回滚）", snapFiles.Count > 0,
                 Directory.Exists(snapRoot)
                     ? string.Join(",", snapFiles.Select(f => Path.GetRelativePath(snapRoot, f)))
                     : "(.snapshots 目录不存在)");
-            // ⚠ 不能直接搜文件文本：System.Text.Json 默认把非 ASCII 转成 \uXXXX，
-            // 快照里的「霜降」实际写作 \u971C\u964D，文本 Contains 必然落空。要反序列化再看。
+            // ⚠ 不能直接搜文件文本：新快照是 gzip，根本读不出明文；老快照虽然明文，
+            //   但也可能带转义。一律解压 + 反序列化之后再比对内容。
             Assert("快照记的是改写之前的内容（不是改完的状态）",
                 snapFiles.Count > 0 && snapFiles.Any(f =>
                 {
                     try
                     {
-                        var snap = JsonSerializer.Deserialize<NovelProject>(
-                            File.ReadAllText(f),
-                            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        // 反序列化不需要 Encoder（转义与否都认），这里只要够读回对象即可。
+                        var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                        using var fs = File.OpenRead(f);
+                        NovelProject? snap;
+                        if (f.EndsWith(".gz", StringComparison.OrdinalIgnoreCase))
+                        {
+                            using var gz = new System.IO.Compression.GZipStream(
+                                fs, System.IO.Compression.CompressionMode.Decompress);
+                            snap = JsonSerializer.Deserialize<NovelProject>(gz, opts);
+                        }
+                        else
+                        {
+                            using var reader = new StreamReader(fs);
+                            snap = JsonSerializer.Deserialize<NovelProject>(reader.ReadToEnd(), opts);
+                        }
                         return snap?.Chapters.Any(c => c.Content.Contains("霜降")) == true;
                     }
                     catch { return false; }

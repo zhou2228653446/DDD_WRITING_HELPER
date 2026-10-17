@@ -604,12 +604,35 @@ def publish_target_locked():
         return True
 
 
+def kill_elevated():
+    """同名进程跑在别的账户下时（典型：install --onstart 注册的 SYSTEM 开机任务
+    在登录前就把服务拉起来了），普通令牌的 taskkill 只会回 Access is denied，
+    重试多少次都一样（2026-10-17 实际卡在这里，用户跑到最后只剩一句
+    「还手动 taskkill 再重试」）。这里弹一次 UAC，只做 taskkill 这一件事，
+    点「是」即可，不必自己去找管理员终端。"""
+    say(INFO, f"{APP_EXE} 不在当前会话里（多半是开机任务以 SYSTEM 启动的），需要管理员权限。")
+    say(INFO, "正在请求管理员权限，请在弹窗里点「是」。")
+    try:
+        # nShowCmd=0 隐藏 taskkill 自己的控制台窗口；返回 >32 才算真拉起来了
+        rc = ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", "taskkill.exe", f"/IM {APP_EXE} /F", None, 0)
+    except Exception as e:              # 没有 shell32 / 被安全软件拦
+        say(ERR, f"提权失败：{e}")
+        return False
+    if rc <= 32:
+        say(ERR, "提权被取消或失败。手动处理：以管理员身份打开终端，执行 "
+                 f"taskkill /IM {APP_EXE} /F")
+        return False
+    return True
+
+
 def stop_service():
     """停服务。⚠ 只杀「端口上的进程」不够稳：不占端口的残留实例同样锁着
     dll，publish 会卡在「文件被另一个进程使用」上重试十次然后失败
     （2026-10-12 实际踩过一次，用户只能手动 taskkill 才发得出去）。
-    所以这里三重保险：端口 owner + 同名全杀 + 杀后等待并验证（端口空、
-    进程名消失、主 dll 可写）。返回 False = 没停干净，调用方别硬发。"""
+    所以这里四重保险：端口 owner + 同名全杀 + 杀后等待并验证（端口空、
+    进程名消失、主 dll 可写）+ 权限不够时自动提权再杀。
+    返回 False = 没停干净，调用方别硬发。"""
     pids = sorted(pid_on_port())
     if pids:
         for pid in pids:
@@ -627,6 +650,14 @@ def stop_service():
             break
         time.sleep(0.5)
     ok = not pid_on_port() and not name_alive()
+    # 还有活口且自己不是管理员：八成是 SYSTEM 实例，普通令牌杀不动，提权再来一次
+    if not ok and not is_admin() and name_alive():
+        if kill_elevated():
+            for _ in range(20):
+                if not pid_on_port() and not name_alive():
+                    break
+                time.sleep(0.5)
+            ok = not pid_on_port() and not name_alive()
     if ok and publish_target_locked():
         # 进程没了但文件还打不开：多半是杀进程后的短窗口，再等一小会儿
         for _ in range(6):
@@ -635,7 +666,8 @@ def stop_service():
                 break
         ok = not publish_target_locked()
     if not ok:
-        say(ERR, f"还有进程/文件锁没释放，发布大概率会失败——先手动 taskkill /IM {APP_EXE} /F 再重试。")
+        say(ERR, f"还有进程/文件锁没释放，发布大概率会失败——以管理员身份打开终端执行 "
+                 f"taskkill /IM {APP_EXE} /F 后重试。")
     return ok
 
 

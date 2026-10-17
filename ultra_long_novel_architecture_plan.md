@@ -71,6 +71,9 @@ AiTools.cs:136         调用点，所有文体共用
 
 ```csharp
 // 编辑器/Models/NovelProject.cs
+// ★ 必须 WhenWritingNull：默认的 JSON 序列化**不忽略 null**，不加这条，
+//   所有文体的文件都会平白多出 "UltraLong": null。PaperBaselineTests 会抓住它。
+[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
 public UltraLongConfig? UltraLong { get; set; }   // null = 从未启用
 
 public sealed class UltraLongConfig
@@ -187,12 +190,31 @@ public IEnumerable<Chapter> ChaptersOfVolume(string volumeId)
 ### 5.2 角色分级
 
 ```csharp
-public enum CharacterScope { Core, Arc, Guest }
-public enum CharacterStatus { Active, Inactive, Retired, Deceased }
+// ★ 默认值必须放在 0 上：这样 [JsonIgnore(WhenWritingDefault)] 才能把它省掉。
+//   写成 { Core, Arc, Guest } 会让 Arc = 1——"默认值"反而被写进每个文件。
+public enum CharacterScope { Arc = 0, Core = 1, Guest = 2 }
+public enum CharacterStatus { Active = 0, Inactive = 1, Retired = 2, Deceased = 3 }
 
-// Character 追加
-public CharacterScope Scope { get; set; } = CharacterScope.Arc;
+// Character 追加（默认值同样要能被省略）
+[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+public CharacterScope Scope { get; set; } = CharacterScope.Arc;          // 默认 Arc，不是 Core
+[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
 public CharacterStatus Status { get; set; } = CharacterStatus.Active;
+[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+public string CurrentRealm { get; set; } = "";
+[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+public string CurrentSituation { get; set; } = "";
+[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+public string CurrentGoal { get; set; } = "";
+[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+public List<string> KeyItems { get; set; } = new();
+```
+
+⚠ `KeyItems` 用 `WhenWritingDefault` 对空 List **不生效**（空 List 不是 default，default 是 null）。
+要么把默认值改成 `null`，要么用一个自定义转换器判断 `Count == 0`。前者更简单：
+
+```csharp
+public List<string>? KeyItems { get; set; }   // null = 没有；读取处用 ?? 空集合
 ```
 
 - 默认 `Arc` 而不是 `Core`：v1 写"旧角色默认 Core"，那等于一个都没筛掉，改造白做；
@@ -444,7 +466,8 @@ public static NovelProject RestoreMerged(NovelProject snapshot, NovelProject cur
 | 存储往返 | 含中文/引号/反斜杠/emoji/`<script>` 的项目，序列化→反序列化后逐字段相等 |
 | 体积回归 | 构造 100 章项目，文件大小 < 原实现的一半（钉住 Encoder 不被改回去） |
 | 快照压缩 | 写入读回一致；老的 `.json` 快照仍可读 |
-| **多文体守护** | 论文项目（`Characters` 有内容、`UltraLong == null`）调用 `BuildCharacterContext(filter:true)`，输出与 `BuildEffectiveCharacterSettings()` **逐字节相等** |
+| **多文体守护（格式）** | `PaperBaselineTests`：论文项目的序列化结果与 `Fixtures/paper-project.baseline.json` **逐字节相等**——加字段忘了省略就挂（已实现） |
+| **多文体守护（行为）** | 论文项目调用 `BuildCharacterContext(filter:true)`，输出与 `BuildEffectiveCharacterSettings()` **逐字节相等** |
 | 卷边界 | 移动章节跨卷后章号仍 1..N 连续；删卷不删章 |
 | 状态注入位置 | `BuildDynamic` 的输出**不出现在** `BuildStable` 里（防止有人又把状态簿塞回 System） |
 | 恢复合并 | 旧快照恢复后 `Volumes` 仍在，章节归属不变 |

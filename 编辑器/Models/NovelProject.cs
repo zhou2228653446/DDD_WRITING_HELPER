@@ -45,6 +45,26 @@ namespace 编辑器
         public string PaperKeywords { get; set; } = "";   // 分号或逗号分隔
 
         /// <summary>
+        /// 超长篇增强结构（分卷 / 角色分级 / 主角状态面板）。
+        ///
+        /// ★ <c>null</c> = **未启用**，这是论文、公文、通用与普通小说项目的常态。
+        ///   所有依赖它的逻辑都必须先判空，判空为真时走原来的路径。
+        ///
+        /// ★ 必须 <c>WhenWritingNull</c>：System.Text.Json 默认**不忽略 null**，
+        ///   不加这条，所有项目的文件都会平白多出一行 `"UltraLong": null`。
+        ///   `PaperBaselineTests` 会逐字节比对，多这一个键就挂。
+        /// </summary>
+        [System.Text.Json.Serialization.JsonIgnore(
+            Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        public UltraLongConfig? UltraLong { get; set; }
+
+        /// <summary>
+        /// 启用长篇增强结构（幂等）。**绝不自动调用**——只能由界面勾选或 MCP
+        /// `ultra_config` 触发。自动给旧项目建卷会把论文项目也塞进一堆"第一卷"。
+        /// </summary>
+        public UltraLongConfig EnableUltraLong() => UltraLong ??= new UltraLongConfig();
+
+        /// <summary>
         /// 把章号重排成 1..n 连续（按 Chapters 列表的当前顺序）。
         ///
         /// ⚠ 必须按**列表顺序**编号，不能先按 ChapterNumber 排序：
@@ -94,7 +114,7 @@ namespace 编辑器
         ///   这里只写本地文件、Web 端以 application/json 返回，从不当 HTML 拼进页面，
         ///   没有 XSS 面。看到 Unsafe 想改回默认值之前，先读这段。
         /// </summary>
-        internal static readonly JsonSerializerOptions FileJson = new()
+        public static readonly JsonSerializerOptions FileJson = new()
         {
             WriteIndented = true,
             PropertyNameCaseInsensitive = true,

@@ -1,0 +1,77 @@
+{
+  "ProjectName": "论文基线",
+  "Author": "作者",
+  "Description": "",
+  "CreatedDate": "2026-01-01T00:00:00",
+  "ModifiedDate": "2026-01-01T00:00:00",
+  "FilePath": "D:\\fixture\\paper.tdxproj",
+  "WorldSetting": null,
+  "Characters": [
+    {
+      "CharacterId": "fixed-character-1",
+      "Name": "研究对象",
+      "Age": 0,
+      "Gender": "",
+      "Occupation": "",
+      "Appearance": "",
+      "Personality": "",
+      "Background": "",
+      "Role": "要素",
+      "Abilities": "属性",
+      "Relationships": "",
+      "Notes": ""
+    }
+  ],
+  "Chapters": [
+    {
+      "ChapterId": "fixed-chapter-1",
+      "Title": "引言",
+      "ChapterNumber": 1,
+      "Content": "正文一",
+      "Summary": "梗概一",
+      "WordCount": 3,
+      "CreatedDate": "2026-01-01T00:00:00",
+      "ModifiedDate": "2026-01-01T00:00:00",
+      "LastModified": "2026-01-01T00:00:00",
+      "CharacterIds": [],
+      "SceneSetting": ""
+    },
+    {
+      "ChapterId": "fixed-chapter-2",
+      "Title": "方法",
+      "ChapterNumber": 2,
+      "Content": "正文二",
+      "Summary": "",
+      "WordCount": 3,
+      "CreatedDate": "2026-01-01T00:00:00",
+      "ModifiedDate": "2026-01-01T00:00:00",
+      "LastModified": "2026-01-01T00:00:00",
+      "CharacterIds": [],
+      "SceneSetting": ""
+    }
+  ],
+  "FullOutline": "1 研究问题\n2 方法\n3 结论",
+  "ChapterOutline": "第二章 方法：样本与变量",
+  "CharacterSettings": "研究对象：某市 2020—2024 年制造业企业",
+  "BackgroundSettings": "制度理论",
+  "WritingStyle": "学术书面语，术语前后一致",
+  "NarrativeViewpoint": "第三人称客观",
+  "SettingsBook": {
+    "Title": "",
+    "Subtitle": "",
+    "Chapters": [
+      {
+        "ChapterId": "fixed-sb-1",
+        "SourceKey": "world",
+        "Title": "理论基础",
+        "Content": "内容",
+        "IncludeInExport": true,
+        "IsAiGenerated": false,
+        "ModifiedDate": "2026-01-01T00:00:00"
+      }
+    ]
+  },
+  "LiteratureLibrary": [],
+  "PaperAbstract": "摘要正文",
+  "PaperKeywords": "制造业;制度"
+}

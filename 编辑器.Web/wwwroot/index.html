@@ -6,7 +6,7 @@
 <title>写作 · 网页版</title>
 <!-- 版本戳：手机浏览器（尤其微信/Safari）会强缓存静态文件，改了 css/js 它
      照样拿旧的，表现为「修好了他那边还是老样子」。改前端就递增这个号。 -->
-<link rel="stylesheet" href="/style.css?v=20261017b">
+<link rel="stylesheet" href="/style.css?v=20261017c">
 </head>
 <body>
 
@@ -318,7 +318,7 @@
           title="agent 通过 MCP 改动这本书时，界面是否实时显示并跟随（自动切章 / 同步设定）">MCP 跟随</button>
   <!-- 前端版本标记：改了 css/js 就递增。手机浏览器爱缓存旧页面，
        有它就能一眼分辨「用户看到的是不是改完的那版」。 -->
-  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v25</span>
+  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v26</span>
 </footer>
 
 <!-- AI 设置对话框 -->
@@ -484,10 +484,16 @@
     <div class="help-p" style="margin-top:12px" id="accountBox">
       <b>账号</b>
       <div id="accountSelf" class="hidden">
-        <div class="muted" style="margin:4px 0">试用账号的密码（每 <span id="trialDays"></span> 天自动轮换，发给试用的人即可；个人码由试用者自己定四位数字）：</div>
+        <div class="muted" style="margin:4px 0">
+          试用账号的密码（每 <span id="trialRotateDays">—</span> 天自动轮换，<span id="trialDays">—</span> 天后到期；
+          发给试用的人即可，个人码由试用者自己定四位数字）：
+        </div>
         <div class="key-set">
           <input id="trialPwdView" type="text" readonly title="当前试用密码">
-          <button id="trialRotateBtn" class="mini-btn" type="button">立刻换一个</button>
+          <button id="trialRenewBtn" class="mini-btn" type="button"
+                  title="密码不变，只把有效期重新算满——已经发出去的密码继续有效">续期</button>
+          <button id="trialRotateBtn" class="mini-btn" type="button"
+                  title="换一个新密码，旧密码立刻失效">立刻换一个</button>
           <span id="trialRotateState" class="muted"></span>
         </div>
         <div class="key-set">
@@ -843,7 +849,7 @@
 
 <script src="/vendor/signalr.min.js"></script>
 <script src="/appearance.js"></script>
-<script src="/fx.js?v=20261017b"></script>
-<script src="/app.js?v=20261017b"></script>
+<script src="/fx.js?v=20261017c"></script>
+<script src="/app.js?v=20261017c"></script>
 </body>
 </html>

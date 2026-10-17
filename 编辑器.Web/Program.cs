@@ -230,7 +230,7 @@ app.MapGet("/api/auth/me", (HttpContext ctx, AccountStore accounts, AuthSessions
     {
         if (accounts.Initialized)
         {
-            var (pwd, next) = accounts.CurrentTrial();
+            var (pwd, next, days) = accounts.CurrentTrial();
             return Results.Ok(new
             {
                 subject,
@@ -238,6 +238,9 @@ app.MapGet("/api/auth/me", (HttpContext ctx, AccountStore accounts, AuthSessions
                 trialPassword = pwd,
                 trialNextRotate = next,
                 trialDaysLeft = Math.Max(0, (int)Math.Ceiling((next - DateTime.Now).TotalDays)),
+                // 周期也要给前端：界面上一句话是「每 N 天轮换，还有 M 天到期」，
+                // 只给剩余天数的话只能显示成"每 3 天轮换"（把剩余当周期，看不懂）
+                trialRotateDays = days,
             });
         }
         return Results.Ok(new { subject, isSelf = true, initialized = false });
@@ -287,8 +290,25 @@ app.MapPost("/api/accounts/trial-rotate", (HttpContext ctx, AccountStore account
     if ((ctx.Items["subject"] as string ?? (IsLoopback(ctx) ? "self" : "")) != "self")
         return Results.StatusCode(403);
     var pwd = accounts.RotateTrialNow();
-    var (p, next) = accounts.CurrentTrial();
-    return Results.Ok(new { trialPassword = p, trialNextRotate = next });
+    var (p, next, days) = accounts.CurrentTrial();
+    return Results.Ok(new { trialPassword = p, trialNextRotate = next, trialRotateDays = days });
+});
+
+// 续期：**密码不变**，只把有效期重新算满。
+// 与 trial-rotate 分开是因为语义完全不同——换密码之后得重新通知所有试用者，
+// 用户很多时候只是想"再保一段时间"，不该被迫换掉已经发出去的密码。
+app.MapPost("/api/accounts/trial-renew", (HttpContext ctx, AccountStore accounts) =>
+{
+    if ((ctx.Items["subject"] as string ?? (IsLoopback(ctx) ? "self" : "")) != "self")
+        return Results.StatusCode(403);
+    var (pwd, next, days) = accounts.RenewTrial();
+    return Results.Ok(new
+    {
+        trialPassword = pwd,
+        trialNextRotate = next,
+        trialDaysLeft = days,
+        trialRotateDays = days,
+    });
 });
 
 // 「复制 MCP 配置」用：非本机访问的 agent 必须先登录才有令牌（Bearer），

@@ -113,14 +113,33 @@ public sealed class AccountStore
     }
 
     /// <summary>当前试用密码（登录校验与自用查看共用；到期先轮换）。</summary>
-    public (string Password, DateTime NextRotate) CurrentTrial()
+    public (string Password, DateTime NextRotate, int RotateDays) CurrentTrial()
     {
         lock (_gate)
         {
             var f = Load() ?? throw new InvalidOperationException("账号系统未初始化");
             RotateTrialIfNeeded(f);
             var days = Math.Max(1, f.Trial!.RotateDays);
-            return (f.Trial.Password, f.Trial.RotatedAt.AddDays(days));
+            return (f.Trial.Password, f.Trial.RotatedAt.AddDays(days), days);
+        }
+    }
+
+    /// <summary>
+    /// **只续期、不换密码**：把 RotatedAt 重置成现在，有效期重新算满。
+    ///
+    /// 和 RotateTrialNow 的区别很重要：轮换会换掉密码（发给试用者的那个就作废了），
+    /// 续期只延长期限。用户把密码发出去之后想"再保 10 天"，需要的正是这个——
+    /// 不然只能换一个新的再重新通知一遍所有人。
+    /// </summary>
+    public (string Password, DateTime NextRotate, int RotateDays) RenewTrial()
+    {
+        lock (_gate)
+        {
+            var f = Load() ?? throw new InvalidOperationException("账号系统未初始化");
+            f.Trial!.RotatedAt = DateTime.Now;
+            Save(f);
+            var days = Math.Max(1, f.Trial.RotateDays);
+            return (f.Trial.Password, f.Trial.RotatedAt.AddDays(days), days);
         }
     }
 

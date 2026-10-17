@@ -2509,6 +2509,9 @@ async function loadAccountBox() {
   if (me.isSelf && me.trialPassword) {
     $('#trialPwdView').value = me.trialPassword;
     $('#trialDays').textContent = String(me.trialDaysLeft);
+    // 周期与剩余分开显示：以前这里只有剩余天数，却被塞进"每 N 天轮换"那句里，
+    // 剩 3 天时就写成"每 3 天自动轮换"——周期被读成了剩余。
+    if (me.trialRotateDays) $('#trialRotateDays').textContent = String(me.trialRotateDays);
   }
   if (!me.isSelf) $('#trialCodeView').textContent = me.code || '';
 }
@@ -2541,14 +2544,39 @@ $('#trialKickAll').onclick = async () => {
   } catch (e) { st.textContent = '失败：' + errMsg(e); }
 };
 
+// 轮换 / 续期共用：把服务端返回的试用信息刷回界面
+function applyTrialInfo(d) {
+  if (d.trialPassword) $('#trialPwdView').value = d.trialPassword;
+  if (d.trialDaysLeft !== undefined) $('#trialDays').textContent = String(d.trialDaysLeft);
+  if (d.trialRotateDays) $('#trialRotateDays').textContent = String(d.trialRotateDays);
+  const when = d.trialNextRotate
+    ? new Date(d.trialNextRotate).toLocaleString('zh-CN',
+        { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : '';
+  return when;
+}
+
+$('#trialRenewBtn').onclick = async () => {
+  const st = $('#trialRotateState');
+  if (!confirm('把试用密码的有效期重新算满？\n\n密码**不变**，已经发给试用者的那个继续能用。')) return;
+  try {
+    const d = await post('/api/accounts/trial-renew', {});
+    const when = applyTrialInfo(d);
+    st.textContent = when ? `已续期至 ${when}` : '已续期';
+    log('试用密码有效期已续期（密码未变）');
+    setTimeout(() => st.textContent = '', 4000);
+  } catch (e) { st.textContent = '失败：' + errMsg(e); }
+};
+
 $('#trialRotateBtn').onclick = async () => {
   const st = $('#trialRotateState');
+  if (!confirm('换一个新密码？\n\n旧密码会**立刻失效**，已经发出去的得重新通知。\n只想延长期限、不换密码的话点「续期」。')) return;
   try {
     const d = await post('/api/accounts/trial-rotate', {});
-    $('#trialPwdView').value = d.trialPassword;
-    st.textContent = '已换';
+    const when = applyTrialInfo(d);
+    st.textContent = when ? `已换，有效期到 ${when}` : '已换';
     log('试用密码已手动轮换，旧密码即刻失效');
-    setTimeout(() => st.textContent = '', 3000);
+    setTimeout(() => st.textContent = '', 4000);
   } catch (e) { st.textContent = '失败：' + errMsg(e); }
 };
 $('#selfPwdSave').onclick = async () => {

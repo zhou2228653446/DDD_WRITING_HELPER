@@ -22,6 +22,10 @@
     <ProjectReference Include="..\编辑器\编辑器.csproj" />
     <!-- MCP：章节管理（重排 / 删除 / 梗概）也在测试范围内 -->
     <ProjectReference Include="..\编辑器.Mcp\编辑器.Mcp.csproj" />
+    <!-- Web：账户系统（密码哈希 / 试用密码轮换与续期）是纯文件逻辑，可单测。
+         它是 Web SDK 工程，但引用它只是为了让测试能拿到 AccountStore，
+         不会执行 Program.cs 里的任何启动代码。 -->
+    <ProjectReference Include="..\编辑器.Web\编辑器.Web.csproj" />
   </ItemGroup>
 
   <ItemGroup>

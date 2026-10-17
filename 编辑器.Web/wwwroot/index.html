@@ -6,7 +6,7 @@
 <title>写作 · 网页版</title>
 <!-- 版本戳：手机浏览器（尤其微信/Safari）会强缓存静态文件，改了 css/js 它
      照样拿旧的，表现为「修好了他那边还是老样子」。改前端就递增这个号。 -->
-<link rel="stylesheet" href="/style.css?v=20261016d">
+<link rel="stylesheet" href="/style.css?v=20261017a">
 </head>
 <body>
 
@@ -318,7 +318,7 @@
           title="agent 通过 MCP 改动这本书时，界面是否实时显示并跟随（自动切章 / 同步设定）">MCP 跟随</button>
   <!-- 前端版本标记：改了 css/js 就递增。手机浏览器爱缓存旧页面，
        有它就能一眼分辨「用户看到的是不是改完的那版」。 -->
-  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v23</span>
+  <span class="ver" title="前端版本（改版后递增，用于确认浏览器拿的是新版）">v24</span>
 </footer>
 
 <!-- AI 设置对话框 -->
@@ -558,7 +558,8 @@
 <dialog id="moreDlg">
   <h3>更多功能</h3>
   <div class="more-grid">
-    <button id="appearanceBtn" title="配色 / 材质 / 材质强度 / 背景图">外观设置</button>
+    <button id="openBookMgrBtn" title="列出书库里所有的书：切换 / 删除（删除是移入回收站，可搬回）">作品管理</button>
+    <button id="appearanceBtn" title="配色 / 材质 / 材质强度 / 背景图 / 正文排版">外观设置</button>
     <button id="aiSetBtn" title="AI 服务商 / API Key">AI 设置</button>
     <button id="promptBtn" title="提示词方案与覆写">提示词</button>
     <button id="skillBtn" title="写作技能管理">技能</button>
@@ -575,6 +576,9 @@
 <dialog id="openBookDlg">
   <h3>打开项目</h3>
   <div id="openBookDir" class="muted"></div>
+  <!-- 这行说明是补的：删除按钮上线后第一次反馈就是"没找到哪里能删"。
+       列表里那一行操作不说清楚，用户只会把整行当成"点一下打开"的按钮 -->
+  <div class="book-hint">点一本书即可切换；行尾的<b>删除</b>把它移入回收站（可搬回，不是硬删）。</div>
   <div id="openBookList" class="book-list"></div>
   <div class="dlg-btns">
     <span class="grow"></span>
@@ -839,7 +843,7 @@
 
 <script src="/vendor/signalr.min.js"></script>
 <script src="/appearance.js"></script>
-<script src="/fx.js?v=20261016d"></script>
-<script src="/app.js?v=20261016d"></script>
+<script src="/fx.js?v=20261017a"></script>
+<script src="/app.js?v=20261017a"></script>
 </body>
 </html>

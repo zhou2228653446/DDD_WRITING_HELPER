@@ -699,13 +699,27 @@ dialog,.cards .card,.lit-item,#snapList .snap-item,.snap-item{
 .book-item.current{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft,transparent)}
 .book-item .bname{font-weight:600}
 .book-item .bmeta{margin-left:auto;font-size:11.5px;color:var(--muted);white-space:nowrap}
-/* 删除按钮：默认不抢眼（书稿列表里最危险的操作不该最显眼）， hover 才亮红 */
+/* 删除按钮：用文字而不是图标。
+   第一版是 13px 灰色 🗑 + 只在 hover 变红 —— 结果用户完全找不到入口。
+   风险靠调用后的 confirm 挡（那里把书名、章节数、字数都列出来了），
+   不是靠把按钮藏起来挡。所以：有边框、有文字，一眼看得出是可点的操作。 */
 .book-del{
-  flex:0 0 auto;border:none;background:transparent;cursor:pointer;
-  font-size:13px;line-height:1;padding:3px 7px;border-radius:6px;color:var(--muted);
+  flex:0 0 auto;cursor:pointer;
+  font:inherit;font-size:11.5px;line-height:1;
+  padding:4px 9px;border-radius:6px;
+  border:1px solid var(--line);background:var(--bg);
+  color:var(--muted);
+  transition:color .15s,border-color .15s,background .15s;
 }
-.book-del:hover:not(:disabled){background:color-mix(in srgb,var(--danger) 14%,transparent);color:var(--danger)}
-.book-del:disabled{opacity:.3;cursor:not-allowed}
+.book-del:hover:not(:disabled){
+  border-color:var(--danger);color:var(--danger);
+  background:color-mix(in srgb,var(--danger) 10%,transparent);
+}
+/* 正打开着的那本：禁用但要看得清（原来 .3 太淡，等于消失了），
+   配合 title 说明"先切到别的书" */
+.book-del:disabled{opacity:.45;cursor:not-allowed}
+.book-hint{font-size:11.5px;color:var(--muted);margin:6px 0 0;line-height:1.6}
+.book-hint b{color:var(--ink);font-weight:600}
 .book-list .empty{padding:14px;text-align:center;color:var(--muted)}
 
 /* 前端版本标记（放在状态栏右端，用来确认浏览器拿到的是不是新版） */

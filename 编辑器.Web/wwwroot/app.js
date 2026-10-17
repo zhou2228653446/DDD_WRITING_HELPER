@@ -2721,26 +2721,43 @@ async function loadOpenBookList() {
       // 删除按钮。★ 删书不可逆，所以：confirm 里把规模说清楚 + 后端还会
       //   拒绝删"正打开着"的那本（删了下次保存又把书写回来）。
       //   不是硬删——整本书移入书库旁的 .trash/，可手动搬回。
+      //   ⚠ 用「删除」两个字而不是 🗑 图标：图标 + 13px + 灰色 + 只在 hover
+      //     时变红，三样叠在一起的结果是**用户压根找不到这个入口**
+      //     （上线后第一次反馈就是"还是没看到哪里能删"）。emoji 还会随
+      //     系统字体渲染得各不相同。风险靠 confirm 挡，不靠藏按钮挡。
       const del = document.createElement('button');
       del.className = 'book-del';
-      del.textContent = '🗑';
+      del.textContent = '删除';
       const opening = b.fileName === cur;
-      del.title = opening
-        ? '正打开的书不能删——先切换到别的书'
-        : `删除《${b.name}》（移入回收站，可搬回）`;
-      del.disabled = opening;
+      // 正打开着的那本：**能删**，只是要先切走（后端拒绝删当前书，否则下次
+      // 保存又把书写回来）。所以先 openBook 另一本再删——用户不需要懂这套。
+      // 只有"书库里唯一的一本、又正打开着"是真的不能删：删了就没书可写了。
+      const others = d.books.filter(x => x.fileName !== b.fileName);
+      const locked = opening && others.length === 0;
+      del.title = locked
+        ? '这是书库里唯一的一本书，也是当前打开着的——先「新建」一本再来删它'
+        : (opening ? `删除《${b.name}》（当前打开着，会先切到《${others[0].name}》再删）`
+                   : `删除《${b.name}》（移入回收站，可搬回）`);
+      del.disabled = locked;
       del.onclick = async ev => {
         ev.stopPropagation();   // 别触发父级的"打开这本书"
         if (!confirm(`确定删除《${b.name}》？\n\n` +
             `${b.chapters} 章 · ${b.words} 字\n\n` +
+            (opening ? `它现在正打开着，会先切换到《${others[0].name}》再删除。\n` : '') +
             '整本书（含备份、对话记忆、快照）会移入书库旁的回收站，需要时可手动搬回；\n' +
             '同名导出文件（.txt/.docx）不会删。')) return;
         try {
+          // ⚠ 顺序不能反：先切走（这一步会把当前书存盘），再删。
+          //   反过来会先删掉文件、再由离开当前书的保存流程把它写回来。
+          if (opening) await openBook(others[0].fileName);
           await post('/api/books/delete', { name: b.fileName });
           await loadOpenBookList();   // 重刷：这本书消失即证明删掉了
+          log(`已删除《${b.name}》（移入回收站）`);
         } catch (e) { alert(errMsg(e)); }
       };
-      it.insertBefore(del, it.querySelector('.bmeta'));
+      // 放到最右：夹在书名与元数据之间会被当成列表项的装饰，
+      // 排在行尾才像"这一行的操作按钮"
+      it.appendChild(del);
 
       list.appendChild(it);
     });
@@ -2749,11 +2766,21 @@ async function loadOpenBookList() {
   }
 }
 
-$('#openBookBtn').onclick = async () => {
+// 打开「打开项目」对话框。两处入口共用：顶栏的「打开」（切书场景，快捷）
+// 和「更多 → 作品管理」（用户找管理类功能习惯去"更多"里翻）。
+// ★ 加第二个入口是因为删除功能上线后用户反馈"没找到哪里能删"——功能在，
+//   但唯一的入口是个从没被注意过的顶栏按钮。
+// ⚠ 函数名不能叫 openBookDlg——那正是 dialog 元素的 id，会撞上 HTML 的
+//   named access（window.openBookDlg 已存在）。
+async function showBookManager() {
   $('#openBookList').innerHTML = '<div class="empty">载入中…</div>';
+  $('#moreDlg')?.close();              // 从「更多」进来时先收起那一层
   $('#openBookDlg').showModal();
   await loadOpenBookList();
-};
+}
+
+$('#openBookBtn').onclick = showBookManager;
+$('#openBookMgrBtn').onclick = showBookManager;
 
 $('#saveBtn').onclick = () => flushSave();
 $('#findBtn').onclick = () => findOpen();

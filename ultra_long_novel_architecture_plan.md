@@ -546,3 +546,33 @@ MCP 自检 76 → 约 88 项。
 | `编辑器/Services/CharacterAppearanceService.cs:34` | 已有出场统计 | 直接复用作自动回填与"最近出现"判断 |
 | `编辑器.Mcp/McpServer.cs:617` | `ai_write` 的 inputSchema 没有 `preset` 参数 | 加可选参数 |
 | `编辑器.Web/Program.cs:1734` | `/api/prompts/active` 存在 | 不动，新方案自动可切 |
+
+---
+
+## 附录 D：实施进度（2026-10-17）
+
+| 阶段 | 状态 | 落点 |
+|---|---|---|
+| 0 存储瘦身 | ✅ | `NovelProject.FileJson`（Encoder）+ 快照 gzip；实测 106KB→57KB→24.5KB |
+| 1 能力容器 | ✅ | `UltraLongConfig?` + `EnableUltraLong()`；论文项目文件逐字节不变 |
+| 2 数据模型 | ✅ | `Chapter.VolumeId`、`Character.Scope/Status/Current*/KeyItems`、`ChaptersOfVolume` 等查询 |
+| 3 上下文引擎 | ✅ | `Services/ContextAssembler.cs`：Core 进 system、状态/卷/本章角色/梗概进 user |
+| 4 预设 | ✅ | `ultra_long_novel`：15 个槽位 + 自有 Labels；`ai_write` 支持 `preset` 参数 |
+| 5 MCP 工具 | ✅ | 8 件（31→39）；未启用项目返回"先 ultra_config enable" |
+| 6 界面与导出 | ✅ | Web 章节列表按卷分组 + 分卷对话框；桌面右键「分卷管理…」；Word/PDF 目录分级 |
+| 7 验证 | ✅ | 211 项单测 / 82 项 MCP 自检 / build 0 警告 |
+
+**实施时的三处取舍**（与原方案不同）：
+
+1. **桌面章节树保持两层**。加第三层会改变 `SelectedItem` 的类型，牵动新建/重命名/删除/
+   双击/取当前章全部路径，风险远大于收益。卷用右键菜单按「卷名|起止章」编辑，
+   阅读收益体现在导出目录与 Web 端分组。
+2. **卷的交互是"范围"而不是"逐章勾选"**。网文分卷天然连续，填 1-40 比勾 40 次快。
+   Web 对话框与桌面输入框都是这个模型；MCP 仍保留 `chapter_volume_set` 支持任意章号。
+3. **`buildDynamic` 只接续写与审稿**。润色原本就没有前情注入，这次没有顺手扩张——
+   少一次行为变化，就少一处要验证的东西。
+
+**遗留（下一轮可做）**：
+- 桌面端卷级目录树（需要重构 TreeView 的选中模型）
+- 卷末自动生成「卷回顾」（现在要作者或 agent 用 `volume_upsert` 手写）
+- 角色出场统计自动回填 `Chapter.CharacterIds`（现在靠本章标注或正文名匹配兜底）

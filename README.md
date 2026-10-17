@@ -26,6 +26,7 @@
 
 - [它解决什么问题](#它解决什么问题)
 - [主要功能](#主要功能)
+- [超长篇：分卷、角色分级与状态面板](#超长篇分卷角色分级与状态面板)
 - [服务商接入：选一个，填 Key 和模型就能用](#服务商接入选一个填-key-和模型就能用)
 - [系统提示词：多方案 + 可自定义](#系统提示词多方案--可自定义)
 - [界面速览](#界面速览)
@@ -318,6 +319,34 @@ system 提示词按**会不会跨请求复用**分段发送：
 
 ---
 
+## 超长篇：分卷、角色分级与状态面板
+
+写到百万字，问题不再是"AI 写得好不好"，而是**它记不记得住**：人物卡越堆越多、
+前情只剩最近十几章、主角的境界和道具全凭模型自己圆。这一组能力专门治这个，
+但**默认关闭**——论文、公文、普通小说项目完全不受影响。
+
+**怎么开**：网页端章节栏的「卷」按钮、桌面端章节树右键「分卷管理…」，
+或让 agent 调 MCP 的 `ultra_config`（需 `confirm`）。启用前会自动打一个快照。
+
+| 能力 | 作用 |
+|---|---|
+| **分卷** | 给章节贴卷标签（卷一 / 卷二…），可写「本卷目标」与「卷回顾」。章号**仍是全书连续的 1..N**，所以 MCP、网页、快照的定位方式一律不变 |
+| **角色分级** | `核心常驻 / 本卷关键 / 单章客串` + 生死状态。核心角色进 system（可缓存），本章相关的进 user；已死亡或已退场的进「严禁出场」名单 |
+| **状态面板** | 主角的当前境界、处境、目标、关键道具。每章注入，压住"升过级还在用旧招" |
+| **预算池** | 卷回顾 / 本章角色 / 近期梗概 / 上章尾巴按 25/30/30/15 分配，总量默认取窗口的 12%（8%~20% 可调） |
+
+**为什么状态面板不进 system**：它每章都在变。塞进 System 的可缓存前缀，
+等于每次更新状态都把整段前缀的缓存作废——长文场景下输入成本反而翻倍。
+
+**提示词方案另有一套**：`超长篇网络小说`（`ultra_long_novel`），把人设锁死到登场名单、
+战力锁死到状态面板、章尾锁死到具体钩子，审稿也换成三条红线（战力 / 阵容 / 粘性）。
+它和"是否启用长篇结构"是**两个独立开关**：可以只用预设不加结构，也可以只分卷不换预设。
+
+**多文体不影响**：所有新字段在未启用时都不落盘（`WhenWritingNull` / `WhenWritingDefault`），
+`编辑器.Tests/Fixtures/paper-project.baseline.json` 逐字节盯着论文项目的序列化结果。
+
+---
+
 ## 服务商接入：选一个，填 Key 和模型就能用
 
 接一家新的模型服务，过去要查文档确认「地址到底填哪个」「Key 放哪个请求头」「system 能不能塞进 messages」——
@@ -514,7 +543,7 @@ Cursor / WorkBuddy / Cline 这类 AI 客户端就能直接打开你的 `.tdxproj
 配置文件，`command` 改成你本机 `dist\mcp\TdxClaw.Mcp.exe` 的路径（JSON 里反斜杠写两个）。
 `deploy.bat` 会把它和主程序一起发布出来。
 
-**31 个工具**，分八类：
+**39 个工具**，分九类：
 
 | 类别 | 工具 |
 |---|---|
@@ -524,6 +553,7 @@ Cursor / WorkBuddy / Cline 这类 AI 客户端就能直接打开你的 `.tdxproj
 | 写正文 | `chapter_write`（replace 覆盖 / append 追加）、`chapter_create`、`chapter_rename`、`chapter_delete`、`chapter_reorder`、`chapter_summary_set`（写章节梗概） |
 | 写设定 | `settings_set`、`settings_book_set`、`character_upsert`（建/改人物卡）、`character_delete`、`memory_set`（沉淀作者偏好） |
 | 产出 | `project_export`（docx / pdf / txt，论文版式传 `paperMode`）、**`ai_write`** |
+| **长篇结构** | **`ultra_config`**（查看/启用分卷·角色分级·状态面板）、`volume_list`、`volume_upsert`、`volume_delete`、`chapter_volume_set`、`state_board_get`、`state_board_update`、`character_scope_set` |
 | 网页端界面 | **`ui_typography`**（字体 / 字号 / 行距 / 字距，与网页「外观 → 正文排版」同一份配置、同一个校验） |
 | 诊断 · 回滚 | `ai_config_check`（服务商/模型/Key 状态 + 可选真连通探测；**绝不输出 Key 本身**）、`snapshot_restore` |
 
@@ -573,7 +603,7 @@ Cursor / WorkBuddy / Cline 这类 AI 客户端就能直接打开你的 `.tdxproj
 **排障**：客户端吞 stderr 看不到日志时，在配置里加
 `"env": { "TDX_MCP_LOG": "C:\\临时\\tdxclaw-mcp.log" }` 让服务器把日志落盘。
 
-开发时可用 `TdxClaw.Mcp.exe --selftest` 跑一遍协议自检（**76 项断言**，覆盖分帧、通知不回、
+开发时可用 `TdxClaw.Mcp.exe --selftest` 跑一遍协议自检（**82 项断言**，覆盖分帧、通知不回、
 错误码、落盘、冲突防护、写前快照、章节管理（含重排后章号连续）、快照回滚、人物卡、进度回报、
 资源读写、建项目与删书（回收站路径、越界防护）、网页排版校验、Key 不泄露）。
 
@@ -613,6 +643,8 @@ Cursor / WorkBuddy / Cline 这类 AI 客户端就能直接打开你的 `.tdxproj
 - **作品管理**：新建 / 打开 / 删除整本书。删除进**回收站**而不是真删——整本书
   （`.tdxproj` / `.bak` / `.chat` / `.snapshots`）移进书库父目录的
   `.trash/<时间戳>__<书名>/`，并留一份 `_删除信息.txt`；导出文件与共享的 AI 记忆不动
+- **分卷**：章节栏的「卷」按钮可按「卷名 + 起止章号」划分剧情卷，列表按卷分组显示。
+  只在启用了长篇结构的项目里出现，其它项目的章节列表仍是平铺
 - **跟 agent 协同**：agent 通过 MCP 改稿时页面实时跟随（切到那一章、刷新正文），
   状态栏常驻「MCP 跟随」开关，不想被打断就关掉；agent 新建或删除作品时会推
   `books-changed`，书库列表自己更新，**不用手动刷新页面**
@@ -813,7 +845,7 @@ web-service.bat start / stop / log
 ├─ AppearanceSettingsWindow    外观设置
 ├─ PathSettingsWindow          路径设置
 ├─ NovelScaleDialog / InputDialog / WelcomeDialog
-├─ Models/                      NovelProject、AppearanceConfig、PathsConfig
+├─ Models/                      NovelProject、UltraLongConfig（卷/分级/状态）、AppearanceConfig、PathsConfig
 ├─ Themes/
 │  └─ Tokens.xaml               Design Token：颜色 / 字号 / 圆角 / 间距 / 动效时长
 └─ Services/
@@ -832,6 +864,7 @@ web-service.bat start / stop / log
    ├─ LiteratureSearchService                           在线文献检索（OpenAlex / Semantic Scholar，免 Key）
    ├─ NovelSkills                                       技能包：内置/自定义/导入导出/任务命中
    ├─ BookDeleter                                       整本书移入回收站（越界防护 + 删除信息）
+   ├─ ContextAssembler                                 超长篇上下文：角色分级筛选 + 预算池（未启用时逐字回退）
    ├─ EditorTypography                                 网页正文排版：字体栈白名单 / 字号 / 行距（桌面 + Web + MCP 共用）
    ├─ AiMemoryManager / ChatSessionStore / ChatLogger / ProjectSnapshotManager
    ├─ WritingStatsService                             每日字数与连续天数（按项目统计）
@@ -843,8 +876,9 @@ MCP 服务器是独立工程，**不重写任何业务逻辑**，全部 ProjectR
 ```
 编辑器.Mcp/
 ├─ Program.cs       入口（--selftest 跑协议自检）
-├─ McpServer.cs     JSON-RPC 2.0 + stdio 主循环 + 31 个工具的 schema
+├─ McpServer.cs     JSON-RPC 2.0 + stdio 主循环 + 39 个工具的 schema
 ├─ NovelTools.cs    读写 / 检索 / 导出 / 删书 + Session（含写前冲突检测）
+├─ UltraTools.cs    超长篇结构：分卷 / 角色分级 / 状态面板（仅启用后可用）
 ├─ AiTools.cs       ai_write：复用 AiPrompts 与两个 Service，与界面同源
 └─ SelfTest.cs      内置自检（76 项断言）
 ```
@@ -926,8 +960,8 @@ MCP 服务器是独立工程，**不重写任何业务逻辑**，全部 ProjectR
 ## 测试
 
 ```bash
-dotnet test 编辑器.Tests/编辑器.Tests.csproj     # 171 项单元测试
-./编辑器.Mcp/bin/Debug/net10.0-windows/TdxClaw.Mcp.exe --selftest   # 76 项 MCP 协议自检
+dotnet test 编辑器.Tests/编辑器.Tests.csproj     # 211 项单元测试
+./编辑器.Mcp/bin/Debug/net10.0-windows/TdxClaw.Mcp.exe --selftest   # 82 项 MCP 协议自检
 ```
 
 单元测试覆盖**不需要 GUI 的那部分**——恰恰是最容易出静默错误的地方：

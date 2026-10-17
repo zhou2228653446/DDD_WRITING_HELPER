@@ -49,7 +49,7 @@ TdxClaw 写作助手 MCP 服务器：直接读写 .tdxproj 长篇写作项目（
 
 一本书 = 一个 `.tdxproj` 文件（JSON）。**它是唯一权威**，不要绕过本服务直接改它。
 
-## 2. 黄金规则（八条，务必遵守）
+## 2. 黄金规则（九条，务必遵守）
 
 1. **写之前先读**：改任何一章前，先 `chapter_read` 或 `chapter_search` 看过现文；不要凭记忆改稿。
 2. **正文落盘要显式**：`ai_write` 默认只返回文本（`writeBack=false`）。**先把文本给用户看，用户认可再传 `writeBack=true`**——这是"AI 失败绝不写回正文"的约定，别默认落盘。
@@ -58,11 +58,12 @@ TdxClaw 写作助手 MCP 服务器：直接读写 .tdxproj 长篇写作项目（
 5. **用户的长期偏好沉淀到记忆**：`memory_set`（`mode=append`）。用户说"别写死主角""对话别太长"这类纠正，不记下来下一轮就忘了。
 6. **不要重复灌上下文**：`ai_write` 已自动带上设定/人物卡/设定集/梗概链/上章末尾/记忆/文献库。你在 instruction 里再抄一遍设定，等于双倍 token + 版本冲突。
 7. **一个会话一本书**：`project_open` 之后所有读写都针对它；要换书就再 `project_open`。用户网页上正开着的那本会被你的 `project_open` 同步切换（他在旁边看着）。
-8. **不确定就先读手册**：`guide` 工具或 `tdx://guide`，含任务剧本与出错处置。
+8. **长篇先看状态，再写正文**：项目启用了长篇结构时，续写前先 `state_board_get` + `volume_list`；写完关键剧情（升级、得宝、有人死亡）立刻 `state_board_update` / `character_scope_set`。**不更新状态 = 下一章 AI 还按旧境界写**。状态属于"改项目"，但它是低风险的事实记录，可以直接写；改正文仍然要先给用户看。
+9. **不确定就先读手册**：`guide` 工具或 `tdx://guide`，含任务剧本与出错处置。
 
-## 3. 工具地图（29 个，按用途分组）
+## 3. 工具地图（39 个，按用途分组）
 
-**项目（4）**
+**项目与界面（6）**
 | 工具 | 用途 |
 |---|---|
 | `project_list` | 找 `.tdxproj`（不传目录就扫默认项目目录 / 当前目录 / 文档 / 桌面） |
@@ -84,6 +85,23 @@ TdxClaw 写作助手 MCP 服务器：直接读写 .tdxproj 长篇写作项目（
 `ai_write`（与界面点按钮完全同源：提示词方案 + 全部上下文 + 技能）/ `ai_config_check`（AI 报错先跑它；401=Key 失效或欠费，404=模型名不对；它永不输出 Key）/ `project_export`（docx / pdf / txt，论文版式传 `paperMode=true`）/ `guide`（本手册）
 
 **统计（1）** `characters_stats`（出场章次 / 总次数 / 连续缺席几章；纯本地扫描，不花 token）
+
+**长篇结构（8，项目未启用时返回明确提示，不是"工具不存在"）**
+
+| 工具 | 用途 |
+|---|---|
+| `ultra_config` | `action=get` 看状态；`enable` 启用（需 `confirm="enable"`，可选 `autoVolumes=true` + `chaptersPerVolume`）；`update` 改开关或 `dynamicBudgetRatio`（0.08~0.20） |
+| `volume_list` | 各卷的章节范围、字数、目标与回顾，以及多少章未分卷 |
+| `volume_upsert` | 新建卷（不传 `volumeId`）或改卷（标题 / 目标 / 回顾）。卷回顾会代替"全卷正文"进续写上下文 |
+| `volume_delete` | 删卷。`confirm` 必须原样回传卷名；★ **不删章节**，只把相关章转为「未分卷」 |
+| `chapter_volume_set` | 批量挂卷：`numbers="1-40"` 或 `[1,2,3]`；不传 `volumeId` = 改为未分卷 |
+| `state_board_get` | 主角当前境界 / 处境 / 目标 / 关键道具 / 生死状态。**续写前先看它** |
+| `state_board_update` | 改状态（升级、换地图、得失道具）。只改传入字段 |
+| `character_scope_set` | 批量设 `scope`（core/arc/guest）与 `status`（active/inactive/retired/deceased）。标成 deceased 后会进"严禁出场"名单 |
+
+> 这三样（分卷 / 角色分级 / 状态面板）只在**启用了长篇结构**的项目里生效。
+> 论文、公文、普通小说项目不要启用——它们的角色字段存的是"研究对象 / 事项要素"。
+> 判断该不该启用：用户明确说"长篇""几百万字""分卷"，或 `project_status` 显示章数上百。
 
 **资源（`resources/*`）**：`tdx://chapter/{n}`、`tdx://settings/{key}`、`tdx://settings-book/{key}`、`tdx://guide`。支持资源的客户端可以直接把整章挂进上下文，比"先 list 再 read"省一轮往返。
 

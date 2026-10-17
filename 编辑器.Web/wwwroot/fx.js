@@ -155,18 +155,43 @@ window.fx = (function () {
       s.fresh.textContent = '';
     }
     if (wasBottom) el.scrollTop = el.scrollHeight;
+
+    // 正文一出现，「正在思考」就过期了：它只在还没动笔时才说明问题。
+    // 留着的话，报告都写完了上面还挂着一行"AI 正在思考…"，看着像没结束。
+    if (delta && s.notes.length) {
+      for (let i = s.notes.length - 1; i >= 0; i--) {
+        const n = s.notes[i];
+        if (n.dataset.msg && n.dataset.msg.indexOf('正在思考') >= 0) {
+          n.remove();
+          s.notes.splice(i, 1);
+        }
+      }
+    }
     return s;
   }
 
   // 服务端的过程提示（比如"聊天记忆已压缩"）：单独一行挂在正文上面
+  // ⚠ 这些是**状态**不是日志：同一句连着来只留一行，总量也有上限。
+  //   踩过的坑：OpenAIService 曾按"每个思考增量"触发一次「AI 正在思考…」，
+  //   一次审稿几千个增量 → 这里插出几千个 div，整屏都是重复气泡。
+  //   服务端已改成只报一次，这里再做一层兜底：谁将来按高频触发都不会毁掉界面。
+  const MAX_NOTES = 6;
+
   function notice(el, msg) {
     const s = ensure(el);
     if (!s) return;
+    const last = s.notes[s.notes.length - 1];
+    if (last && last.dataset.msg === msg) return;   // 同一句：已经有那一行了，什么都不用做
     const n = document.createElement('div');
     n.className = 'ai-note';
+    n.dataset.msg = msg;
     n.textContent = '[' + msg + ']';
     el.insertBefore(n, s.txt);
     s.notes.push(n);
+    while (s.notes.length > MAX_NOTES) {
+      const old = s.notes.shift();
+      if (old) old.remove();
+    }
   }
 
   function end(el, ok) {

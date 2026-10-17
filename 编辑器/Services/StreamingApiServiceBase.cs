@@ -614,6 +614,17 @@ namespace 编辑器.Services
             /// <summary>思考内容（推理模型的 reasoning / thinking）。**不写入正文**。</summary>
             public readonly StringBuilder Reasoning = new();
 
+            /// <summary>
+            /// 「AI 正在思考…」这条提示是否已经报过。
+            ///
+            /// ★ 思考增量是**逐 token** 到达的，一次审稿能来几千个。以前每来一个就
+            ///   调一次 OnNotice，网页端的过程提示区（fx.notice 每条插一个 div）
+            ///   被刷成几百上千行「[AI 正在思考…]」，整屏都是重复气泡。
+            ///   它表达的是"开始思考了"这个**状态**，报一次就够；
+            ///   真正的进度由 OnProgress 的 token 数负责。
+            /// </summary>
+            public bool ReasoningNoticed;
+
             public int InputTokens;
             public int OutputTokens;
 

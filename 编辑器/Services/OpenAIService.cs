@@ -114,7 +114,12 @@ namespace 编辑器.Services
             if (reasoning.Length > 0)
             {
                 state.Reasoning.Append(reasoning);
-                options.OnNotice?.Invoke("AI 正在思考…");
+                // 只在**第一个**思考增量时报一次（见 StreamState.ReasoningNoticed）
+                if (!state.ReasoningNoticed)
+                {
+                    state.ReasoningNoticed = true;
+                    options.OnNotice?.Invoke("AI 正在思考…");
+                }
             }
 
             if (TryString(delta, "content", out var token) && token.Length > 0)

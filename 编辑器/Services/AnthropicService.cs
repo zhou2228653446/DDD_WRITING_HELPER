@@ -172,7 +172,13 @@ namespace 编辑器.Services
                 if (TryString(delta, "thinking", out var thinking))
                 {
                     state.Reasoning.Append(thinking);
-                    options.OnNotice?.Invoke("AI 正在思考…");
+                    // 只报一次：thinking_delta 是逐 token 的，每次都报会把
+                    // 前端过程提示区刷成几百行（见 StreamState.ReasoningNoticed）
+                    if (!state.ReasoningNoticed)
+                    {
+                        state.ReasoningNoticed = true;
+                        options.OnNotice?.Invoke("AI 正在思考…");
+                    }
                 }
                 return;
             }

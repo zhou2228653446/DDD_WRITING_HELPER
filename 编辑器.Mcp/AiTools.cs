@@ -110,6 +110,28 @@ internal static class AiTools
             taskFallback = AiPrompts.Task.Expand;
         }
 
+        // preset：只覆盖**本次请求**用哪套提示词，不改全局设置。
+        // 没有它，agent 想按任务切一套（比如长篇用 ultra_long_novel）就得改 store，
+        // 顺带把界面里的方案也改掉——那是用户的东西，不该被动。
+        var presetArg = NovelTools.Str(args, "preset").Trim();
+        string? presetId = null;
+        if (presetArg.Length > 0)
+        {
+            var known = PromptPresets.Find(presetArg) != null
+                        || (AiPrompts.Store?.Exists(presetArg) ?? false);
+            if (!known)
+                return ToolResult.Fail(
+                    $"没有叫「{presetArg}」的提示词方案。内置：novel / academic / official / general / ultra_long_novel；" +
+                    "也可以传自定义方案的 id。");
+
+            presetId = presetArg;
+            taskFallback = AiPrompts.TextFor(presetId, taskKey);
+
+            // 只有"用的是当前方案的结构化契约"时才替换；review 那种字面量契约保持原样
+            if (contractFallback != null && contractFallback == AiPrompts.StructuredOutput)
+                contractFallback = AiPrompts.TextFor(presetId, AiPrompts.Keys.StructuredOutput);
+        }
+
         // 技能：界面在 AI 面板选一个，命中功能的生成就用该手法。MCP 侧同样要生效，
         // 否则「黄金三章」这类手法只在界面里有效，agent 写出来的是另一种调性。
         var skill = ResolveSkill(args, out var skillErr);
@@ -133,10 +155,12 @@ internal static class AiTools
             Console.Error.WriteLine($"[mcp] 读取 AI 记忆失败（本次不带记忆）：{ex.Message}");
         }
 
-        var effectiveCharacters = p.BuildEffectiveCharacterSettings();
+        // 角色段：未启用长篇结构时 = 原来的全量人物设定（论文/公文同源不变）；
+        // 启用后只留 Core 常驻，本章相关的 Arc/Guest 由下面的动态块补。
+        var effectiveCharacters = ContextAssembler.BuildStableCharacters(p);
         var stable = AiPrompts.BuildContextBlock(
             p.FullOutline, p.ChapterOutline, effectiveCharacters,
-            p.BackgroundSettings, p.WritingStyle, memory, p.NarrativeViewpoint);
+            p.BackgroundSettings, p.WritingStyle, memory, p.NarrativeViewpoint, presetId);
 
         // 设定集：已勾选导出的设定集章节（世界观、年表、专有名词、伏笔等）自动拼进稳定前缀，
         // 避免 agent 写设定集后在常规续写/扩写时完全看不见。（审稿与设定集生成任务本身已单独处理，不重复拼）
@@ -156,7 +180,7 @@ internal static class AiTools
         // Build 会 Flatten 成单段字符串，再经 SystemPrompt.FromText 隐式转换时**整段**
         // 被标成可缓存；而任务段每次请求都可能不同，前缀永远对不上——缓存命中率≈0，
         // 还要按 1.25 倍付写入价。分段后只有「身份 + 设定」那段打断点，才真的能命中。
-        var system = AiPrompts.BuildSections(taskPrompt, stable, null, outputContract);
+        var system = AiPrompts.BuildSections(taskPrompt, stable, null, outputContract, presetId);
 
         // ---- 3. 拼 user 侧素材 ----
         var chapter = number > 0
@@ -173,14 +197,31 @@ internal static class AiTools
                 $"第{chapter.ChapterNumber}章「{chapter.Title}」\n{chapter.Content}"));
         }
 
-        // 续写与审稿：注入之前章节的梗概（Chapter.Summary 优先）+ 紧邻上一章末尾 800 字，
+        // 续写与审稿：注入之前章节的梗概 + 紧邻上一章末尾 800 字，
         // 解决此前只截上章开头 800 字导致丢失上章结尾悬念、前情梗概字段形同虚设的问题。
+        //
+        // ★ 超长篇启用后换成"卷摘要 + 本章角色 + 近期梗概 + 上章尾巴"的动态块：
+        //   固定 15 章在百万字规模下既不够（看不到卷级主线）又浪费（前 8 章之前的基本重复）。
+        //   未启用时仍走原路径——论文/公文的章节梗概链一字不变。
         if (chapter != null && (task == "continue" || task == "review"))
         {
-            var priorBrief = p.BuildPriorChapterBrief(chapter.ChapterNumber, includePrevTail: true);
-            if (!string.IsNullOrWhiteSpace(priorBrief))
+            if (p.HasUltraLong)
             {
-                user.AppendLine(AiPrompts.Section("前情梗概与上章末尾（供衔接与跨章比对）", priorBrief));
+                var window = ModelContextCatalog.Resolve(config.Model);
+                var dynamicBlock = ContextAssembler.BuildDynamic(p, chapter.ChapterNumber, window);
+                if (!string.IsNullOrWhiteSpace(dynamicBlock))
+                {
+                    user.AppendLine(AiPrompts.Section(
+                        "本章动态上下文（卷目标 / 当前状态 / 登场角色 / 近期前情）", dynamicBlock));
+                }
+            }
+            else
+            {
+                var priorBrief = p.BuildPriorChapterBrief(chapter.ChapterNumber, includePrevTail: true);
+                if (!string.IsNullOrWhiteSpace(priorBrief))
+                {
+                    user.AppendLine(AiPrompts.Section("前情梗概与上章末尾（供衔接与跨章比对）", priorBrief));
+                }
             }
         }
 

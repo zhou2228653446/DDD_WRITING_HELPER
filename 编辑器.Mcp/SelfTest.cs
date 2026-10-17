@@ -111,7 +111,7 @@ internal static class SelfTest
 
             var tools = lines[1].RootElement.GetProperty("result").GetProperty("tools").EnumerateArray()
                               .Select(t => t.GetProperty("name").GetString()!).ToList();
-            Assert("tools/list 列出 31 个工具", tools.Count == 31, string.Join(",", tools));
+            Assert("tools/list 列出 39 个工具", tools.Count == 39, string.Join(",", tools));
             Assert("工具集覆盖 读/写/导出/AI",
                 tools.Contains("chapter_read") && tools.Contains("chapter_write")
                 && tools.Contains("project_export") && tools.Contains("ai_write"), "");
@@ -334,7 +334,8 @@ internal static class SelfTest
                                .Select(x => x.GetProperty("name").GetString() ?? "").ToList();
             Assert("I1 工具含 ai_config_check", names.Contains("ai_config_check"), "");
             Assert("I2 工具含 project_create", names.Contains("project_create"), "");
-            Assert("I3 工具数为 31（新增 ui_typography 正文排版）", names.Count == 31, names.Count.ToString());
+            Assert("I3 工具数为 39（新增超长篇 8 件：ultra_config / volume_* / state_board_* / character_scope_set）",
+                names.Count == 39, names.Count.ToString());
             Assert("I3b 工具含 guide（agent 自己能读到怎么做）", names.Contains("guide"), "");
             Assert("I4 章节结构管理齐备（改名/删除/重排）",
                 names.Contains("chapter_rename") && names.Contains("chapter_delete")
@@ -472,6 +473,32 @@ internal static class SelfTest
             Assert("L5 BuildPriorChapterBrief 同时包含前章 Summary 与紧邻上章末尾原文",
                 priorBrief.Contains("沈砚接下市政厅停摆大钟的委托") && priorBrief.Contains("钟声在第十二响戛然而止"),
                 Cut(priorBrief, 80));
+        }
+
+        // ==================================================================
+        // M. 超长篇结构：默认关闭 → 显式启用 → 建卷 / 挂章 / 读状态
+        // ==================================================================
+        {
+            var m = await CallAsync(new List<string>
+            {
+                Req(1, "tools/call", new { name = "project_open", arguments = new { path = projPath } }),
+                Req(2, "tools/call", new { name = "volume_list", arguments = new { } }),
+                Req(3, "tools/call", new { name = "ultra_config", arguments = new { action = "enable", confirm = "enable" } }),
+                Req(4, "tools/call", new { name = "volume_upsert", arguments = new { number = 1, title = "第一卷", goal = "拜入宗门" } }),
+                Req(5, "tools/call", new { name = "chapter_volume_set", arguments = new { numbers = "1-2", volumeId = "1" } }),
+                Req(6, "tools/call", new { name = "volume_list", arguments = new { } }),
+                Req(7, "tools/call", new { name = "state_board_get", arguments = new { } }),
+            });
+
+            Assert("M1 未启用时 volume_list 给出启用指引（不是「工具不存在」）",
+                IsError(m[1]) && Text(m[1]).Contains("启用"), Cut(Text(m[1]), 70));
+            Assert("M2 显式启用长篇结构", !IsError(m[2]), Cut(Text(m[2]), 90));
+            Assert("M3 新建分卷", !IsError(m[3]), Cut(Text(m[3]), 70));
+            Assert("M4 章节挂到卷上", !IsError(m[4]) && Text(m[4]).Contains("2 章"), Cut(Text(m[4]), 70));
+            Assert("M5 volume_list 显示卷与章节范围",
+                !IsError(m[5]) && Text(m[5]).Contains("第一卷") && Text(m[5]).Contains("第1–2章"),
+                Cut(Text(m[5]), 120));
+            Assert("M6 state_board_get 可用", !IsError(m[6]), Cut(Text(m[6]), 70));
         }
         }
 

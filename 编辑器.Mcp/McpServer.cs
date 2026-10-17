@@ -638,6 +638,7 @@ internal static class McpServer
                     ["writeMode"] = new() { description = "写回方式：append 追加 / replace 覆盖；默认续写·扩写为 append、润色为 replace" },
                     ["profile"] = new() { description = "用哪套 API 配置（如论文走 GPT、小说走 DeepSeek）；留空用当前启用的" },
                     ["skill"] = new() { description = "技能名或 id（如「黄金三章」）；留空用当前方案记住的那个，传 none 表示不用技能" },
+                    ["preset"] = new() { description = "本次用哪套提示词方案：novel / academic / official / general / ultra_long_novel 或自定义方案 id；留空用当前生效方案。★ 只影响这一次请求，不改全局设置" },
                 },
                 required = new List<string> { "task" },
             },
@@ -721,6 +722,150 @@ internal static class McpServer
                     ["reset"] = new() { type = "boolean", description = "true = 恢复全部默认排版" },
                 },
                 required = new List<string>(),   // 一个都不传 = 只读（看当前值与可用预设）
+            },
+        },
+        new ToolDef
+        {
+            name = "ultra_config",
+            description =
+                "查看或启用「长篇增强结构」（分卷 / 角色分级 / 主角状态面板）。" +
+                "★ 这三项只影响启用了它的项目：论文、公文、普通小说项目保持未启用，行为一字不变。" +
+                "action=get 查看；action=enable 启用（需 confirm=\"enable\"，可选 autoVolumes=true 按现有章节切卷）；" +
+                "action=update 改开关或动态预算比例。",
+            inputSchema = new ToolSchema
+            {
+                properties = new Dictionary<string, ToolProp>
+                {
+                    ["action"] = new() { description = "get（默认）/ enable / update" },
+                    ["confirm"] = new() { description = "enable 时必须传 \"enable\"，防止 agent 误开" },
+                    ["autoVolumes"] = new() { type = "boolean", description = "启用时顺便按现有章节切卷（默认 false）" },
+                    ["chaptersPerVolume"] = new() { type = "integer", description = "自动切卷时每卷多少章（默认 50）" },
+                    ["enableVolumes"] = new() { type = "boolean", description = "update：是否启用分卷" },
+                    ["enableCharacterLifecycle"] = new() { type = "boolean", description = "update：是否启用角色分级筛选" },
+                    ["enableStateBoard"] = new() { type = "boolean", description = "update：是否注入主角状态面板" },
+                    ["dynamicBudgetRatio"] = new() { type = "number", description = "update：动态素材占窗口比例（0.08~0.20，默认 0.12）" },
+                },
+                required = new List<string>(),
+            },
+        },
+        new ToolDef
+        {
+            name = "volume_list",
+            description =
+                "列出全书的分卷：每卷的章节范围、字数、目标与回顾，以及有多少章还没分卷。" +
+                "只在启用了长篇结构的项目里可用。",
+            inputSchema = new ToolSchema
+            {
+                properties = new Dictionary<string, ToolProp>(),
+                required = new List<string>(),
+            },
+        },
+        new ToolDef
+        {
+            name = "volume_upsert",
+            description =
+                "新建一卷，或更新已有卷（标题 / 目标 / 卷回顾）。" +
+                "不传 volumeId 就是新建，序号默认取现有最大值 +1；传 volumeId 就是改那一卷。" +
+                "卷回顾会在超长篇的续写/审稿里代替「全卷正文」作为前情，写得越准越省 token。",
+            inputSchema = new ToolSchema
+            {
+                properties = new Dictionary<string, ToolProp>
+                {
+                    ["volumeId"] = new() { description = "要改哪一卷；留空 = 新建" },
+                    ["number"] = new() { type = "integer", description = "卷序号（新建时留空自动取下一个）" },
+                    ["title"] = new() { description = "卷名，如「第二卷 剑冢」" },
+                    ["goal"] = new() { description = "本卷要达成的核心目标（进 AI 上下文）" },
+                    ["summary"] = new() { description = "本卷回顾（卷末写；进 AI 上下文，代替全卷正文）" },
+                },
+                required = new List<string>(),
+            },
+        },
+        new ToolDef
+        {
+            name = "volume_delete",
+            description =
+                "删掉一个卷。★ confirm 必须原样回传卷名。删卷**不删章节**——相关章节转为「未分卷」，正文一字不动。",
+            inputSchema = new ToolSchema
+            {
+                properties = new Dictionary<string, ToolProp>
+                {
+                    ["volumeId"] = new() { description = "卷 id（与 number 二选一）" },
+                    ["number"] = new() { type = "integer", description = "卷序号（与 volumeId 二选一）" },
+                    ["confirm"] = new() { description = "二次确认：原样回传卷名，如「第二卷 剑冢」" },
+                },
+                required = new List<string> { "confirm" },
+            },
+        },
+        new ToolDef
+        {
+            name = "chapter_volume_set",
+            description =
+                "把一批章节挂到某个卷，或改为「未分卷」（不传 volumeId）。" +
+                "章号支持 numbers=\"1-5,7\" 或数组 [1,2,3]；卷可以传 volumeId 或卷序号。",
+            inputSchema = new ToolSchema
+            {
+                properties = new Dictionary<string, ToolProp>
+                {
+                    ["numbers"] = new() { description = "章号：\"1-5,7\" 或 [1,2,3]（与 number 二选一）" },
+                    ["number"] = new() { type = "integer", description = "单章章号" },
+                    ["volumeId"] = new() { description = "目标卷 id 或卷序号；留空 = 改为未分卷" },
+                },
+                required = new List<string>(),
+            },
+        },
+        new ToolDef
+        {
+            name = "state_board_get",
+            description =
+                "读主角的当前状态面板：境界/阶段、当前处境、当前目标、关键道具、生死状态。" +
+                "续写前先看这个，免得写出「早就升过级却还在用旧招」的段落。",
+            inputSchema = new ToolSchema
+            {
+                properties = new Dictionary<string, ToolProp>(),
+                required = new List<string>(),
+            },
+        },
+        new ToolDef
+        {
+            name = "state_board_update",
+            description =
+                "更新主角状态（升级、换地图、得失关键道具、状态变化）。" +
+                "只改传入的字段，没传的保持原样。改完网页端下次生成就会用新状态。",
+            inputSchema = new ToolSchema
+            {
+                properties = new Dictionary<string, ToolProp>
+                {
+                    ["characterId"] = new() { description = "角色 id（与 name 二选一）" },
+                    ["name"] = new() { description = "角色名（与 characterId 二选一）" },
+                    ["realm"] = new() { description = "当前境界/职级/阶段，如「金丹初期」" },
+                    ["situation"] = new() { description = "一句话当前处境，如「被困剑冢」" },
+                    ["goal"] = new() { description = "当前目标，如「找到出口」" },
+                    ["items"] = new() { description = "关键道具列表：[\"残剑\",\"灯芯\"] 或 \"残剑,灯芯\"（整体替换）" },
+                    ["status"] = new() { description = "active / inactive / retired / deceased" },
+                },
+                required = new List<string>(),
+            },
+        },
+        new ToolDef
+        {
+            name = "character_scope_set",
+            description =
+                "批量设置角色的分级与生死状态（归档一批龙套、把某角色标为阵亡时用）。" +
+                "scope 可选 core（核心常驻）/ arc（本卷关键）/ guest（单章客串）；" +
+                "status 可选 active / inactive / retired / deceased。" +
+                "标成 deceased 后，续写会把他放进「严禁出场」名单。",
+            inputSchema = new ToolSchema
+            {
+                properties = new Dictionary<string, ToolProp>
+                {
+                    ["names"] = new() { description = "角色名列表：[\"老王\",\"苏晚\"] 或 \"老王,苏晚\"" },
+                    ["ids"] = new() { description = "角色 id 列表" },
+                    ["name"] = new() { description = "单个角色名" },
+                    ["characterId"] = new() { description = "单个角色 id" },
+                    ["scope"] = new() { description = "core / arc / guest" },
+                    ["status"] = new() { description = "active / inactive / retired / deceased" },
+                },
+                required = new List<string>(),
             },
         },
     };
@@ -831,6 +976,21 @@ internal static class McpServer
 
                 case "memory_get": r = NovelTools.GetMemory(p); break;
                 case "memory_set": r = NovelTools.SetMemory(_session, p, args); mutatesProject = true; break;
+
+                // ── 超长篇结构（仅启用了它的项目可用，未启用时返回明确提示）──
+                case "ultra_config":
+                    r = UltraTools.Config(_session, p, args);
+                    // get 是只读；enable/update 才算改项目
+                    mutatesProject = !string.Equals(
+                        NovelTools.Str(args, "action", "get"), "get", StringComparison.OrdinalIgnoreCase);
+                    break;
+                case "volume_list": r = UltraTools.ListVolumes(p); break;
+                case "volume_upsert": r = UltraTools.UpsertVolume(_session, p, args); mutatesProject = true; break;
+                case "volume_delete": r = UltraTools.DeleteVolume(_session, p, args); mutatesProject = true; break;
+                case "chapter_volume_set": r = UltraTools.SetChapterVolume(_session, p, args); mutatesProject = true; break;
+                case "state_board_get": r = UltraTools.GetStateBoard(p); break;
+                case "state_board_update": r = UltraTools.UpdateStateBoard(_session, p, args); mutatesProject = true; break;
+                case "character_scope_set": r = UltraTools.SetCharacterScope(_session, p, args); mutatesProject = true; break;
 
                 case "project_export": r = NovelTools.Export(p, args); break;
 

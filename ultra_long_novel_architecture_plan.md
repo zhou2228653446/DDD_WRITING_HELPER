@@ -431,7 +431,7 @@ public static NovelProject RestoreMerged(NovelProject snapshot, NovelProject cur
 | 并发写（网页 + MCP） | 维持单文件 + `Ticks:Length` 指纹，**不拆文件**；结构变更也走同一次 `Save()`，自动被覆盖保护 |
 | 删角色 | `character_delete` 同步清理 `CharacterIds` 里的失效 id，渲染时忽略找不到的 id |
 | 删卷 | 只清 `Chapter.VolumeId`，不删章节、不重排章号 |
-| 降级 | 启用时强制快照；文档写明回退前导出 |
+| 降级 | 启用时强制快照；文档写明回退前导出。**另外：新快照是 `.json.gz`，旧版程序只找 `.json`，回退旧版会看到"列表里有、点恢复失败"**——回退前先用新版把要留的版本导出，或直接用新版 |
 
 ---
 

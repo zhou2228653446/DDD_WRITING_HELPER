@@ -2,15 +2,18 @@
 
 # AI 写作助手
 
-**面向长篇创作的 Windows 桌面编辑器 —— 本地优先，AI 深度集成**
+**面向长篇创作的 AI 写作工作台 —— 桌面、浏览器、agent 三端共用同一份书稿**
 
 项目 / 章节 / 设定 / 历史版本的管理，和续写 / 润色 / 大纲 / 命名的 AI 能力，
-放在同一个窗口里。让 AI 理解你正在写的那本书，而不是一个孤立的对话框。
+放在同一个窗口里；同一本书还能在浏览器里接着写，也可以交给 agent 通过 MCP 直接读写。
+让 AI 理解你正在写的那本书，而不是一个孤立的对话框。
 
 ![.NET](https://img.shields.io/badge/.NET-10.0--windows-512BD4?logo=dotnet&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows&logoColor=white)
 ![UI](https://img.shields.io/badge/UI-WPF%20%2B%20HandyControl-68217A)
 ![AI](https://img.shields.io/badge/AI-OpenAI%20%7C%20Anthropic-10A37F)
+![MCP](https://img.shields.io/badge/MCP-31%20tools-7B61FF)
+![Web](https://img.shields.io/badge/Web-self--hosted-4A90E2)
 ![License](https://img.shields.io/badge/License-未指定-lightgrey)
 
 ![主界面](docs/screenshots/main-light.png)
@@ -29,7 +32,7 @@
 - [技术栈](#技术栈)
 - [快速开始](#快速开始)
 - [MCP：让 AI 客户端直接读写你的书稿](#mcp让-ai-客户端直接读写你的书稿)
-- [网页版：开机自启与外部访问](#网页版开机自启与外部访问)
+- [网页版：浏览器里的同一本书](#网页版浏览器里的同一本书)
 - [配置与数据存放位置](#配置与数据存放位置)
 - [项目结构](#项目结构)
 - [几条设计说明](#几条设计说明)
@@ -82,7 +85,7 @@
 | 功能 | 说明 |
 |---|---|
 | **续写** | 基于正文与上下文继续写下去 |
-| **润色** | 改写当前章节；可挂多个「润色风格」预设。输出上限按章节长度动态给，撞上限会**拒绝覆盖原文**并把结果留在回复框里 |
+| **润色** | 改写当前章节；可挂多个「润色风格」预设。输出预算与正文同档（384K），撞上限会**拒绝覆盖原文**并把结果留在回复框里 |
 | **人名生成** | 按题材与风格生成人名（论文 / 公文方案下对应术语命名、事项名称拟定） |
 | **万能聊天** | 直接描述需求，不套模板。**带多轮对话记忆**，AI 记得你上一句说过什么 |
 | **生成上下文** | 全文大纲 / 章节大纲 / 人物设定 / 背景设定 / 文风设定，一次生成写入项目 |
@@ -144,12 +147,14 @@
 每个类的注释里都标了出处（`Services/CompactPolicy.cs` / `MicroCompactor.cs` /
 `ContextSummarizer.cs` / `ChatContextCompactor.cs`）。落到使用上的几条规则：
 
-- **窗口统一按 200K 算**：不再按模型名去猜窗口大小。现代模型的窗口基本都 ≥200K
-  （Claude / o 系 200K，Gemini / GPT-4.1 1M），按猜小的值算阈值只会让压缩**过早触发** ——
-  明明还剩大半个窗口就开始丢上下文，白白损失却换不来安全。所以一律取 200K 作下限；
-  已知明显更大的模型（Gemini / GPT-4.1 / qwen-long，1M）仍按各自的大窗口算。
+- **窗口按 200K 起算，更大的按真实值算**：不再按模型名去猜窗口大小。现代模型的窗口基本都
+  ≥200K（Claude / o 系 200K，Gemini / GPT-4.1 1M），按猜小的值算阈值只会让压缩**过早触发** ——
+  明明还剩大半个窗口就开始丢上下文，白白损失却换不来安全。所以一律取 200K 作**下限**；
+  已知明显更大的模型（Gemini / GPT-4.1 / qwen-long，1M）按各自的大窗口算。
+  **DeepSeek 是单独登记的例外**：V3 / V3.2 确实只有 128K，但 `deepseek-v4` / `deepseek-flash`
+  这一代是 1M 上下文 + 384K 最大输出——整族按 128K 算，长篇可分配的输出空间会平白少算五倍。
   真接上小窗口模型时，改 `Services/ModelContextCatalog.cs` 里的 `AssumedContextWindow`
-  一个常量即可（目前未做设置项 —— 按现状用不到）。
+  一个常量即可；设置里显式填的窗口值优先于一切。
 - **提前量**：不是顶到天花板才动，而是离阈值还有一段（13K token）就开始 ——
   200K 口径下实际阈值约 183K。阈值分母是「窗口 − 本次请求的输出预留」——
   上下文窗口是**输入输出共享**的，不减掉输出那部分，
@@ -183,6 +188,12 @@ AI 面板上会显示当前记忆状态（如 `聊天记忆：摘要 18 轮 + �
 
 重试与空闲超时的提示会走到状态栏（如「连接不稳定，正在重试（1/4）…」）——
 不然那十几秒界面完全静止，看起来就是卡死了。
+
+**输出预算给足，不在源头把长文卡死**：`max_tokens` 默认 **384K**（一次写几千字根本用不满，
+按老习惯给 4K / 8K 才是莫名其妙写到一半就断的根源）。只有压缩摘要（1500）、AI 记忆（8192）、
+连通性探测这类内部小任务才用小预算。推理模型的思考也吃输出预算——思考用完了、正文一个字没有时，
+会自动加大预算重试一次；服务商嫌 `max_tokens` 太大，则按
+131072 → 65536 → 32768 → 16384 逐级降档重发，而不是整轮报"参数不合法"。
 
 ### 省 token：让服务端的缓存真正命中
 
@@ -448,6 +459,7 @@ AI 面板。底部那行「聊天记忆：n / 12 轮」就是「万能聊天」�
 | Word 导出 | DocumentFormat.OpenXml 3.5.1 |
 | PDF 导出 | [QuestPDF](https://www.questpdf.com/) 2024.12.3（社区许可） |
 | 架构 | 纯事件处理式，**无 MVVM**、无第三方 DI / 日志框架 |
+| 网页版 | ASP.NET Core + SignalR（agent 改动实时跟随）；前端原生 JS，无框架、无构建步骤 |
 
 ---
 
@@ -502,15 +514,17 @@ Cursor / WorkBuddy / Cline 这类 AI 客户端就能直接打开你的 `.tdxproj
 配置文件，`command` 改成你本机 `dist\mcp\TdxClaw.Mcp.exe` 的路径（JSON 里反斜杠写两个）。
 `deploy.bat` 会把它和主程序一起发布出来。
 
-**28 个工具**，分六类：
+**31 个工具**，分八类：
 
 | 类别 | 工具 |
 |---|---|
-| 找项目 · 看进度 | `project_list`（扫目录找 .tdxproj）、`project_open`、`project_create`（新书自动带设定集 12 章骨架；同名文件拒绝覆盖）、**`project_status`**（一次拿到进度画像 + 下一步建议） |
+| 入门 | **`guide`**（内置手册：黄金规则 / 工具地图 / 任务剧本，任何时候可调，不依赖项目） |
+| 找项目 · 看进度 | `project_list`（扫目录找 .tdxproj）、`project_open`、`project_create`（新书自动带设定集 12 章骨架；同名文件拒绝覆盖）、**`project_status`**（一次拿到进度画像 + 下一步建议）、**`project_delete`**（整本移入回收站，需原样回传书名确认） |
 | 读 | `chapters_list`、`chapter_read`、`chapter_search`（全文搜词，查伏笔/矛盾）、`settings_get`、`settings_book_get`（设定集 12 章）、`characters_stats`（谁多久没出场了）、`characters_list`、`memory_get`、`snapshot_list` |
 | 写正文 | `chapter_write`（replace 覆盖 / append 追加）、`chapter_create`、`chapter_rename`、`chapter_delete`、`chapter_reorder`、`chapter_summary_set`（写章节梗概） |
 | 写设定 | `settings_set`、`settings_book_set`、`character_upsert`（建/改人物卡）、`character_delete`、`memory_set`（沉淀作者偏好） |
 | 产出 | `project_export`（docx / pdf / txt，论文版式传 `paperMode`）、**`ai_write`** |
+| 网页端界面 | **`ui_typography`**（字体 / 字号 / 行距 / 字距，与网页「外观 → 正文排版」同一份配置、同一个校验） |
 | 诊断 · 回滚 | `ai_config_check`（服务商/模型/Key 状态 + 可选真连通探测；**绝不输出 Key 本身**）、`snapshot_restore` |
 
 **agent 怎么知道该怎么做**：服务器自带一份手册 `docs/AGENT_GUIDE.md`（黄金规则、工具地图、
@@ -559,15 +573,15 @@ Cursor / WorkBuddy / Cline 这类 AI 客户端就能直接打开你的 `.tdxproj
 **排障**：客户端吞 stderr 看不到日志时，在配置里加
 `"env": { "TDX_MCP_LOG": "C:\\临时\\tdxclaw-mcp.log" }` 让服务器把日志落盘。
 
-开发时可用 `TdxClaw.Mcp.exe --selftest` 跑一遍协议自检（59 项断言，覆盖分帧、通知不回、
-错误码、落盘、冲突防护、写前快照、章节管理、快照回滚、人物卡、进度回报、资源读写、
-建项目、Key 不泄露）。
+开发时可用 `TdxClaw.Mcp.exe --selftest` 跑一遍协议自检（**76 项断言**，覆盖分帧、通知不回、
+错误码、落盘、冲突防护、写前快照、章节管理（含重排后章号连续）、快照回滚、人物卡、进度回报、
+资源读写、建项目与删书（回收站路径、越界防护）、网页排版校验、Key 不泄露）。
 
 ### 首次配置
 
 1. 启动后会弹出欢迎窗口，按提示新建或打开一个项目
 2. 菜单 **AI 助手 → API 设置 → 表单编辑**：
-   - 在「AI 服务商」下拉里选一家（24 家内置，地址与协议会自动填好）
+   - 在「AI 服务商」下拉里选一家（25 家内置，地址与协议会自动填好）
    - 粘上 **API Key**（点右侧「获取 API Key」可直达厂商控制台）
    - 点 **「拉取列表」** 取到该服务商当前真实可用的模型名，从右侧下拉里挑一个
      （清单会缓存，下次不用再拉；也可以直接手写模型名）—— 到这一步就能用了
@@ -579,13 +593,33 @@ Cursor / WorkBuddy / Cline 这类 AI 客户端就能直接打开你的 `.tdxproj
 
 ---
 
-## 网页版：开机自启与外部访问
+## 网页版：浏览器里的同一本书
 
 网页版（`编辑器.Web`）把同一份书稿、同一套 MCP 工具搬到浏览器和 HTTP 上：本机访问
 `http://127.0.0.1:5280/`，其它设备（包括你在别处跑的 agent）经 `http://<域名>:5280/mcp`
 直接读写书稿。
 
-**为什么要单独做开机自启**：它是个 ASP.NET Core 服务，平时靠 `dotnet run` 手动拉起来，
+### 网页端能做什么
+
+不是只能看的只读预览，是同一份 `.tdxproj` 的第二个编辑入口：
+
+- **写作**：章节树（新建 / 改名 / 删除 / 上下移动）、正文编辑与自动保存、
+  全书查找替换、AI 续写 / 扩写 / 润色 / 审稿 / 起名 / 自由问答
+  （用的是同一套提示词方案与 API 配置）
+- **设定与资料**：五项设定、设定集 12 章、人物卡与出场统计、参考文献库、快照回滚、写作统计
+- **正文排版**：字体（预设 + 自定义字体栈）、字号 12–30、行距 1.2–3、字距 0–0.2，
+  下方实时预览。配置按账户存在各自的 `typo.json`——**这是网页端专有的**，
+  桌面端走 WPF 字体体系，不吃这套参数
+- **作品管理**：新建 / 打开 / 删除整本书。删除进**回收站**而不是真删——整本书
+  （`.tdxproj` / `.bak` / `.chat` / `.snapshots`）移进书库父目录的
+  `.trash/<时间戳>__<书名>/`，并留一份 `_删除信息.txt`；导出文件与共享的 AI 记忆不动
+- **跟 agent 协同**：agent 通过 MCP 改稿时页面实时跟随（切到那一章、刷新正文），
+  状态栏常驻「MCP 跟随」开关，不想被打断就关掉；agent 新建或删除作品时会推
+  `books-changed`，书库列表自己更新，**不用手动刷新页面**
+
+### 为什么要单独做开机自启
+
+它是个 ASP.NET Core 服务，平时靠 `dotnet run` 手动拉起来，
 一重启电脑就没了——外部设备全部断连。所以配了 `web-service.bat`，把它发布成独立目录
 再挂上自启，开机进桌面后自动在后台跑起来。
 
@@ -692,9 +726,11 @@ web-service.bat start / stop / log
 
 - **自用**：你自己的账号，书库与 MCP / 桌面端是同一份（`paths.json` 指过去），
   「你在网页上写、agent 通过 MCP 改同一本书」这条主线不断。
-- **试用**：给朋友试的。密码在帮助页可见（每 10 天自动轮换），登录时自己取一个
+- **试用**：给朋友试的。密码在帮助页可见、默认每 10 天轮换一次，登录时自己取一个
   **四位个人码**区分使用者；每个码一套独立书库（`D:\TdxClaw\trial-<码>`）与 AI 配置——
   自用与试用、试用与试用之间互不可见，试用者的书 agent 也看不到。
+  到期不想换密码，就在帮助页点**「续期」**：只把倒计时拨回起点，密码原样不变
+  （真要立刻换一个再用「立即轮换」）。
 
 **同时在线最多 3 个试用**（不同个人码；自用不占名额）。判定口径与操作：
 
@@ -715,6 +751,7 @@ web-service.bat start / stop / log
 | AI 配置（`api_profiles.json`，含 Key） | 全局配置目录（与桌面端共享） | 各自工作区 | 试用者看不到你的 Key，也烧不到你的额度 |
 | **外观**（`appearance.json` + 自定义背景图） | 全局（与桌面端共享） | 各自工作区 | 试用者挑配色/传背景只改自己的那一份 |
 | **界面偏好**（`settings.json`） | 全局（与桌面端共享） | 各自工作区 | 同上，个人偏好不该跨账户 |
+| **正文排版**（`typo.json`） | 全局（网页端专有，桌面端不读） | 各自工作区 | 字号 / 行距 / 字体是阅读习惯，各人各样 |
 | 提示词方案 / 技能 / 润色预设 | 全局（与桌面端共享） | **只读**（能看能用，改不了，写会 403） | 这几样在服务端是进程级单例加载，写进去会直接改到自用 |
 | 账户与试用名额（`accounts.json`） | 全局，只有自用能改 | 只读 | —— |
 
@@ -782,7 +819,7 @@ web-service.bat start / stop / log
 └─ Services/
    ├─ IApiService / OpenAIService / AnthropicService   两种协议的实现
    ├─ StreamingApiServiceBase                          超时/重试/取消保留/续写/预算（两协议共用）
-   ├─ ApiProviders                                     24 家服务商接入参数 + 协议/认证判定
+   ├─ ApiProviders                                     25 家服务商接入参数 + 协议/认证判定
    ├─ ModelCatalog / ModelCacheStore                   拉取真实模型清单 + 缓存
    ├─ AiPrompts / PromptPresets / SystemPromptStore    提示词分层与多方案
    ├─ TokenEstimator / ModelContextCatalog             上下文体积估算 + 模型窗口表
@@ -794,6 +831,8 @@ web-service.bat start / stop / log
    ├─ BibtexParser                                      BibTeX 解析（花括号嵌套容错）
    ├─ LiteratureSearchService                           在线文献检索（OpenAlex / Semantic Scholar，免 Key）
    ├─ NovelSkills                                       技能包：内置/自定义/导入导出/任务命中
+   ├─ BookDeleter                                       整本书移入回收站（越界防护 + 删除信息）
+   ├─ EditorTypography                                 网页正文排版：字体栈白名单 / 字号 / 行距（桌面 + Web + MCP 共用）
    ├─ AiMemoryManager / ChatSessionStore / ChatLogger / ProjectSnapshotManager
    ├─ WritingStatsService                             每日字数与连续天数（按项目统计）
    └─ ApiProfileManager
@@ -804,10 +843,22 @@ MCP 服务器是独立工程，**不重写任何业务逻辑**，全部 ProjectR
 ```
 编辑器.Mcp/
 ├─ Program.cs       入口（--selftest 跑协议自检）
-├─ McpServer.cs     JSON-RPC 2.0 + stdio 主循环 + 28 个工具的 schema
-├─ NovelTools.cs    读写 / 检索 / 导出 + Session（含写前冲突检测）
+├─ McpServer.cs     JSON-RPC 2.0 + stdio 主循环 + 31 个工具的 schema
+├─ NovelTools.cs    读写 / 检索 / 导出 / 删书 + Session（含写前冲突检测）
 ├─ AiTools.cs       ai_write：复用 AiPrompts 与两个 Service，与界面同源
-└─ SelfTest.cs      内置自检（61 项断言）
+└─ SelfTest.cs      内置自检（76 项断言）
+```
+
+网页版与配套：
+
+```
+编辑器.Web/
+├─ Program.cs       ASP.NET Core：全部 /api 端点 + POST /mcp + SignalR + 鉴权（自用 / 试用）
+├─ Services/        多账户（AccountStore）、工作区解析、账户隔离
+└─ wwwroot/         前端（原生 JS，无框架）：app.js / style.css / index.html / fx.js
+
+编辑器.AgentSetup/  给别人的「Agent 接入助手」单文件 exe（登录换令牌 + 写各家客户端配置）
+编辑器.Tests/       单元测试（xUnit）：纯逻辑部分，不需要 GUI
 ```
 
 ---
@@ -861,13 +912,22 @@ MCP 服务器是独立工程，**不重写任何业务逻辑**，全部 ProjectR
 量化掉（实测标准差精确为 0，等于没做）。正确做法是把主题纯色与程序生成的颗粒**合成进同一个画刷**。
 材质系统只是把这个思路推广到六种质感上，并额外支持半透光与高光层。
 
+**网页正文排版单独存 `typo.json`，不塞进 `appearance.json`。** 桌面端的 `AppearanceManager.Save`
+是**全量序列化**——读进来时忽略不认识的字段，再保存时就把它们写没了。往外观文件里加字段，
+用户在桌面端切一次配色，网页端调好的字号行距会被悄悄抹掉。况且桌面端是 WPF 字体体系，
+这组参数对它本来就没有意义。两者的共享策略正好相反：**外观共享（两端同源），排版网页端独占**。
+
+**流式「正在思考」只在第一个增量报一次。** 推理模型的思考是逐段流式返回的，每段都弹一条提示，
+一次审稿能刷出几十行"正在思考"，看着像死循环。现在每个请求只报一次，正文一开始生成就把那行清掉；
+「正在重试」保留——那是真实的状态变化，不是噪声。
+
 ---
 
 ## 测试
 
 ```bash
-dotnet test 编辑器.Tests/编辑器.Tests.csproj     # 43 项单元测试
-./编辑器.Mcp/bin/Debug/net10.0-windows/TdxClaw.Mcp.exe --selftest   # 59 项 MCP 协议自检
+dotnet test 编辑器.Tests/编辑器.Tests.csproj     # 171 项单元测试
+./编辑器.Mcp/bin/Debug/net10.0-windows/TdxClaw.Mcp.exe --selftest   # 76 项 MCP 协议自检
 ```
 
 单元测试覆盖**不需要 GUI 的那部分**——恰恰是最容易出静默错误的地方：
@@ -876,8 +936,11 @@ dotnet test 编辑器.Tests/编辑器.Tests.csproj     # 43 项单元测试
 |---|---|
 | 查找替换的字符串逻辑（`TextSearch`） | 命中不重叠、替换前复核索引是否失效、上下文截取越界 |
 | 写作统计（`WritingStatsService`） | 跨天结算、连续天数从昨天数、删改不倒扣——错了不报错，只是数字悄悄不对 |
-| 章节管理（改名 / 删除 / 重排 / 梗概） | 删章后章号必须连续，章号是唯一定位依据，留空洞就找不到章 |
+| 章节管理（改名 / 删除 / 重排 / 梗概） | 删章后章号必须连续，章号是唯一定位依据，留空洞就找不到章。重排曾按章号排序导致"移动失效"，肉眼看不出来 |
 | 快照与原子写 | 快照必须存的是**改之前**的状态；写盘不能留下半截 JSON |
+| 删书（`BookDeleter`） | 只删该删的那几个文件、必须进回收站、书库外的路径不能被穿越删掉 |
+| 网页排版（`EditorTypographyConfig`） | 字体栈白名单、字号 / 行距 / 字距夹取、非法值回退——前端传什么都不能把页面搞崩 |
+| 账户与试用（`AccountStore`） | 轮换天数口径、"续期不改密码"、试用隔离目录 |
 
 `TextSearch` 是为了可测才从 `FindReplaceWindow` 抽出来的——那段逻辑原本和 WPF 绑死。
 
@@ -887,7 +950,9 @@ dotnet test 编辑器.Tests/编辑器.Tests.csproj     # 43 项单元测试
 
 ## 已知限制
 
-- 仅支持 Windows（WPF）
+- 桌面端仅支持 Windows（WPF）；网页版只要求**服务端**是 Windows，用手机 / 平板 / Mac 的浏览器访问都行
+- 网页版是**自托管**的：没有云端服务，服务跑在你自己的机器上，域名 / 防火墙 / DDNS 得自己配
+  （`web-service.bat` 已经把这套包了大半）
 - 界面改动仍需**渲染成图肉眼确认**（WPF 无头自动化生态薄弱）；材质调参可直接对照
   `docs/preview/` 下的对比图
 - 多语言界面尚未抽象，目前为中文

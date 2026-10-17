@@ -238,34 +238,62 @@ async function refresh() {
 function renderChapters() {
   const ul = $('#chList');
   ul.innerHTML = '';
-  window.__chapters = book?.chapters || [];   // 状态栏要显示「第 N 章 / 共 M 章」
+  const chapters = book?.chapters || [];
+  window.__chapters = chapters;   // 状态栏要显示「第 N 章 / 共 M 章」
   updateStatusBar();
-  (book?.chapters || []).forEach(c => {
-    const li = document.createElement('li');
-    li.innerHTML = `<span>${c.n}. ${escapeHtml(c.title)}</span>` +
-                   `<span class="w">${c.words}</span>` +
-                   `<span class="ops">` +
-                   `<button title="上移" data-op="up">↑</button>` +
-                   `<button title="下移" data-op="down">↓</button>` +
-                   `<button title="删除" class="del" data-op="del">✕</button></span>`;
-    li.onclick = () => openChapter(c.n);
-    li.querySelectorAll('.ops button').forEach(b => {
-      b.onclick = async e => {
-        e.stopPropagation();
-        const op = b.dataset.op;
-        if (op === 'up') await post(`/api/chapter/${c.n}/move`, { delta: -1 });
-        else if (op === 'down') await post(`/api/chapter/${c.n}/move`, { delta: 1 });
-        else {
-          if (!confirm(`确定删除第 ${c.n} 章「${c.title}」？正文不可找回（除非有快照）。`)) return;
-          await del('/api/chapter/' + c.n);
-          if (current === c.n) { current = null; $('#editor').value = ''; }
-        }
-        await refresh();
-      };
+
+  // 分卷：只有启用了长篇结构才分组；否则保持原来的平铺
+  // （论文 / 公文项目的 book.ultra 是 null，永远走 else 分支）
+  const vols = (book?.ultra?.volumes || []).slice().sort((a, b) => a.number - b.number);
+  const groups = [];
+  if (vols.length) {
+    vols.forEach(v => groups.push({
+      label: /^第.+卷/.test(v.title || '') ? v.title : `第${v.number}卷 ${v.title || ''}`.trim(),
+      items: chapters.filter(c => c.volumeId === v.id),
+    }));
+    const loose = chapters.filter(c => !c.volumeId || !vols.some(v => v.id === c.volumeId));
+    if (loose.length) groups.push({ label: '未分卷', items: loose });
+  } else {
+    groups.push({ label: '', items: chapters });
+  }
+
+  groups.forEach(g => {
+    if (g.label && g.items.length) {
+      const head = document.createElement('li');
+      head.className = 'vol-head';
+      head.innerHTML = `<span>${escapeHtml(g.label)}</span>` +
+                       `<span class="w">${g.items.length} 章</span>`;
+      ul.appendChild(head);
+    }
+
+    g.items.forEach(c => {
+      const li = document.createElement('li');
+      li.innerHTML = `<span>${c.n}. ${escapeHtml(c.title)}</span>` +
+                     `<span class="w">${c.words}</span>` +
+                     `<span class="ops">` +
+                     `<button title="上移" data-op="up">↑</button>` +
+                     `<button title="下移" data-op="down">↓</button>` +
+                     `<button title="删除" class="del" data-op="del">✕</button></span>`;
+      li.onclick = () => openChapter(c.n);
+      li.querySelectorAll('.ops button').forEach(b => {
+        b.onclick = async e => {
+          e.stopPropagation();
+          const op = b.dataset.op;
+          if (op === 'up') await post(`/api/chapter/${c.n}/move`, { delta: -1 });
+          else if (op === 'down') await post(`/api/chapter/${c.n}/move`, { delta: 1 });
+          else {
+            if (!confirm(`确定删除第 ${c.n} 章「${c.title}」？正文不可找回（除非有快照）。`)) return;
+            await del('/api/chapter/' + c.n);
+            if (current === c.n) { current = null; $('#editor').value = ''; }
+          }
+          await refresh();
+        };
+      });
+      if (c.n === current) li.classList.add('active');
+      ul.appendChild(li);
     });
-    if (c.n === current) li.classList.add('active');
-    ul.appendChild(li);
   });
+
   fx.stagger(ul);
 }
 
@@ -2241,6 +2269,88 @@ function switchView(v) {
   if (window.fx) fx.glider();          // Tab 指示条滑到新位置
 }
 $$('.tab').forEach(t => t.onclick = () => switchView(t.dataset.view));
+
+// ── 分卷管理（长篇用）──────────────────────────────────────────────
+// 交互刻意做成「卷名 + 章节范围」：网文的分卷本来就是连续的若干章，
+// 让人一章一章去勾归属，比直接填 1-40 麻烦得多。
+let volDraft = [];
+
+const escapeAttr = s => escapeHtml(s ?? '').replace(/"/g, '&quot;');
+
+function newVolDraft() {
+  const total = (window.__chapters || []).length;
+  const last = volDraft.length ? Math.max(...volDraft.map(v => Number(v.to) || 0)) : 0;
+  return {
+    id: '', title: '', goal: '', summary: '',
+    from: Math.min(last + 1, total || 1),
+    to: total || 1,
+  };
+}
+
+function renderVolRows() {
+  const box = $('#volRows');
+  box.innerHTML = '';
+  volDraft.forEach((v, i) => {
+    const row = document.createElement('div');
+    row.className = 'vol-row';
+    row.innerHTML =
+      `<input class="vol-title" placeholder="卷名（如 第一卷 入山）" value="${escapeAttr(v.title)}">` +
+      `<input class="vol-from" type="number" min="1" value="${v.from}" title="起始章">` +
+      `<span class="muted">–</span>` +
+      `<input class="vol-to" type="number" min="1" value="${v.to}" title="结束章">` +
+      `<button type="button" class="vol-del" title="删除这一卷（章节转为未分卷）">✕</button>`;
+    row.querySelector('.vol-title').oninput = e => v.title = e.target.value;
+    row.querySelector('.vol-from').oninput = e => v.from = Number(e.target.value) || 1;
+    row.querySelector('.vol-to').oninput = e => v.to = Number(e.target.value) || 1;
+    row.querySelector('.vol-del').onclick = () => { volDraft.splice(i, 1); renderVolRows(); };
+    box.appendChild(row);
+  });
+  if (!volDraft.length) {
+    box.innerHTML = '<div class="muted">还没有卷。点下面「新建一卷」；不建卷直接保存，章节会保持未分卷。</div>';
+  }
+}
+
+function openVolDlg() {
+  if (!book) return;
+  const chapters = window.__chapters || [];
+  volDraft = (book.ultra?.volumes || []).slice().sort((a, b) => a.number - b.number).map(v => {
+    const items = chapters.filter(c => c.volumeId === v.id);
+    return {
+      id: v.id, title: v.title || '', goal: v.goal || '', summary: v.summary || '',
+      from: items.length ? items[0].n : 1,
+      to: items.length ? items[items.length - 1].n : (chapters.length || 1),
+    };
+  });
+  if (!volDraft.length && chapters.length) volDraft.push(newVolDraft());
+  renderVolRows();
+  $('#volDlg').showModal();
+}
+
+$('#volBtn').onclick = openVolDlg;
+$('#volAddBtn').onclick = () => { volDraft.push(newVolDraft()); renderVolRows(); };
+$('#volSaveBtn').onclick = async () => {
+  const btn = $('#volSaveBtn');
+  btn.disabled = true;
+  try {
+    await post('/api/volumes/set', {
+      volumes: volDraft.map(v => ({
+        id: v.id || null,
+        title: v.title,
+        goal: v.goal,
+        summary: v.summary,
+        from: Number(v.from) || 1,
+        to: Number(v.to) || 1,
+      })),
+    });
+    $('#volDlg').close();
+    await refresh();
+    fx.notice('分卷已保存');
+  } catch (e) {
+    alert('保存失败：' + (e.message || e));
+  } finally {
+    btn.disabled = false;
+  }
+};
 
 $('#addChBtn').onclick = async () => {
   const r = await post('/api/chapter', {});

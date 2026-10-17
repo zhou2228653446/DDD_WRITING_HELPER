@@ -61,6 +61,7 @@
   <aside id="chapters">
     <div class="panel-head">
       <span>章节</span>
+      <button id="volBtn" class="mini" title="分卷管理（按章节范围划分，长篇用）">卷</button>
       <button id="addChBtn" class="mini">+</button>
     </div>
     <ul id="chList"></ul>
@@ -579,6 +580,22 @@
 
 <!-- 打开项目：书库里所有的书，点一条即切换。此前菜单里的「打开项目」
      只是把焦点挪到左上角下拉并打一行提示，等于什么都没做。 -->
+<dialog id="volDlg">
+  <h3>分卷管理</h3>
+  <div class="book-hint">
+    按<b>章节范围</b>划分卷（起止章号都包含）。保存后章节列表会按卷分组；
+    所有卷之外的章节保持「未分卷」。卷的目标与回顾会进 AI 的续写上下文，
+    是长篇里替代「把前几十章正文塞进去」的那一块。
+  </div>
+  <div id="volRows" class="vol-rows"></div>
+  <div class="dlg-btns">
+    <button type="button" id="volAddBtn">＋ 新建一卷</button>
+    <span class="grow"></span>
+    <button type="button" onclick="this.closest('dialog').close()">取消</button>
+    <button type="button" id="volSaveBtn" class="primary">保存</button>
+  </div>
+</dialog>
+
 <dialog id="openBookDlg">
   <h3>打开项目</h3>
   <div id="openBookDir" class="muted"></div>

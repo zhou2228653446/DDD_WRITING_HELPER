@@ -544,7 +544,24 @@ app.MapGet("/api/book", (WorkspaceService ws) =>
             title = c.Title,
             words = c.WordCount,
             summary = c.Summary,
+            // 空串 = 未分卷。前端按它分组；论文/公文项目永远是空串。
+            volumeId = c.VolumeId ?? "",
         }),
+        // 长篇结构：null 表示未启用（前端据此不渲染卷标题，章节列表保持平铺）
+        ultra = p.UltraLong == null ? null : new
+        {
+            enabled = true,
+            volumes = p.UltraLong.Volumes
+                .OrderBy(v => v.Number)
+                .Select(v => new
+                {
+                    id = v.VolumeId,
+                    number = v.Number,
+                    title = v.Title,
+                    goal = v.Goal,
+                    summary = v.Summary,
+                }),
+        },
         outline = p.FullOutline,
         chapterOutline = p.ChapterOutline,
         characters = p.CharacterSettings,
@@ -617,6 +634,62 @@ app.MapPost("/api/chapter/{n:int}/move", async (WorkspaceService ws, int n, Move
 app.MapDelete("/api/chapter/{n:int}", async (WorkspaceService ws, int n) =>
 {
     ws.DeleteChapter(n);
+    await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
+    return Results.Ok(new { ok = true });
+});
+
+// 分卷全量保存：一次提交"卷列表 + 每卷的章节范围"。
+// 全量而不是逐条增删，是因为卷的数量很小（几十个封顶），而"范围重叠"必须整体校验——
+// 逐条改的话，中间状态很容易出现两章同属两卷，而那时候已经写盘了。
+app.MapPost("/api/volumes/set", async (WorkspaceService ws, VolumeSetReq req) =>
+{
+    var p = ws.Current;
+    if (p == null) return Results.BadRequest(new { error = "还没打开一本书。" });
+
+    var specs = (req.Volumes ?? new List<VolumeSpecReq>()).OrderBy(s => s.From).ToList();
+
+    foreach (var s in specs)
+    {
+        if (s.From < 1 || s.To < s.From)
+            return Results.BadRequest(new { error = $"章节范围不合法：{s.From}-{s.To}" });
+        if (s.To > p.Chapters.Count)
+            return Results.BadRequest(new { error = $"章节范围超出全书章数（共 {p.Chapters.Count} 章）。" });
+    }
+
+    var used = new HashSet<int>();
+    foreach (var s in specs)
+        for (int i = s.From; i <= s.To; i++)
+            if (!used.Add(i))
+                return Results.BadRequest(new { error = $"第 {i} 章同时落在两个卷里。" });
+
+    var cfg = p.EnableUltraLong();
+    var byId = cfg.Volumes.ToDictionary(v => v.VolumeId, StringComparer.Ordinal);
+    var rebuilt = new List<Volume>();
+
+    for (int i = 0; i < specs.Count; i++)
+    {
+        var s = specs[i];
+        var v = !string.IsNullOrEmpty(s.Id) && byId.TryGetValue(s.Id!, out var old) ? old : new Volume();
+        v.Number = i + 1;
+        v.Title = string.IsNullOrWhiteSpace(s.Title) ? $"第{v.Number}卷" : s.Title!.Trim();
+        v.Goal = s.Goal?.Trim() ?? "";
+        v.Summary = s.Summary?.Trim() ?? "";
+        rebuilt.Add(v);
+    }
+
+    cfg.Volumes = rebuilt;
+
+    // 先清空再按范围挂：不在任何卷里的章节保持"未分卷"，不会残留在旧卷上
+    foreach (var c in p.Chapters) c.VolumeId = null;
+    for (int i = 0; i < specs.Count; i++)
+    {
+        var s = specs[i];
+        foreach (var c in p.Chapters)
+            if (c.ChapterNumber >= s.From && c.ChapterNumber <= s.To)
+                c.VolumeId = rebuilt[i].VolumeId;
+    }
+
+    p.Save();
     await ws.BroadcastAsync("project-changed", new { stamp = StampToken.From(ws.Stamp()) });
     return Results.Ok(new { ok = true });
 });
@@ -976,6 +1049,16 @@ static string BuildReviewFacts(NovelProject p)
     return sb.ToString();
 }
 
+/// <summary>
+/// 超长篇的动态上下文（卷目标 / 主角状态 / 本章角色 / 近期前情）。
+/// 未启用时返回空串——调用方见到空串就走原来的 <c>BuildPriorChapterBrief</c>，
+/// 论文/公文的章节梗概链一字不变。
+/// </summary>
+static string UltraDynamic(NovelProject? p, Chapter? chapter)
+    => p is { } book && book.HasUltraLong && chapter != null
+        ? ContextAssembler.BuildDynamic(book, chapter.ChapterNumber)
+        : "";
+
 static (string TaskKey, string UserPrompt, string? ApplyField, string? ApplyLabel) BuildAiPrompt(
     string task, NovelProject? p, int? targetChapter, string requirement, string? polishStyle, string? scaleHint)
 {
@@ -991,9 +1074,15 @@ static (string TaskKey, string UserPrompt, string? ApplyField, string? ApplyLabe
         case "continue":
         {
             var user = AiPrompts.Section($"待续写的正文{chapterLabel}", chapterContent);
-            var prior = p == null || chapter == null ? "" : p.BuildPriorChapterBrief(chapter.ChapterNumber, true);
-            if (!string.IsNullOrWhiteSpace(prior))
-                user += "\n" + AiPrompts.Section("前情梗概与上章末尾（供衔接）", prior);
+            var dyn = UltraDynamic(p, chapter);
+            if (!string.IsNullOrWhiteSpace(dyn))
+                user += "\n" + AiPrompts.Section("本章动态上下文（卷目标 / 当前状态 / 登场角色 / 近期前情）", dyn);
+            else
+            {
+                var prior = p == null || chapter == null ? "" : p.BuildPriorChapterBrief(chapter.ChapterNumber, true);
+                if (!string.IsNullOrWhiteSpace(prior))
+                    user += "\n" + AiPrompts.Section("前情梗概与上章末尾（供衔接）", prior);
+            }
             if (input.Length > 0) user += $"\n{input}";
             return ("continue", user, null, null);
         }
@@ -1009,9 +1098,18 @@ static (string TaskKey, string UserPrompt, string? ApplyField, string? ApplyLabe
             user += "\n" + AiPrompts.Section("设定集与项目设定（比对基准）", facts.Length > 0
                 ? facts
                 : "（作者还没有维护设定集。只做前后文与常识层面的检查，涉及设定一致性的结论一律标「存疑」。）");
-            var prior = p.BuildPriorChapterBrief(chapter.ChapterNumber, true);
-            if (!string.IsNullOrWhiteSpace(prior))
-                user += "\n" + AiPrompts.Section("前情梗概与上章末尾（供跨章比对）", prior);
+            var dyn = UltraDynamic(p, chapter);
+            if (!string.IsNullOrWhiteSpace(dyn))
+            {
+                user += "\n" + AiPrompts.Section(
+                    "本章动态上下文（卷目标 / 当前状态 / 登场角色 / 近期前情）", dyn);
+            }
+            else
+            {
+                var prior = p.BuildPriorChapterBrief(chapter.ChapterNumber, true);
+                if (!string.IsNullOrWhiteSpace(prior))
+                    user += "\n" + AiPrompts.Section("前情梗概与上章末尾（供跨章比对）", prior);
+            }
             return ("review", user, null, null);
         }
 
@@ -2393,6 +2491,18 @@ static IResult GlobalConfigReadOnly() =>
 public record BookNameReq([property: JsonPropertyName("name")] string? Name);
 public record NameReq([property: JsonPropertyName("name")] string? Name);
 public record MoveReq([property: JsonPropertyName("delta")] int Delta);
+
+/// <summary>分卷的一条：范围是章节号闭区间。id 为空表示新建。</summary>
+public record VolumeSpecReq(
+    [property: JsonPropertyName("id")] string? Id,
+    [property: JsonPropertyName("title")] string? Title,
+    [property: JsonPropertyName("goal")] string? Goal,
+    [property: JsonPropertyName("summary")] string? Summary,
+    [property: JsonPropertyName("from")] int From,
+    [property: JsonPropertyName("to")] int To);
+
+public record VolumeSetReq(
+    [property: JsonPropertyName("volumes")] List<VolumeSpecReq>? Volumes);
 public record SaveChapterReq(
     [property: JsonPropertyName("content")] string? Content,
     [property: JsonPropertyName("stamp")] string? Stamp);

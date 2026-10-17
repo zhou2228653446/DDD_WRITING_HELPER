@@ -108,6 +108,28 @@ aside,section{overflow:auto}
 #chList .ops button:hover{color:var(--accent)}
 #chList .ops button.del:hover{color:var(--danger)}
 #chList .ops + .w{opacity:0}
+
+/* 分卷：章节列表里的卷标题行。只在启用长篇结构（book.ultra 非空）时渲染，
+   论文/公文项目的列表里永远看不到它。 */
+#chList .vol-head{
+  position:sticky;top:0;z-index:1;
+  display:flex;justify-content:space-between;align-items:baseline;
+  padding:9px 10px 4px;margin-top:4px;
+  font-size:11px;letter-spacing:.04em;color:var(--muted);
+  background:var(--panel);border-bottom:1px solid var(--line);
+  cursor:default;
+}
+#chList .vol-head:hover{background:var(--panel)}
+#chList .vol-head:first-child{margin-top:0}
+
+/* 分卷管理对话框：卷名 + 起止章号 + 删除 */
+.vol-rows{display:flex;flex-direction:column;gap:8px;margin:12px 0;max-height:46vh;overflow:auto}
+.vol-row{display:flex;align-items:center;gap:6px}
+.vol-row .vol-title{flex:1;min-width:0}
+.vol-row .vol-from,.vol-row .vol-to{width:66px;text-align:center}
+.vol-row .vol-del{border:none;background:transparent;color:var(--muted);cursor:pointer;padding:0 4px}
+.vol-row .vol-del:hover{color:var(--danger)}
+
 .mini{
   border:none;background:transparent;color:var(--muted);cursor:pointer;
   font-size:16px;line-height:1;padding:0 4px;

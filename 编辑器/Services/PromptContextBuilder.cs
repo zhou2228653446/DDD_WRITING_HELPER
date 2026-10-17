@@ -18,7 +18,9 @@ public static class PromptContextBuilder
         return AiPrompts.BuildContextBlock(
             project.FullOutline,
             project.ChapterOutline,
-            project.BuildEffectiveCharacterSettings(),
+            // ★ 角色段的收口点：未启用长篇结构时返回的就是原来的全量人物设定，
+            //   论文/公文项目的「研究对象」「事项要素」不受影响。启用后只留 Core。
+            ContextAssembler.BuildStableCharacters(project),
             project.BackgroundSettings,
             project.WritingStyle,
             memory,

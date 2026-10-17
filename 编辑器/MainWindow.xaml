@@ -285,6 +285,8 @@
                                     <Separator/>
                                     <MenuItem Header="上移" Click="MoveChapterUp_Click"/>
                                     <MenuItem Header="下移" Click="MoveChapterDown_Click"/>
+                                    <Separator/>
+                                    <MenuItem Header="分卷管理…" Click="ManageVolumes_Click"/>
                                 </ContextMenu>
                             </TreeView.ContextMenu>
                         </TreeView>

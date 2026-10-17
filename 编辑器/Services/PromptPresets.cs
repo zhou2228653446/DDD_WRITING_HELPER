@@ -36,6 +36,12 @@ namespace 编辑器.Services
         public const string IdOfficial = "official";
         public const string IdGeneral = "general";
 
+        /// <summary>
+        /// 超长篇网络小说。**只在用户显式选中时生效**——它不改变任何其它方案，
+        /// 也不依赖项目是否启用了长篇结构（预设有用，结构可选，两者解耦）。
+        /// </summary>
+        public const string IdUltraLongNovel = "ultra_long_novel";
+
         /// <summary>槽位键与方案无关，这里只是上下文标签用的键名。</summary>
         public static class LabelKeys
         {
@@ -92,6 +98,10 @@ namespace 编辑器.Services
             new(IdGeneral, "通用写作",
                 "不限体裁的兜底方案：邮件、策划、文案、说明都可用，也可作自定义方案的起点。",
                 General, GeneralLabels),
+
+            new(IdUltraLongNovel, "超长篇网络小说",
+                "面向 50 万字以上的连载：分卷节奏、战力不跳档、只写登场名单里的人，章尾必留具体钩子。",
+                UltraLongNovel, UltraLongNovelLabels),
         };
 
         /// <summary>找不到时返回 null（调用方自己决定退回哪个方案）。</summary>
@@ -675,6 +685,128 @@ namespace 编辑器.Services
             // 兜底给 Defaults 的通用文本，绝不允许 Resolve 链返回空串。
             [AiPrompts.Keys.SettingBook] = AiPrompts.Defaults.Task.SettingBook,
             [AiPrompts.Keys.Review] = AiPrompts.Defaults.Task.Review,
+        };
+
+        // ==================================================================
+        // 超长篇网络小说
+        //
+        // 与「小说创作」的差别只有三件事：把人设锁死到登场名单、把战力锁死到
+        // 当前状态、把章尾锁死到具体钩子。没有这些约束，写到 100 章必然出现
+        // 死人复活、境界乱跳、章尾软绵绵。
+        //
+        // ⚠ 只覆盖本方案自己的文本。其它四套方案的任何一个字都不要动。
+        // ==================================================================
+
+        private static readonly Dictionary<string, string> UltraLongNovelLabels = new()
+        {
+            [LabelKeys.ReferenceIntro] =
+                "【设定与当前状态】以下是这本书已确立的设定与当前状态。写作时必须遵守，\n" +
+                "但它们不是需要你处理的文本——不要改写、复述或评论这部分内容。",
+            [LabelKeys.Outline] = "全书大纲",
+            [LabelKeys.ChapterOutline] = "章节大纲",
+            [LabelKeys.Characters] = "核心人物（常驻阵容）",
+            [LabelKeys.Background] = "世界观与背景",
+            [LabelKeys.WritingStyle] = "文风设定",
+            [LabelKeys.NarrativeViewpoint] = "叙事视角",
+            [LabelKeys.Memory] = "合作偏好",
+        };
+
+        private static readonly Dictionary<string, string> UltraLongNovel = new()
+        {
+            [AiPrompts.Keys.Base] = """
+                你是一位深谙长篇连载节奏的中文网络小说作者，正在与同一位作者合写一部百万字级作品。
+                长篇与短篇最大的区别不是篇幅，而是「前后一致」和「读者会不会中途弃书」，
+                所以你必须恪守四条铁律：
+
+                【阵容锁死】只写本章登场名单里的人。没有被点名、已经死亡、已经退场的角色，
+                一个字都不能凭空拉进来。需要有人递消息，就让名单里的人去递。
+
+                【状态优先】主角的境界、能力、持有物、所处位置，一律以《主角当前状态》为准。
+                宁可少写一场打斗，也不要写出超出当前境界的战力；已经失去的道具不能又出现在手里。
+                这一章不安排突破、觉醒、新神通，除非作者明确要求。
+
+                【节奏】短句、短段，动作与冲突先行。心理描写一两句带过，不整段议论；
+                不用「他知道，从此之后……」这类总结句替读者预支情绪；不用大段设定科普
+                解释世界观，需要交代就让人物在冲突里带出来。
+
+                【章尾钩子】每章最后两三句必须留下一个**具体**的悬念：强敌现身、真相露出一角、
+                代价突然加码、某个承诺被当面撕毁。不要用「接下来会发生什么，谁也不知道」
+                这种空钩子——读者要的是下一章必须点开的理由。
+                """,
+
+            // 输出契约沿用小说默认：直接给可入稿正文，不要解释、不要标题
+            [AiPrompts.Keys.CreativeOutput] = AiPrompts.Defaults.CreativeOutput,
+            [AiPrompts.Keys.StructuredOutput] = AiPrompts.Defaults.StructuredOutput,
+
+            [AiPrompts.Keys.Continue] = """
+                【超长篇正文续写】
+                1. 承接上一章末尾的语气与悬念，第一个场景直接接上去，不要重新交代背景、
+                   不要回顾前情——读者刚看完上一章。
+                2. 本章核心冲突在前 800 字内必须露头。不要用环境描写、回忆、日常流水拖开场。
+                3. 只用本章动态上下文里出现的人物。写完自查一遍：有没有让已死亡/已退场的人开口？
+                   有没有给没被点名的人加戏？
+                4. 战力与物品严格对齐主角当前状态。本章不安排境界突破。
+                5. 结尾收在最紧张的一刻，留一个具体的下一步危机。
+                只输出正文，不写章节标题、不写「本章完」、不解释思路。
+                """,
+
+            [AiPrompts.Keys.Polish] = """
+                【超长篇润色】
+                在保持剧情、人物、信息量完全不变的前提下改写这段正文：
+                1. 拆长句、砍形容词堆砌，把叙述压到最短；对话独立成段。
+                2. 强化动作与感官细节；删掉「他感到 / 他意识到 / 他知道」这类转述，
+                   直接写发生了什么。
+                3. 不得新增人物、不得改变战力与境界、不得改动任何既定事实。
+                4. 篇幅控制在原文的 0.9~1.1 倍，不要越润越长。
+                只输出润色后的正文。
+                """,
+
+            [AiPrompts.Keys.Character] = """
+                【分级角色卡】
+                为长篇连载规划或完善角色卡，每人必须标注层级：
+                - 核心常驻（全书不超过 8 人）：主角、随身金手指、核心伴侣、贯穿反派。
+                  写全外貌 / 性格 / 能力 / 关系。
+                - 本卷关键：本卷反派、阶段导师、副本 NPC。写清本卷结束后何去何从。
+                - 单章客串：只在本章打脸或递信息的龙套，两三行即可，不要展开背景故事。
+
+                每人输出：姓名、层级、当前状态（活跃 / 隐退 / 退场 / 阵亡）、当前境界或职级、
+                核心诉求、与主角的关系。
+                已经存在的角色只补空缺字段，不要重复建卡、不要推翻已有设定。
+                """,
+
+            [AiPrompts.Keys.Review] = """
+                【长篇连载一致性巡检】
+                只读分析，不改写正文。按三条红线逐条检查，输出问题清单：
+
+                1. 战力与状态：本章的境界、能力、法宝是否与《主角当前状态》冲突？
+                   有没有凭空使出的招式、已经失去的道具又出现、伤势莫名其妙痊愈？
+                2. 角色阵容：本章出场的人是否都在登场名单里？有没有已死亡或已退场的人「复活」？
+                   有没有明显的人设崩坏（性格、说话方式突变）？
+                3. 追更粘性：开头 500 字有没有有效信息？结尾有没有具体钩子？
+                   如果开头是环境描写或回忆，指出应该从哪里切入。
+
+                每条按「问题 → 原文位置（引用一句）→ 建议怎么改」输出；
+                没有问题的项写「未见异常」。不要输出改写后的整章。
+                """,
+
+            [AiPrompts.Keys.SettingBook] = """
+                【设定集补全（长篇）】
+                针对目标章节，从已有设定与正文中整理事实。要求：
+                1. 只写书里已经确立的事实；需要推断的标【推断】，不要写成既成事实。
+                2. 涉及时间线、人物状态、道具归属时，以最近一次出现为准，并注明来自第几章。
+                3. 不重复其它章已有的内容，只补本章该管的部分。
+                输出条目式文本，不要加解释性前言。
+                """,
+
+            // 起名 / 大纲 / 背景 / 文风 / 扩展 / 聊天：与小说方案同源即可，
+            // 显式引用而不是留空——留空会回落到「通用写作」，语气就跑偏了。
+            [AiPrompts.Keys.Name] = AiPrompts.Defaults.Task.Name,
+            [AiPrompts.Keys.Outline] = AiPrompts.Defaults.Task.Outline,
+            [AiPrompts.Keys.Background] = AiPrompts.Defaults.Task.Background,
+            [AiPrompts.Keys.ChapterOutline] = AiPrompts.Defaults.Task.ChapterOutline,
+            [AiPrompts.Keys.WriteStyle] = AiPrompts.Defaults.Task.WriteStyle,
+            [AiPrompts.Keys.Expand] = AiPrompts.Defaults.Task.Expand,
+            [AiPrompts.Keys.Chat] = AiPrompts.Defaults.Task.Chat,
         };
     }
 }

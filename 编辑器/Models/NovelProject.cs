@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 
@@ -202,10 +203,21 @@ namespace 编辑器
         /// 汇总「人物设定」自由文本与结构化人物卡（<see cref="Characters"/>）。
         /// 解决 agent 或作者只维护了人物卡、未手写自由文本时 AI 续写看不见角色设定的断层。
         /// </summary>
-        public string BuildEffectiveCharacterSettings()
+        public string BuildEffectiveCharacterSettings() => BuildCharacterSettings(Characters);
+
+        /// <summary>
+        /// 按给定集合渲染人物设定（自由文本 + 结构化卡）。
+        ///
+        /// 抽出来是为了让超长篇的"只注入 Core""只注入本章角色"复用**同一套格式**——
+        /// 两处各写一份渲染，迟早一边多一个字段、另一边少一个，agent 和界面就不同源了。
+        ///
+        /// <paramref name="characters"/> 为空集合时只返回自由文本（与原来的行为一致）。
+        /// </summary>
+        public string BuildCharacterSettings(IEnumerable<Character>? characters)
         {
             var freeText = CharacterSettings?.Trim() ?? "";
-            if (Characters == null || Characters.Count == 0)
+            var list = characters?.ToList() ?? new List<Character>();
+            if (list.Count == 0)
                 return freeText;
 
             var sb = new System.Text.StringBuilder();
@@ -216,7 +228,7 @@ namespace 编辑器
                 sb.AppendLine("【结构化人物卡】");
             }
 
-            foreach (var c in Characters)
+            foreach (var c in list)
             {
                 if (string.IsNullOrWhiteSpace(c.Name)) continue;
                 var tags = new List<string>();
@@ -311,6 +323,58 @@ namespace 编辑器
 
             return sb.ToString().Trim();
         }
+
+        // ══════════════════════════════════════════════════════════════════
+        // 分卷查询：卷归属只认 Chapter.VolumeId，这里全部现算，不存冗余清单
+        // ══════════════════════════════════════════════════════════════════
+
+        /// <summary>超长篇结构是否启用（null = 未启用，论文/公文项目的常态）。</summary>
+        [System.Text.Json.Serialization.JsonIgnore]
+        public bool HasUltraLong => UltraLong != null;
+
+        /// <summary>
+        /// 某卷的章节，按章号升序。volumeId 为空时返回"没有有效卷"的章节——
+        /// 包括 VolumeId 为空、以及指向一个已被删掉的卷（手改 JSON 或旧数据都可能出现，
+        /// 那种章在界面上必须能找得到，否则就"消失"了）。
+        /// </summary>
+        public List<Chapter> ChaptersOfVolume(string? volumeId)
+        {
+            if (string.IsNullOrEmpty(volumeId))
+            {
+                var validIds = UltraLong?.Volumes
+                    .Select(v => v.VolumeId)
+                    .ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
+
+                return Chapters
+                    .Where(c => string.IsNullOrEmpty(c.VolumeId) || !validIds.Contains(c.VolumeId!))
+                    .OrderBy(c => c.ChapterNumber)
+                    .ToList();
+            }
+
+            return Chapters
+                .Where(c => string.Equals(c.VolumeId ?? "", volumeId, StringComparison.Ordinal))
+                .OrderBy(c => c.ChapterNumber)
+                .ToList();
+        }
+
+        /// <summary>某章所在的卷；未分卷或卷已被删时返回 null。</summary>
+        public Volume? VolumeOfChapter(Chapter chapter)
+            => VolumeOfChapter(chapter.ChapterNumber);
+
+        public Volume? VolumeOfChapter(int chapterNumber)
+        {
+            if (UltraLong == null) return null;
+            var c = Chapters.FirstOrDefault(x => x.ChapterNumber == chapterNumber);
+            if (c == null || string.IsNullOrEmpty(c.VolumeId)) return null;
+            return UltraLong.Volumes.FirstOrDefault(v =>
+                string.Equals(v.VolumeId, c.VolumeId, StringComparison.Ordinal));
+        }
+
+        /// <summary>下一个可用的卷序号（现有最大值 + 1）。</summary>
+        public int NextVolumeNumber()
+            => UltraLong == null || UltraLong.Volumes.Count == 0
+                ? 1
+                : UltraLong.Volumes.Max(v => v.Number) + 1;
     }
 
     public class WorldSetting
@@ -337,6 +401,45 @@ namespace 编辑器
         public string Abilities { get; set; } = "";
         public string Relationships { get; set; } = "";
         public string Notes { get; set; } = "";
+
+        // ── 以下仅长篇增强结构启用时参与上下文筛选与注入 ──────────────────
+        // ★ 全部带 WhenWritingDefault：未启用时这些字段不进任何文体的文件。
+        //   论文/公文项目的 Characters 里存的是"研究对象/事项要素"，不该多出
+        //   "scope: Arc" 这种小说字段（PaperBaselineTests 逐字节盯着）。
+
+        /// <summary>生命周期层级。默认 Arc——既不全局注入，也不会从上下文里消失。</summary>
+        [System.Text.Json.Serialization.JsonIgnore(
+            Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+        public CharacterScope Scope { get; set; } = CharacterScope.Arc;
+
+        /// <summary>当前状态（存活/隐匿/退场/阵亡）。</summary>
+        [System.Text.Json.Serialization.JsonIgnore(
+            Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+        public CharacterStatus Status { get; set; } = CharacterStatus.Active;
+
+        /// <summary>当前境界 / 职级 / 阶段（如「筑基中期」）。视角主角才注入。</summary>
+        [System.Text.Json.Serialization.JsonIgnore(
+            Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        public string? CurrentRealm { get; set; }
+
+        /// <summary>一句话当前处境（在哪、正在干什么）。</summary>
+        [System.Text.Json.Serialization.JsonIgnore(
+            Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        public string? CurrentSituation { get; set; }
+
+        /// <summary>当前目标。压住"写着写着跑偏"。</summary>
+        [System.Text.Json.Serialization.JsonIgnore(
+            Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        public string? CurrentGoal { get; set; }
+
+        /// <summary>
+        /// 关键道具 / 法宝 / 数据资产。
+        /// ★ 默认 null 而不是空 List：空 List 不是 default，WhenWritingDefault 管不住它，
+        ///   会照样写一个 `[]` 出来。读取方一律用 <c>?? Array.Empty</c> 兜底。
+        /// </summary>
+        [System.Text.Json.Serialization.JsonIgnore(
+            Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        public List<string>? KeyItems { get; set; }
     }
 
     public class Chapter : INotifyPropertyChanged
@@ -378,6 +481,20 @@ namespace 编辑器
         public DateTime ModifiedDate { get; set; } = DateTime.Now;
         public DateTime LastModified { get; set; } = DateTime.Now;
         public List<string> CharacterIds { get; set; } = new List<string>();
+
+        /// <summary>
+        /// 所属卷的 VolumeId；null / 空串 = 未分卷。
+        ///
+        /// ★ 这是卷与章**唯一**的归属依据。Volume 里刻意不存 ChapterNumbers：
+        ///   两份清单必然漂移，漂移时没人知道该信哪份。
+        /// ★ 章号不受分卷影响，仍然是全书连续的 1..N（见 RenumberChapters）。
+        /// ★ 类型用 string? 而不是 ""：空字符串不是 default，WhenWritingDefault
+        ///   管不住它，会照样写一行 "VolumeId": "" 进每个文体的文件。
+        /// </summary>
+        [System.Text.Json.Serialization.JsonIgnore(
+            Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        public string? VolumeId { get; set; }
+
         public string SceneSetting { get; set; } = "";
     }
 }

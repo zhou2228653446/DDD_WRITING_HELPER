@@ -900,9 +900,18 @@ namespace 编辑器
             var userPrompt = AiPrompts.Section($"待续写的正文（第{chapter.ChapterNumber}章 {chapter.Title}）", chapter.Content);
             if (_currentProject != null)
             {
-                var prior = _currentProject.BuildPriorChapterBrief(chapter.ChapterNumber, includePrevTail: true);
-                if (!string.IsNullOrWhiteSpace(prior))
-                    userPrompt += "\n" + AiPrompts.Section("前情梗概与上章末尾（供衔接）", prior);
+                var dyn = BuildUltraDynamic(chapter.ChapterNumber);
+                if (!string.IsNullOrWhiteSpace(dyn))
+                {
+                    userPrompt += "\n" + AiPrompts.Section(
+                        "本章动态上下文（卷目标 / 当前状态 / 登场角色 / 近期前情）", dyn);
+                }
+                else
+                {
+                    var prior = _currentProject.BuildPriorChapterBrief(chapter.ChapterNumber, includePrevTail: true);
+                    if (!string.IsNullOrWhiteSpace(prior))
+                        userPrompt += "\n" + AiPrompts.Section("前情梗概与上章末尾（供衔接）", prior);
+                }
             }
             if (!string.IsNullOrEmpty(requirement))
                 userPrompt += $"\n{requirement}";
@@ -2105,6 +2114,94 @@ namespace 编辑器
             ShowNotification("对话记忆已清空");
         }
 
+        /// <summary>
+        /// 分卷管理：用「卷名|起始章-结束章」的文本一次编辑全部卷。
+        ///
+        /// 桌面端章节树保持两层（不插卷节点）：加一层会动到选中项的类型判断，
+        /// 牵连新建/重命名/删除/双击/取当前章全部路径，风险远大于收益。
+        /// 卷的阅读收益体现在导出目录与 Web 端分组；这里只负责把结构编辑对。
+        /// </summary>
+        private void ManageVolumes_Click(object sender, RoutedEventArgs e)
+        {
+            if (_currentProject == null) return;
+            var p = _currentProject;
+
+            var existing = p.UltraLong?.Volumes ?? new List<Volume>();
+            var seed = string.Join("\n", existing.OrderBy(v => v.Number).Select(v =>
+            {
+                var items = p.ChaptersOfVolume(v.VolumeId);
+                var range = items.Count == 0 ? "1-1" : $"{items[0].ChapterNumber}-{items[^1].ChapterNumber}";
+                return $"{v.Title}|{range}";
+            }));
+
+            var input = ShowInputDialog("分卷管理",
+                "每行一卷，格式：卷名|起始章-结束章\n例如：第一卷 入山|1-40\n留空并确定 = 取消全部分卷。",
+                seed);
+            if (input == null) return;
+
+            var specs = new List<(string Title, int From, int To)>();
+            foreach (var raw in input.Split('\n'))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0) continue;
+
+                var bar = line.LastIndexOf('|');
+                if (bar <= 0)
+                {
+                    MessageBox.Show($"格式不对：{line}\n应为「卷名|起始章-结束章」", "分卷管理");
+                    return;
+                }
+
+                var range = line[(bar + 1)..].Trim().Split('-');
+                if (range.Length != 2
+                    || !int.TryParse(range[0], out var from)
+                    || !int.TryParse(range[1], out var to)
+                    || from < 1 || to < from)
+                {
+                    MessageBox.Show($"章节范围不对：{line}", "分卷管理");
+                    return;
+                }
+
+                specs.Add((line[..bar].Trim(), from, to));
+            }
+
+            var used = new HashSet<int>();
+            foreach (var s in specs)
+                for (int i = s.From; i <= s.To; i++)
+                    if (!used.Add(i))
+                    {
+                        MessageBox.Show($"第 {i} 章同时落在两个卷里，请调整范围。", "分卷管理");
+                        return;
+                    }
+
+            TakeSnapshot("调整分卷前");
+
+            var cfg = p.EnableUltraLong();
+            var byTitle = new Dictionary<string, Volume>(StringComparer.Ordinal);
+            foreach (var v in cfg.Volumes) byTitle.TryAdd(v.Title, v);
+
+            var rebuilt = new List<Volume>();
+            for (int i = 0; i < specs.Count; i++)
+            {
+                var s = specs[i];
+                var v = byTitle.TryGetValue(s.Title, out var old) ? old : new Volume();
+                v.Number = i + 1;
+                v.Title = string.IsNullOrWhiteSpace(s.Title) ? $"第{v.Number}卷" : s.Title;
+                rebuilt.Add(v);
+            }
+            cfg.Volumes = rebuilt;
+
+            foreach (var c in p.Chapters) c.VolumeId = null;
+            for (int i = 0; i < specs.Count; i++)
+                foreach (var c in p.Chapters)
+                    if (c.ChapterNumber >= specs[i].From && c.ChapterNumber <= specs[i].To)
+                        c.VolumeId = rebuilt[i].VolumeId;
+
+            p.Save();
+            RefreshProjectView();
+            ShowNotification(rebuilt.Count == 0 ? "已取消全部分卷" : $"已保存 {rebuilt.Count} 卷");
+        }
+
         private void RefreshProjectView()
         {
             if (_currentProject != null)
@@ -2408,10 +2505,21 @@ namespace 编辑器
                     "（作者还没有维护设定集。只做前后文与常识层面的检查，涉及设定一致性的结论一律标「存疑」。）"));
 
             // 前情链：优先使用章节梗概 + 紧邻上章末尾，帮 AI 看见跨章矛盾与上下文承接。
-            var priorBrief = _currentProject.BuildPriorChapterBrief(chapter.ChapterNumber, includePrevTail: true);
-            if (!string.IsNullOrWhiteSpace(priorBrief))
+            // 超长篇启用后换成"卷摘要 + 状态 + 本章角色 + 近期梗概"的动态块——
+            // 审稿要判断"境界有没有跳、这个人是不是早就死了"，光有 15 章梗概不够。
+            var ultraDyn = BuildUltraDynamic(chapter.ChapterNumber);
+            if (!string.IsNullOrWhiteSpace(ultraDyn))
             {
-                userPrompt += "\n" + AiPrompts.Section("前情梗概与上章末尾（供跨章比对）", priorBrief);
+                userPrompt += "\n" + AiPrompts.Section(
+                    "本章动态上下文（卷目标 / 当前状态 / 登场角色 / 近期前情）", ultraDyn);
+            }
+            else
+            {
+                var priorBrief = _currentProject.BuildPriorChapterBrief(chapter.ChapterNumber, includePrevTail: true);
+                if (!string.IsNullOrWhiteSpace(priorBrief))
+                {
+                    userPrompt += "\n" + AiPrompts.Section("前情梗概与上章末尾（供跨章比对）", priorBrief);
+                }
             }
 
             UpdateStatus("正在审稿…");
@@ -2780,6 +2888,18 @@ namespace 编辑器
         {
             return PromptContextBuilder.RelatedChapters(_currentProject, _aiPanel.GetSelectedChapterIds());
         }
+
+        /// <summary>
+        /// 超长篇的动态上下文（卷目标 / 主角状态 / 本章角色 / 近期前情 / 上章尾巴）。
+        ///
+        /// 未启用长篇结构时返回空串——调用方见到空串就走原来的
+        /// <see cref="NovelProject.BuildPriorChapterBrief"/>，论文/公文不受影响。
+        /// ★ 这段必须进 **user**，不能进 system：它每章都变，塞进缓存前缀会让缓存整段失效。
+        /// </summary>
+        private string BuildUltraDynamic(int chapterNumber)
+            => _currentProject is { } p && p.HasUltraLong
+                ? ContextAssembler.BuildDynamic(p, chapterNumber)
+                : "";
 
         /// <summary>
         /// 组装完整的 system 提示词：身份 + 项目设定 + 设定集 + 参考章节 + 本次任务 + 输出契约。

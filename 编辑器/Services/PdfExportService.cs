@@ -159,10 +159,27 @@ namespace 编辑器.Services
                                     .Text("目录").FontSize(20).Bold();
                                 col.Item().PaddingTop(28);
 
+                                // 有分卷时按卷分级：卷名一行加粗，卷内章节缩进；
+                                // 没有卷时与原来的平铺目录完全一致。
+                                var volumes = project.UltraLong?.Volumes ?? new List<Volume>();
+                                string? lastVolumeId = null;
+
                                 foreach (var chapter in project.Chapters)
                                 {
+                                    Volume? vol = null;
+                                    if (!string.IsNullOrEmpty(chapter.VolumeId))
+                                        vol = volumes.FirstOrDefault(v => v.VolumeId == chapter.VolumeId);
+
+                                    if (vol != null && vol.VolumeId != lastVolumeId)
+                                    {
+                                        col.Item().PaddingTop(10).Text(
+                                            Safe($"第{vol.Number}卷　{vol.Title}")).FontSize(13).Bold();
+                                        lastVolumeId = vol.VolumeId;
+                                    }
+
+                                    var indent = vol == null ? "" : "　　";
                                     col.Item().PaddingVertical(5).Text(
-                                        Safe($"第{chapter.ChapterNumber}章　{chapter.Title}")).FontSize(12);
+                                        Safe($"{indent}第{chapter.ChapterNumber}章　{chapter.Title}")).FontSize(12);
                                 }
                             }
                         }

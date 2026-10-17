@@ -50,6 +50,41 @@ namespace 编辑器
     }
 
     /// <summary>
+    /// 角色的生命周期层级。
+    ///
+    /// ★ 默认值必须放在 0 上（<c>Arc = 0</c>），这样 <c>WhenWritingDefault</c> 才能
+    ///   把它省略掉。写成 <c>{ Core, Arc, Guest }</c> 会让 Arc = 1，于是"默认值"
+    ///   反而被写进每个角色的 JSON —— 论文/公文项目也会跟着多一行。
+    /// </summary>
+    public enum CharacterScope
+    {
+        /// <summary>分卷/副本关键人物。默认值：不占全局上下文，本卷或本章才注入。</summary>
+        Arc = 0,
+
+        /// <summary>全局常驻（主角、随身金手指、核心伴侣、贯穿反派）。每轮都注入。</summary>
+        Core = 1,
+
+        /// <summary>单章客串。保留记录（审稿要认得出正文里写的人），但不进全局上下文。</summary>
+        Guest = 2,
+    }
+
+    /// <summary>角色当前状态。顺序同样要让默认值落在 0 上。</summary>
+    public enum CharacterStatus
+    {
+        /// <summary>活跃登场中（默认）。</summary>
+        Active = 0,
+
+        /// <summary>暂未出场 / 幕后。</summary>
+        Inactive = 1,
+
+        /// <summary>已退场（飞升、离队、下线）。</summary>
+        Retired = 2,
+
+        /// <summary>已死亡。上下文里会进"绝不可出场"名单。</summary>
+        Deceased = 3,
+    }
+
+    /// <summary>
     /// 一个剧情卷。
     ///
     /// ★ 卷与章节的关系**只存在 <see cref="Chapter.VolumeId"/> 上**，这里刻意不存

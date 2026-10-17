@@ -112,12 +112,14 @@ namespace 编辑器.Services
         private static string Resolve(string key) => TextFor(ActivePresetId, key);
 
         /// <summary>
-        /// 当前方案的上下文标签（参考资料块里的字段名）。随方案变，
+        /// 上下文标签（参考资料块里的字段名）。随方案变，
         /// 否则论文方案的 system 里会冒出"### 主要人物设定"这种小说字段名。
         /// </summary>
-        public static string Label(string labelKey)
+        /// <param name="presetId">指定方案；null = 当前生效方案（界面/常规调用的默认）。</param>
+        public static string Label(string labelKey, string? presetId = null)
         {
-            var baseId = Store?.ResolveBasePreset(ActivePresetId) ?? DefaultPresetId;
+            var pid = string.IsNullOrWhiteSpace(presetId) ? ActivePresetId : presetId!;
+            var baseId = Store?.ResolveBasePreset(pid) ?? DefaultPresetId;
             return PromptPresets.LabelOf(baseId, labelKey);
         }
 
@@ -501,12 +503,14 @@ namespace 编辑器.Services
         ///   不值得为那点收益冒险。
         /// </summary>
         public static SystemPrompt BuildSections(
-            string task, string? stableContext = null, string? volatileContext = null, string? outputContract = null)
+            string task, string? stableContext = null, string? volatileContext = null, string? outputContract = null,
+            string? presetId = null)
         {
+            var pid = string.IsNullOrWhiteSpace(presetId) ? ActivePresetId : presetId!;
             var prompt = new SystemPrompt(Array.Empty<SystemPromptPart>());
 
             var head = new StringBuilder();
-            head.AppendLine(Base);
+            head.AppendLine(TextFor(pid, Keys.Base));
             if (!string.IsNullOrWhiteSpace(stableContext))
             {
                 head.AppendLine();
@@ -520,7 +524,7 @@ namespace 编辑器.Services
             var tail = new StringBuilder();
             if (!string.IsNullOrWhiteSpace(task))
                 tail.AppendLine(task.Trim());
-            tail.Append((outputContract ?? CreativeOutput).Trim());
+            tail.Append((outputContract ?? TextFor(pid, Keys.CreativeOutput)).Trim());
             prompt = prompt.Append(tail.ToString().Trim(), cacheable: false);
 
             return prompt;
@@ -547,15 +551,16 @@ namespace 编辑器.Services
             string? background,
             string? writingStyle,
             string? memory = null,
-            string? narrativeViewpoint = null)
+            string? narrativeViewpoint = null,
+            string? presetId = null)
         {
             var parts = new List<string>();
 
-            Add(parts, Label(PromptPresets.LabelKeys.Outline), fullOutline);
-            Add(parts, Label(PromptPresets.LabelKeys.ChapterOutline), chapterOutline);
-            Add(parts, Label(PromptPresets.LabelKeys.Characters), characters);
-            Add(parts, Label(PromptPresets.LabelKeys.Background), background);
-            Add(parts, Label(PromptPresets.LabelKeys.WritingStyle), writingStyle);
+            Add(parts, Label(PromptPresets.LabelKeys.Outline, presetId), fullOutline);
+            Add(parts, Label(PromptPresets.LabelKeys.ChapterOutline, presetId), chapterOutline);
+            Add(parts, Label(PromptPresets.LabelKeys.Characters, presetId), characters);
+            Add(parts, Label(PromptPresets.LabelKeys.Background, presetId), background);
+            Add(parts, Label(PromptPresets.LabelKeys.WritingStyle, presetId), writingStyle);
             if (!string.IsNullOrWhiteSpace(narrativeViewpoint))
             {
                 var vp = new StringBuilder();
@@ -563,15 +568,15 @@ namespace 编辑器.Services
                 vp.AppendLine();
                 vp.Append("【硬约束】所有产出必须严格遵循上述视角：只写这个视角能看见、听见、感知到、"
                         + "推断出的内容；不得进入其他人物内心，不得交代该视角不可能知道的信息。");
-                parts.Add($"### {Label(PromptPresets.LabelKeys.NarrativeViewpoint)}（必须遵守）\n{vp}");
+                parts.Add($"### {Label(PromptPresets.LabelKeys.NarrativeViewpoint, presetId)}（必须遵守）\n{vp}");
             }
-            Add(parts, Label(PromptPresets.LabelKeys.Memory), memory);
+            Add(parts, Label(PromptPresets.LabelKeys.Memory, presetId), memory);
 
             if (parts.Count == 0) return "";
 
             var sb = new StringBuilder();
             // 开头说明也随方案变——论文/公文方案下的"设定"不是一个语义
-            sb.AppendLine(Label(PromptPresets.LabelKeys.ReferenceIntro));
+            sb.AppendLine(Label(PromptPresets.LabelKeys.ReferenceIntro, presetId));
             sb.AppendLine();
             sb.Append(string.Join("\n\n", parts));
             return sb.ToString();

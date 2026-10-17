@@ -100,10 +100,29 @@ namespace 编辑器.Services
                 body.AppendChild(CreateParagraph("目录", "SimSun", 28, true,
                     JustificationValues.Center, spaceBefore: 200, spaceAfter: 400));
 
+                // 目录：有分卷时按卷分级（卷名一行，卷内章节缩进），没有卷时保持原样。
+                // 几百万字的稿子导出成 Word，没有卷级目录基本翻不动——这是分卷最直接的收益。
+                var volumes = project.UltraLong?.Volumes ?? new List<Volume>();
+                string? lastVolumeId = null;
+
                 foreach (var chapter in project.Chapters)
                 {
+                    Volume? vol = null;
+                    if (!string.IsNullOrEmpty(chapter.VolumeId))
+                        vol = volumes.FirstOrDefault(v => v.VolumeId == chapter.VolumeId);
+
+                    if (vol != null && vol.VolumeId != lastVolumeId)
+                    {
+                        body.AppendChild(CreateParagraph(
+                            $"第{vol.Number}卷  {vol.Title}",
+                            "SimSun", 14, true, JustificationValues.Left,
+                            spaceBefore: 200, spaceAfter: 80));
+                        lastVolumeId = vol.VolumeId;
+                    }
+
+                    var indent = vol == null ? "" : "    ";
                     body.AppendChild(CreateParagraph(
-                        $"第{chapter.ChapterNumber}章  {chapter.Title}",
+                        $"{indent}第{chapter.ChapterNumber}章  {chapter.Title}",
                         "SimSun", 12, false, JustificationValues.Left,
                         spaceBefore: 60, spaceAfter: 60));
                 }

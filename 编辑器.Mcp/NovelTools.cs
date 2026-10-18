@@ -275,24 +275,65 @@ internal static class NovelTools
         var envProjects = EnvDir("TDXCLAW_PROJECTS_DIR");
         if (envProjects.Length > 0) return envProjects;
 
+        // ⚠ 配置目录可能被 TDXCLAW_CONFIG_DIR 钉在别处（SYSTEM 开机任务就是这种：
+        // %APPDATA% 指向 systemprofile）。只看 %APPDATA% 会读不到 paths.json，
+        // 于是退回下面的兜底路径，而真正的书库一直好端端待在自用目录里
+        // —— 表现为「网页上一本书都没有，但文件明明在」（2026-10-18 实际踩过）。
+        foreach (var cfgDir in ConfigDirsForLookup())
+        {
+            var fromFile = ReadProjectsDirFrom(cfgDir);
+            if (fromFile.Length > 0) return fromFile;
+        }
+
+        // 兜底必须是**绝对路径**。SYSTEM 账号下 MyDocuments 是空串，
+        // Path.Combine("", "TdxClaw", "Projects") 拼出来是相对的 "TdxClaw\Projects"，
+        // 会落到服务的工作目录（发布目录）里，凭空多出一个空书库。
+        return FallbackProjectsDir(
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            AppContext.BaseDirectory);
+    }
+
+    /// <summary>
+    /// 三级兜底拼出默认书库目录。抽成纯函数是为了能测「MyDocuments 为空」这一档——
+    /// 那正是 SYSTEM 账户下的真实情况，普通账号上复现不出来。
+    /// </summary>
+    internal static string FallbackProjectsDir(string? documentsDir, string? userProfileDir, string baseDir)
+    {
+        var root = documentsDir;
+        if (string.IsNullOrWhiteSpace(root)) root = userProfileDir;
+        if (string.IsNullOrWhiteSpace(root)) root = baseDir;
+        return Path.Combine(root!, "TdxClaw", "Projects");
+    }
+
+    /// <summary>可能存放 paths.json 的目录，按优先级：钉死的配置目录 → %APPDATA%\TdxClaw。</summary>
+    private static IEnumerable<string> ConfigDirsForLookup()
+    {
+        var envConfig = EnvDir("TDXCLAW_CONFIG_DIR");
+        if (envConfig.Length > 0) yield return envConfig;
+
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        if (!string.IsNullOrWhiteSpace(appData))
+            yield return Path.Combine(appData, "TdxClaw");
+    }
+
+    /// <summary>读某个配置目录下 paths.json 的 ProjectsDirectory；没有就返回空串。</summary>
+    private static string ReadProjectsDirFrom(string configDir)
+    {
         try
         {
-            var pathsFile = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TdxClaw", "paths.json");
-            if (File.Exists(pathsFile))
+            var pathsFile = Path.Combine(configDir, "paths.json");
+            if (!File.Exists(pathsFile)) return "";
+            using var doc = JsonDocument.Parse(File.ReadAllText(pathsFile));
+            if (doc.RootElement.TryGetProperty("ProjectsDirectory", out var p) &&
+                p.ValueKind == JsonValueKind.String &&
+                !string.IsNullOrWhiteSpace(p.GetString()))
             {
-                using var doc = JsonDocument.Parse(File.ReadAllText(pathsFile));
-                if (doc.RootElement.TryGetProperty("ProjectsDirectory", out var p) &&
-                    p.ValueKind == JsonValueKind.String &&
-                    !string.IsNullOrWhiteSpace(p.GetString()))
-                {
-                    return p.GetString()!;
-                }
+                return p.GetString()!.Trim();
             }
         }
         catch { }
-
-        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "TdxClaw", "Projects");
+        return "";
     }
 
     internal static string ResolveConfigDirectory()

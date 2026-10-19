@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -39,7 +40,32 @@ internal sealed class ToolProp
 
 internal static class McpServer
 {
-    private static readonly Session _session = new();
+    /// <summary>
+    /// stdio 模式的默认会话。一个进程就是一个 agent，不存在"选哪本"的歧义。
+    /// HTTP 模式（网页 /mcp）不用它，见 <see cref="_agentSessions"/>。
+    /// </summary>
+    private static readonly Session _defaultSession = new();
+
+    /// <summary>
+    /// HTTP 模式下按 **agent** 分的会话表，key = 调用方带来的令牌。
+    ///
+    /// ★ 为什么必须分：以前这里是 `static Session session`，一个服务进程只有
+    ///   "当前打开的一本书"。两个 agent 同时接入时会互相切书——A 刚 open 甲，
+    ///   B 一 open 乙，A 的下一次 chapter_write 就写进了乙（工具读的是会话里的
+    ///   Project，没有"这次请求属于哪本书"的概念）。表现不是报错，是**写错书**。
+    ///
+    /// ★ 为什么用令牌当 key：网页「帮助 → 接入 Agent → 生成并复制 MCP 配置」
+    ///   每点一次就签发一个新令牌（见 /api/accounts/mcp-token），
+    ///   所以「每个 agent 粘一份自己的配置」天然就是「每个 agent 一个会话」。
+    ///   同一份配置粘给两个 agent 会共用一个会话——这也符合直觉。
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, Session> _agentSessions = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// 闲置多久回收会话。每个会话常驻一份整书对象（百万字约 5MB 内存），
+    /// 不回收的话，agent 换得越多占得越多。
+    /// </summary>
+    internal static TimeSpan SessionIdleTimeout { get; set; } = TimeSpan.FromMinutes(30);
 
     private static readonly JsonSerializerOptions _json = new()
     {
@@ -95,7 +121,16 @@ internal static class McpServer
     /// 桌面 agent 客户端走 stdio，Web 版走 HTTP，但工具实现只有一份。
     /// 否则两边各写一遍分发，改一个工具要改两处，迟早不一致。
     /// </summary>
-    internal static async Task<object?> HandleRequestAsync(string line)
+    /// <param name="sessionKey">
+    /// 哪一个 agent 的会话。HTTP 模式传调用方令牌（每个 agent 一份配置 = 一个令牌）；
+    /// stdio 传 null，落到默认会话。
+    /// </param>
+    /// <param name="prepare">
+    /// 真正执行工具之前、**已经拿到会话锁**时调用一次。网页版用它把"还没开过书的
+    /// 新会话"带到网页当前打开的那本上——放到锁外做会和正在跑的请求抢会话。
+    /// </param>
+    internal static async Task<object?> HandleRequestAsync(
+        string line, string? sessionKey = null, Action<Session>? prepare = null)
     {
         if (string.IsNullOrWhiteSpace(line)) return null;
 
@@ -127,35 +162,44 @@ internal static class McpServer
             }
 
             Log($"← {method}");
+            var session = SessionFor(sessionKey);
+            await session.Gate.WaitAsync();
             try
             {
-                return await DispatchAsync(method, parameters, idEl);
+                prepare?.Invoke(session);
+                return await DispatchCoreAsync(method, parameters, idEl, session);
             }
             catch (Exception ex)
             {
                 Log($"处理 {method} 异常：{ex}");
                 return RpcError(idEl, -32603, $"内部错误：{ex.Message}");
             }
+            finally
+            {
+                session.LastUsedUtc = DateTime.UtcNow;
+                session.Gate.Release();
+            }
         }
     }
 
     /// <summary>
-    /// 确保 MCP 的会话打开的是指定那本书（已经开着就不动）。
+    /// 确保**这个 agent 的会话**打开的是指定那本书（已经开着就不动）。
     ///
-    /// Web 版需要它：网页上打开的书和 MCP session 里的书必须是同一本，
+    /// Web 版需要它：网页上打开的书和 agent 手里的书必须是同一本，
     /// 否则 agent 改的是 A 书、网页显示的却是 B 书——两个入口各有一份状态，
     /// 这在"人看着 agent 写"的场景下是致命的。
+    ///
+    /// ★ 但只在会话**还没开过书**时调用（见 /mcp 里的 prepare 回调）：
+    ///   一旦 agent 自己 project_open 过，就钉在它自己的书上，网页切书不再拽它走，
+    ///   否则两个 agent 根本没法各写各的。
     /// </summary>
-    internal static ToolResult EnsureOpen(string? path)
+    internal static ToolResult EnsureOpen(Session session, string? path)
     {
         if (string.IsNullOrWhiteSpace(path)) return ToolResult.Fail("路径为空");
-        if (string.Equals(_session.Path, path, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(session.Path, path, StringComparison.OrdinalIgnoreCase))
             return ToolResult.Ok("already-open");
-        return _session.Open(path);
+        return session.Open(path);
     }
-
-    /// <summary>当前会话打开的项目路径（供 Web 侧核对是否同一本）。</summary>
-    internal static string CurrentPath => _session.Path;
 
     /// <summary>
     /// 装通知通道。stdio 模式写 stdout；Web 版改成往 SignalR 广播，
@@ -182,7 +226,6 @@ internal static class McpServer
     /// </summary>
     private static Action<object>? _notify;
     private static readonly object _writeLock = new();
-    private static readonly SemaphoreSlim _dispatchLock = new(1, 1);
 
     internal static void NotifyProgress(JsonElement? token, int progress, int total, string message)
     {
@@ -202,20 +245,40 @@ internal static class McpServer
         });
     }
 
-    private static async Task<object> DispatchAsync(string method, JsonElement parameters, JsonElement id)
+    /// <summary>
+    /// 取（必要时创建）某个 agent 的会话。key 为空 = stdio / 本机免登录的默认会话。
+    /// </summary>
+    internal static Session SessionFor(string? key)
     {
-        await _dispatchLock.WaitAsync();
-        try
-        {
-            return await DispatchCoreAsync(method, parameters, id);
-        }
-        finally
-        {
-            _dispatchLock.Release();
-        }
+        if (string.IsNullOrWhiteSpace(key)) return _defaultSession;
+
+        var s = _agentSessions.GetOrAdd(key, _ => new Session());
+        s.LastUsedUtc = DateTime.UtcNow;
+        SweepIdleSessions();
+        return s;
     }
 
-    private static async Task<object> DispatchCoreAsync(string method, JsonElement parameters, JsonElement id)
+    /// <summary>
+    /// 回收闲置会话。正在执行请求（Gate 被占）或当前 token 的那一个不动。
+    /// </summary>
+    internal static int SweepIdleSessions(TimeSpan? idle = null)
+    {
+        var cut = DateTime.UtcNow - (idle ?? SessionIdleTimeout);
+        var removed = 0;
+        foreach (var kv in _agentSessions)
+        {
+            if (kv.Value.LastUsedUtc > cut) continue;
+            if (kv.Value.Gate.CurrentCount == 0) continue;   // 有请求在跑
+            if (_agentSessions.TryRemove(kv.Key, out _)) removed++;
+        }
+        return removed;
+    }
+
+    /// <summary>当前活跃的 agent 会话数（诊断用）。</summary>
+    internal static int AgentSessionCount => _agentSessions.Count;
+
+    private static async Task<object> DispatchCoreAsync(
+        string method, JsonElement parameters, JsonElement id, Session session)
     {
         switch (method)
         {
@@ -249,18 +312,18 @@ internal static class McpServer
                 return RpcOk(id, new Dictionary<string, object?> { ["tools"] = ToolList() });
 
             case "tools/call":
-                return RpcOk(id, await CallToolAsync(parameters));
+                return RpcOk(id, await CallToolAsync(parameters, session));
 
             case "resources/list":
                 return RpcOk(id, new Dictionary<string, object?>
                 {
-                    ["resources"] = Resources.List(_session),
+                    ["resources"] = Resources.List(session),
                 });
 
             case "resources/read":
             {
                 var uri = parameters.TryGetProperty("uri", out var uEl) ? uEl.GetString() ?? "" : "";
-                var (contents, isErr, msg) = Resources.Read(_session, uri);
+                var (contents, isErr, msg) = Resources.Read(session, uri);
                 if (isErr) return RpcError(id, -32602, msg!);
                 return RpcOk(id, new Dictionary<string, object?> { ["contents"] = contents });
             }
@@ -874,7 +937,7 @@ internal static class McpServer
     // 工具分派
     // ==================================================================
 
-    private static async Task<object> CallToolAsync(JsonElement parameters)
+    private static async Task<object> CallToolAsync(JsonElement parameters, Session session)
     {
         if (!parameters.TryGetProperty("name", out var nEl))
             return ToolText("缺少工具名 name。", true);
@@ -891,7 +954,7 @@ internal static class McpServer
 
         try
         {
-            PublishToolStart(name, args);
+            PublishToolStart(name, args, session);
             ToolResult r;
 
             // 不需要项目的工具（只调一次——Open 有副作用，重复调用会白白刷新文件指纹）
@@ -903,33 +966,33 @@ internal static class McpServer
                 case "project_list":
                 {
                     var r0 = NovelTools.ListProjects(args);
-                    PublishToolDone(name, args, r0, projectModified: false);
+                    PublishToolDone(name, args, r0, projectModified: false, session);
                     return ToolText(r0.Text, r0.IsError);
                 }
                 case "project_open":
                 {
-                    var r0 = _session.Open(NovelTools.Str(args, "path"));
-                    PublishToolDone(name, args, r0, projectModified: !r0.IsError);
+                    var r0 = session.Open(NovelTools.Str(args, "path"));
+                    PublishToolDone(name, args, r0, projectModified: !r0.IsError, session);
                     return ToolText(r0.Text, r0.IsError);
                 }
                 case "project_create":
                 {
-                    var r0 = NovelTools.CreateProject(_session, args);
-                    PublishToolDone(name, args, r0, projectModified: !r0.IsError);
+                    var r0 = NovelTools.CreateProject(session, args);
+                    PublishToolDone(name, args, r0, projectModified: !r0.IsError, session);
                     return ToolText(r0.Text, r0.IsError);
                 }
                 case "project_delete":
                 {
                     // 删书不需要先打开项目（删的往往正是"没打开的那本"），
                     // 但它自己会拒绝删当前打开着的书。
-                    var r0 = NovelTools.DeleteProject(_session, args);
-                    PublishToolDone(name, args, r0, projectModified: false);
+                    var r0 = NovelTools.DeleteProject(session, args);
+                    PublishToolDone(name, args, r0, projectModified: false, session);
                     return ToolText(r0.Text, r0.IsError);
                 }
                 case "ai_config_check":
                 {
                     var r0 = await AiTools.ConfigCheckAsync(args);
-                    PublishToolDone(name, args, r0, projectModified: false);
+                    PublishToolDone(name, args, r0, projectModified: false, session);
                     return ToolText(r0.Text, r0.IsError);
                 }
                 case "ui_typography":
@@ -937,19 +1000,19 @@ internal static class McpServer
                     // 改的是服务器上的排版配置（typo.json），不碰项目文件——
                     // 所以 projectModified=false。网页端收到 done 会重拉一次排版。
                     var r0 = NovelTools.Typography(args);
-                    PublishToolDone(name, args, r0, projectModified: false);
+                    PublishToolDone(name, args, r0, projectModified: false, session);
                     return ToolText(r0.Text, r0.IsError);
                 }
             }
 
             // 需要项目的工具
-            if (!_session.TryGet(out var p, out var err))
+            if (!session.TryGet(out var p, out var err))
                 return ToolText(err.Text, true);
 
             bool mutatesProject = false;
             switch (name)
             {
-                case "project_status": r = NovelTools.ProjectStatus(_session, p); break;
+                case "project_status": r = NovelTools.ProjectStatus(session, p); break;
                 case "chapters_list": r = NovelTools.ListChapters(p); break;
                 case "chapter_read": r = NovelTools.ReadChapter(p, args); break;
                 case "chapter_search": r = NovelTools.SearchChapters(p, args); break;
@@ -957,45 +1020,45 @@ internal static class McpServer
                 case "settings_book_get": r = NovelTools.GetSettingsBook(p, args); break;
                 case "characters_stats": r = NovelTools.CharacterStats(p); break;
 
-                case "chapter_write": r = NovelTools.WriteChapter(_session, p, args); mutatesProject = true; break;
-                case "chapter_create": r = NovelTools.CreateChapter(_session, p, args); mutatesProject = true; break;
-                case "chapter_rename": r = NovelTools.RenameChapter(_session, p, args); mutatesProject = true; break;
-                case "chapter_delete": r = NovelTools.DeleteChapter(_session, p, args); mutatesProject = true; break;
-                case "chapter_reorder": r = NovelTools.ReorderChapter(_session, p, args); mutatesProject = true; break;
-                case "chapter_summary_set": r = NovelTools.SetChapterSummary(_session, p, args); mutatesProject = true; break;
+                case "chapter_write": r = NovelTools.WriteChapter(session, p, args); mutatesProject = true; break;
+                case "chapter_create": r = NovelTools.CreateChapter(session, p, args); mutatesProject = true; break;
+                case "chapter_rename": r = NovelTools.RenameChapter(session, p, args); mutatesProject = true; break;
+                case "chapter_delete": r = NovelTools.DeleteChapter(session, p, args); mutatesProject = true; break;
+                case "chapter_reorder": r = NovelTools.ReorderChapter(session, p, args); mutatesProject = true; break;
+                case "chapter_summary_set": r = NovelTools.SetChapterSummary(session, p, args); mutatesProject = true; break;
 
-                case "settings_set": r = NovelTools.SetSetting(_session, p, args); mutatesProject = true; break;
-                case "settings_book_set": r = NovelTools.SetSettingsBook(_session, p, args); mutatesProject = true; break;
+                case "settings_set": r = NovelTools.SetSetting(session, p, args); mutatesProject = true; break;
+                case "settings_book_set": r = NovelTools.SetSettingsBook(session, p, args); mutatesProject = true; break;
 
-                case "snapshot_list": r = NovelTools.ListSnapshots(_session); break;
-                case "snapshot_restore": r = NovelTools.RestoreSnapshot(_session, args); mutatesProject = true; break;
+                case "snapshot_list": r = NovelTools.ListSnapshots(session); break;
+                case "snapshot_restore": r = NovelTools.RestoreSnapshot(session, args); mutatesProject = true; break;
 
                 case "characters_list": r = NovelTools.ListCharacters(p); break;
-                case "character_upsert": r = NovelTools.UpsertCharacter(_session, p, args); mutatesProject = true; break;
-                case "character_delete": r = NovelTools.DeleteCharacter(_session, p, args); mutatesProject = true; break;
+                case "character_upsert": r = NovelTools.UpsertCharacter(session, p, args); mutatesProject = true; break;
+                case "character_delete": r = NovelTools.DeleteCharacter(session, p, args); mutatesProject = true; break;
 
                 case "memory_get": r = NovelTools.GetMemory(p); break;
-                case "memory_set": r = NovelTools.SetMemory(_session, p, args); mutatesProject = true; break;
+                case "memory_set": r = NovelTools.SetMemory(session, p, args); mutatesProject = true; break;
 
                 // ── 超长篇结构（仅启用了它的项目可用，未启用时返回明确提示）──
                 case "ultra_config":
-                    r = UltraTools.Config(_session, p, args);
+                    r = UltraTools.Config(session, p, args);
                     // get 是只读；enable/update 才算改项目
                     mutatesProject = !string.Equals(
                         NovelTools.Str(args, "action", "get"), "get", StringComparison.OrdinalIgnoreCase);
                     break;
                 case "volume_list": r = UltraTools.ListVolumes(p); break;
-                case "volume_upsert": r = UltraTools.UpsertVolume(_session, p, args); mutatesProject = true; break;
-                case "volume_delete": r = UltraTools.DeleteVolume(_session, p, args); mutatesProject = true; break;
-                case "chapter_volume_set": r = UltraTools.SetChapterVolume(_session, p, args); mutatesProject = true; break;
+                case "volume_upsert": r = UltraTools.UpsertVolume(session, p, args); mutatesProject = true; break;
+                case "volume_delete": r = UltraTools.DeleteVolume(session, p, args); mutatesProject = true; break;
+                case "chapter_volume_set": r = UltraTools.SetChapterVolume(session, p, args); mutatesProject = true; break;
                 case "state_board_get": r = UltraTools.GetStateBoard(p); break;
-                case "state_board_update": r = UltraTools.UpdateStateBoard(_session, p, args); mutatesProject = true; break;
-                case "character_scope_set": r = UltraTools.SetCharacterScope(_session, p, args); mutatesProject = true; break;
+                case "state_board_update": r = UltraTools.UpdateStateBoard(session, p, args); mutatesProject = true; break;
+                case "character_scope_set": r = UltraTools.SetCharacterScope(session, p, args); mutatesProject = true; break;
 
                 case "project_export": r = NovelTools.Export(p, args); break;
 
                 case "ai_write":
-                    r = await AiTools.WriteAsync(_session, p, args, progressToken);
+                    r = await AiTools.WriteAsync(session, p, args, progressToken);
                     mutatesProject = NovelTools.Bool(args, "writeBack", false);
                     break;
 
@@ -1003,7 +1066,7 @@ internal static class McpServer
                     return ToolText($"未知工具「{name}」。用 tools/list 看有哪些工具。", true);
             }
 
-            PublishToolDone(name, args, r, projectModified: mutatesProject && !r.IsError);
+            PublishToolDone(name, args, r, projectModified: mutatesProject && !r.IsError, session);
             return ToolText(r.Text, r.IsError);
         }
         catch (Exception ex)
@@ -1013,16 +1076,16 @@ internal static class McpServer
             {
                 EventType = "error",
                 ToolName = name,
-                ProjectPath = _session.Path,
+                ProjectPath = session.Path,
                 Summary = $"🤖 MCP 工具 {name} 出错：{ex.Message}",
             });
             return ToolText($"工具执行出错：{ex.Message}", true);
         }
     }
 
-    private static void PublishToolStart(string name, JsonElement args)
+    private static void PublishToolStart(string name, JsonElement args, Session session)
     {
-        int chNum = ResolveTargetChapterNumber(name, args, beforeExec: true);
+        int chNum = ResolveTargetChapterNumber(name, args, beforeExec: true, session);
         var task = name == "ai_write" ? NovelTools.Str(args, "task", "continue").Trim().ToLowerInvariant() : null;
         var summary = name switch
         {
@@ -1053,7 +1116,7 @@ internal static class McpServer
             EventType = "start",
             ToolName = name,
             TaskName = task,
-            ProjectPath = _session.Path,
+            ProjectPath = session.Path,
             ChapterNumber = chNum,
             SettingField = ResolveSettingField(name, args, task),
             WriteBack = name == "ai_write" && NovelTools.Bool(args, "writeBack", false),
@@ -1061,11 +1124,11 @@ internal static class McpServer
         });
     }
 
-    private static void PublishToolDone(string name, JsonElement args, ToolResult result, bool projectModified)
+    private static void PublishToolDone(string name, JsonElement args, ToolResult result, bool projectModified, Session session)
     {
-        int chNum = ResolveTargetChapterNumber(name, args, beforeExec: false);
+        int chNum = ResolveTargetChapterNumber(name, args, beforeExec: false, session);
         var task = name == "ai_write" ? NovelTools.Str(args, "task", "continue").Trim().ToLowerInvariant() : null;
-        var p = _session.Project;
+        var p = session.Project;
         var ch = chNum > 0 && p != null ? p.Chapters.FirstOrDefault(c => c.ChapterNumber == chNum) : null;
 
         string summary;
@@ -1113,7 +1176,7 @@ internal static class McpServer
             EventType = result.IsError ? "error" : "done",
             ToolName = name,
             TaskName = task,
-            ProjectPath = _session.Path,
+            ProjectPath = session.Path,
             ChapterNumber = chNum,
             SettingField = ResolveSettingField(name, args, task),
             ProjectModified = projectModified,
@@ -1123,7 +1186,7 @@ internal static class McpServer
         });
     }
 
-    private static int ResolveTargetChapterNumber(string name, JsonElement args, bool beforeExec)
+    private static int ResolveTargetChapterNumber(string name, JsonElement args, bool beforeExec, Session session)
     {
         if (name == "chapter_reorder")
             return NovelTools.Int(args, "toNumber", NovelTools.Int(args, "fromNumber", 0));
@@ -1131,8 +1194,8 @@ internal static class McpServer
         var n = NovelTools.Int(args, "number", 0);
         if (n > 0) return n;
 
-        if (name == "chapter_create" && !beforeExec && _session.Project != null && _session.Project.Chapters.Count > 0)
-            return _session.Project.Chapters.Max(c => c.ChapterNumber);
+        if (name == "chapter_create" && !beforeExec && session.Project != null && session.Project.Chapters.Count > 0)
+            return session.Project.Chapters.Max(c => c.ChapterNumber);
 
         return 0;
     }

@@ -480,6 +480,12 @@
       <span id="mcpCfgState" class="muted"></span>
       <pre id="mcpCfgBox" class="cfg hidden"></pre>
       <div id="mcpCfgNote" class="muted"></div>
+      <!-- 多 agent 并行：会话按令牌分，点一次 = 一个新令牌 = 一个新会话。
+           不写清楚的话，用户会拿同一份配置喂两个 agent，然后发现它们互相切书。 -->
+      <div class="muted" style="margin-top:6px">
+        要让两个 agent 各写各的书：<b>各点一次</b>，把两份配置分别粘给两个客户端。
+        每点一次签发一个新令牌，也就是一个独立会话；同一份配置粘给两个客户端则共用一个会话。
+      </div>
     </div>
 
     <div class="help-p" style="margin-top:12px" id="accountBox">

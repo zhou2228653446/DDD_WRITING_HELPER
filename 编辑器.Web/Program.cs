@@ -456,12 +456,20 @@ app.MapPost("/mcp", async (HttpContext ctx, WorkspaceService ws) =>
     using var reader = new StreamReader(ctx.Request.Body);
     var line = await reader.ReadToEndAsync();
 
-    // 网页上打开的书必须和 MCP 会话里的书是同一本，否则 agent 改 A、网页显示 B
-    var current = ws.Current?.FilePath;
-    if (current != null) McpServer.EnsureOpen(current);
+    // 一个 agent 一个会话，key 用它带来的令牌：网页「帮助 → 接入 Agent → 生成并复制
+    // MCP 配置」每点一次就签发一个新令牌，所以「两个 agent 各粘一份配置」天然就是
+    // 「两个独立会话」，各写各的书，互不切书。同一份配置粘给两个客户端才共用一个会话
+    //（这也符合直觉：它们本来就被当成同一个 agent）。
+    var agentKey = TokenFrom(ctx);
 
     var before = ws.Stamp();
-    var response = await McpServer.HandleRequestAsync(line);
+    var response = await McpServer.HandleRequestAsync(line, agentKey, session =>
+    {
+        // 只在「这个会话还没开过书」时跟随网页：agent 一旦自己 project_open 过，就钉在
+        // 它自己的书上——否则网页切个书就把正在写的 agent 拽走，两个 agent 没法并行。
+        if (session.Path.Length == 0 && ws.Current?.FilePath is { } cur)
+            McpServer.EnsureOpen(session, cur);
+    });
     var after = ws.Stamp();
 
     // agent 改了书 → 让网页立刻同步

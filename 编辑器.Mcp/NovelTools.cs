@@ -25,6 +25,16 @@ internal sealed class Session
     public NovelProject? Project { get; private set; }
     public string Path { get; private set; } = "";
 
+    /// <summary>
+    /// 同一会话内的请求串行执行。NovelProject 不是线程安全的（章节列表、Dict、缓存都在里面），
+    /// 而 HTTP 模式下同一个 agent 可能并发发来多个请求。
+    /// ★ 它是**每会话**一把，不是全局一把：两个 agent 写两本不同的书要能真并行。
+    /// </summary>
+    public SemaphoreSlim Gate { get; } = new(1, 1);
+
+    /// <summary>最后一次被使用的时刻，闲置回收用它判断（每个会话常驻一份整书对象）。</summary>
+    public DateTime LastUsedUtc { get; set; } = DateTime.UtcNow;
+
     private string _stamp = "";
 
     public ToolResult Open(string path)

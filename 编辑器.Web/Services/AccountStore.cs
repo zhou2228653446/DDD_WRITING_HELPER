@@ -218,23 +218,64 @@ public readonly record struct TrialPresence(string Code, int Sessions, DateTime 
 /// Session 每次被读取时刷新 LastSeen，超过 <see cref="IdleTimeout"/> 没有动静就当离线。
 /// 不这么定，试用者直接关掉页面（没人会点退出）名额就永远占着——
 /// 3 个名额会在一周内被历史会话卡死。
+///
+/// ★ 有效期按**用途**分开（2026-10-22 定）：
+///   · <see cref="TokenKind.Mcp"/>：签发后 <see cref="McpInitialLifetime"/>（默认 1 小时）；
+///     被 agent 真正用过一次就换成 <see cref="McpActiveLifetime"/>（默认 24 小时）滑动有效期。
+///     没被用过的短命令牌自然过期，用着的长命令牌不会写到一半掉线。
+///   · <see cref="TokenKind.Web"/> + 试用码：<see cref="IdleTimeout"/>（默认 45 分钟）——
+///     试用名额的语义不能变，45 分钟不说话就腾位。
+///   · <see cref="TokenKind.Web"/> + 自用：<see cref="WebLifetime"/>（默认 30 天），
+///     跟 Cookie 的 Max-Age 对齐。★ 以前是 45 分钟无差别清扫，自用登录态会被
+///     连带扫掉，用户表现为"莫名其妙又要求登录"。
 /// </summary>
 public sealed class AuthSessions
 {
     /// <summary>同时最多几个试用用户（不同个人码）。自用账号不占名额。</summary>
     public const int MaxConcurrentTrials = 3;
 
+    /// <summary>令牌的用途。决定它的有效期策略。</summary>
+    public enum TokenKind
+    {
+        /// <summary>网页登录态（浏览器 Cookie / 网页会话）。</summary>
+        Web = 0,
+
+        /// <summary>给外部 agent 用的 MCP 访问令牌。</summary>
+        Mcp = 1,
+    }
+
     private sealed class Session
     {
         public string Subject = "";
+        public TokenKind Kind = TokenKind.Web;
         public DateTime Created = DateTime.Now;
         public DateTime LastSeen = DateTime.Now;   // 引用类型的字段赋值是原子的，够用了
+        public DateTime ExpiresAt = DateTime.Now;   // 绝对到期时刻，按 Kind 滚动
     }
 
     private readonly ConcurrentDictionary<string, Session> _sessions = new();
 
     /// <summary>空闲多久算离线。默认 45 分钟；TDXCLAW_TRIAL_IDLE_MIN 可覆盖（实测用它压到分钟级）。</summary>
     public static TimeSpan IdleTimeout { get; } = ReadIdleTimeout();
+
+    /// <summary>MCP 令牌：签发后第一次使用前的有效期。默认 1 小时。</summary>
+    public static TimeSpan McpInitialLifetime { get; } = ReadHours("TDXCLAW_MCP_TOKEN_HOURS", 1);
+
+    /// <summary>MCP 令牌：被 agent 用过一次之后的滑动有效期。默认 24 小时。</summary>
+    public static TimeSpan McpActiveLifetime { get; } = ReadHours("TDXCLAW_MCP_TOKEN_ACTIVE_HOURS", 24);
+
+    /// <summary>自用网页登录态的有效期。默认 30 天，与 Cookie 的 Max-Age 一致。</summary>
+    public static TimeSpan WebLifetime { get; } = ReadHours("TDXCLAW_WEB_TOKEN_HOURS", 24 * 30);
+
+    private static TimeSpan ReadHours(string envName, int defaultHours)
+    {
+        var raw = Environment.GetEnvironmentVariable(envName);
+        if (int.TryParse(raw, out var h) && h > 0) return TimeSpan.FromHours(h);
+        return TimeSpan.FromHours(defaultHours);
+    }
+
+    /// <summary>令牌被撤销或过期时的回调（用来顺手回收它对应的 MCP 会话）。</summary>
+    public Action<string>? OnRevoked { get; set; }
 
     private static TimeSpan ReadIdleTimeout()
     {
@@ -244,26 +285,78 @@ public sealed class AuthSessions
     }
 
     /// <summary>主体标识："self" 或 "trial:&lt;四位码&gt;"。</summary>
-    public string Issue(string subject)
+    /// <param name="kind">
+    /// 用途，决定有效期策略：<see cref="TokenKind.Mcp"/> 是给 agent 的访问令牌
+    /// （初始 1 小时，被用过就变成 24 小时滑动）；<see cref="TokenKind.Web"/> 是网页登录态。
+    /// </param>
+    public string Issue(string subject, TokenKind kind = TokenKind.Web)
     {
         var token = AccountStore.NewToken();
-        _sessions[token] = new Session { Subject = subject };
+        _sessions[token] = new Session
+        {
+            Subject = subject,
+            Kind = kind,
+            ExpiresAt = DateTime.Now + InitialLifetime(subject, kind),
+        };
         return token;
+    }
+
+    /// <summary>按用途算初始有效期。</summary>
+    private static TimeSpan InitialLifetime(string subject, TokenKind kind)
+    {
+        if (kind == TokenKind.Mcp) return McpInitialLifetime;
+        if (subject.StartsWith("trial:", StringComparison.Ordinal)) return IdleTimeout;
+        return WebLifetime;
     }
 
     /// <summary>
     /// 顺带刷新 LastSeen——「最近用过」本来就是"读会话那一刻"的语义。
     /// 中间件、/api/auth/me、/mcp 都从这里拿主体，放在这里刷新，
     /// 比指望每个调用点都记得单独 Touch 可靠得多。
+    ///
+    /// ★ 同时按用途滚动有效期：
+    ///   · MCP 令牌：**第一次被用**就换成 24 小时滑动（"签了不接"会在 1 小时后自然过期，
+    ///     "接上以后"就一直续着，直到闲置满 24 小时才失效）。
+    ///   · 试用登录态：45 分钟滑动（试用名额的语义）。
+    ///   · 自用登录态：30 天滑动（跟 Cookie 对齐）。
     /// </summary>
     public string? SubjectOf(string? token)
     {
         if (token == null || !_sessions.TryGetValue(token, out var s)) return null;
-        s.LastSeen = DateTime.Now;
+
+        var now = DateTime.Now;
+        if (s.ExpiresAt <= now)
+        {
+            // 到期：当场作废，并顺手回收它对应的 MCP 会话
+            _sessions.TryRemove(token, out _);
+            OnRevoked?.Invoke(token);
+            return null;
+        }
+
+        s.LastSeen = now;
+        s.ExpiresAt = now + (s.Kind == TokenKind.Mcp
+            ? McpActiveLifetime
+            : s.Subject.StartsWith("trial:", StringComparison.Ordinal) ? IdleTimeout : WebLifetime);
         return s.Subject;
     }
 
-    public void Revoke(string token) => _sessions.TryRemove(token, out _);
+    /// <summary>某个令牌的到期时刻（诊断用；令牌不存在返回 null）。</summary>
+    public DateTime? ExpiresAtOf(string? token)
+    {
+        if (token == null || !_sessions.TryGetValue(token, out var s)) return null;
+        return s.ExpiresAt;
+    }
+
+    /// <summary>把某个令牌的到期时间往前拨（测试用，模拟"过期了"）。</summary>
+    public void ForceExpire(string token, DateTime when)
+    {
+        if (_sessions.TryGetValue(token, out var s)) s.ExpiresAt = when;
+    }
+
+    public void Revoke(string token)
+    {
+        if (_sessions.TryRemove(token, out _)) OnRevoked?.Invoke(token);
+    }
 
     /// <summary>当前在线的试用者（按个人码去重，最近活跃的在前）。顺手清掉过期会话。</summary>
     public IReadOnlyList<TrialPresence> ActiveTrials()
@@ -295,7 +388,11 @@ public sealed class AuthSessions
         var n = 0;
         foreach (var kv in _sessions)
             if (string.Equals(kv.Value.Subject, subject, StringComparison.Ordinal)
-                && _sessions.TryRemove(kv.Key, out _)) n++;
+                && _sessions.TryRemove(kv.Key, out _))
+            {
+                n++;
+                OnRevoked?.Invoke(kv.Key);
+            }
         return n;
     }
 
@@ -305,16 +402,25 @@ public sealed class AuthSessions
         var n = 0;
         foreach (var kv in _sessions)
             if (kv.Value.Subject.StartsWith("trial:", StringComparison.Ordinal)
-                && _sessions.TryRemove(kv.Key, out _)) n++;
+                && _sessions.TryRemove(kv.Key, out _))
+            {
+                n++;
+                OnRevoked?.Invoke(kv.Key);
+            }
         return n;
     }
 
-    /// <summary>清掉空闲超时的会话（不做后台定时器，每次统计时顺手清）。</summary>
+    /// <summary>
+    /// 清掉已到期的会话（不做后台定时器，每次统计时顺手清）。
+    /// ★ 判据是**到期时刻**而不是 LastSeen：LastSeen 滑动刷新后，两者对
+    /// 试用态含义相同，但对 MCP 令牌不同（初始 1 小时 vs 激活后 24 小时）。
+    /// </summary>
     private void Sweep()
     {
-        var cut = DateTime.Now - IdleTimeout;
+        var now = DateTime.Now;
         foreach (var kv in _sessions)
-            if (kv.Value.LastSeen < cut) _sessions.TryRemove(kv.Key, out _);
+            if (kv.Value.ExpiresAt <= now && _sessions.TryRemove(kv.Key, out _))
+                OnRevoked?.Invoke(kv.Key);
     }
 }
 

@@ -737,6 +737,15 @@ web-service.bat start / stop / log
 
 - 令牌**只存在服务进程内存里**（`AuthSessions`）：服务重启、`publish` 之后全部失效，
   回帮助页再点一次按钮即可。不用记，也泄不出历史令牌。
+- 令牌**有有效期**（2026-10-22 起按用途分开）：
+  | 令牌 | 有效期 |
+  |---|---|
+  | MCP 令牌（agent 用） | 签发后 **1 小时**内没人接就自然过期；agent 一旦接上（哪怕只发了一次握手），自动变成 **24 小时滑动**有效期，之后每来一次请求续一天 |
+  | 试用账号登录态 | 45 分钟空闲（试用名额的语义） |
+  | 自用网页登录态 | 30 天（跟 Cookie 的 Max-Age 对齐） |
+
+  三档都可以用环境变量改：`TDXCLAW_MCP_TOKEN_HOURS`（默认 1）、
+  `TDXCLAW_MCP_TOKEN_ACTIVE_HOURS`（默认 24）、`TDXCLAW_WEB_TOKEN_HOURS`（默认 720）。
 - 端点**只接受 POST**（`GET /mcp` 返回 405，不提供 SSE 长连接）。客户端里请选
   `http` / `streamable-http` 类型；要求 SSE 长连接的客户端请改走 stdio（`TdxClaw.Mcp.exe`）。
 - 客户端的 URL 要用**公网域名**（`ddd-lighthouse.ddns.net:5280`），不是 `127.0.0.1`——

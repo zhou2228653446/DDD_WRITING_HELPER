@@ -2589,7 +2589,8 @@ $('#mcpCfgBtn').onclick = async () => {
       },
     };
     const text = JSON.stringify(cfg, null, 2) +
-      `\n\n// 客户端不吃 headers 的话，改用这个地址：\n// ${d.url}?access_token=${d.token}`;
+      `\n\n// 客户端不吃 headers 的话，改用这个地址：\n// ${d.url}?access_token=${d.token}` +
+      (d.expiresIn ? `\n\n// 有效期：${d.expiresIn}` : '');
 
     const box = $('#mcpCfgBox');
     box.textContent = text;

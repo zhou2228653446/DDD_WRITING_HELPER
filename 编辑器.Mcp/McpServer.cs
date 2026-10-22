@@ -277,6 +277,16 @@ internal static class McpServer
     /// <summary>当前活跃的 agent 会话数（诊断用）。</summary>
     internal static int AgentSessionCount => _agentSessions.Count;
 
+    /// <summary>
+    /// 丢掉某个 agent 的会话。令牌被撤销或过期时调用——否则那个会话还要等
+    /// 30 分钟的闲置回收才消失，而它常驻着一整本书的内存。
+    /// </summary>
+    internal static bool DropSession(string? key)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return false;
+        return _agentSessions.TryRemove(key, out _);
+    }
+
     private static async Task<object> DispatchCoreAsync(
         string method, JsonElement parameters, JsonElement id, Session session)
     {

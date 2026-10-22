@@ -379,7 +379,7 @@ app.MapPost("/api/accounts/mcp-token", (HttpContext ctx, AuthSessions sessions) 
     if (string.IsNullOrWhiteSpace(pub)) pub = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
     pub = pub.TrimEnd('/');
 
-    var token = sessions.Issue("self");
+    var token = sessions.Issue("self", AuthSessions.TokenKind.Mcp);
     return Results.Ok(new
     {
         token,
@@ -388,6 +388,11 @@ app.MapPost("/api/accounts/mcp-token", (HttpContext ctx, AuthSessions sessions) 
         localUrl = "http://127.0.0.1:5280/mcp",
         // 令牌是内存态（AuthSessions）：重启/重新发布即全部失效，回来再点一次
         note = "令牌存在服务进程内存里：服务重启或重新发布后失效，回来再点一次即可",
+        // ★ 有效期按用途定（2026-10-22）：签发后 1 小时内没人用就自然过期；
+        //   agent 一旦接上来（哪怕只发了一次 initialize），就变成 24 小时滑动有效期，
+        //   之后每来一次请求续 24 小时，直到闲置满一天才失效。
+        expiresIn = $"{(int)AuthSessions.McpInitialLifetime.TotalHours} 小时内未使用即失效；被 agent 接入后自动变为 " +
+                    $"{(int)AuthSessions.McpActiveLifetime.TotalHours} 小时滑动有效期",
     });
 });
 
@@ -404,6 +409,10 @@ McpServer.SetNotifier(o =>
     // 通知是 fire-and-forget，不能让它卡住生成流程
     _ = hubProvider.Clients.All.SendAsync("mcpProgress", o);
 });
+
+// 令牌被撤销 / 过期 → 顺手丢掉它对应的 MCP 会话。
+// 不然那个会话还要等 30 分钟的闲置回收才消失，而它常驻着一整本书的内存。
+app.Services.GetRequiredService<AuthSessions>().OnRevoked = token => McpServer.DropSession(token);
 
 // ★ stdio 启动的 agent（Codex / Claude / Cursor…）事件**不走 HTTP**，而是走
 //   McpLiveBridge 的命名管道——桌面端 MainWindow 一直在监听它，网页版此前完全

@@ -162,7 +162,7 @@ app.MapPost("/api/auth/login", async (HttpContext ctx, AccountStore accounts, Au
             return Results.Json(new { error = "账号或密码不对" }, statusCode: 401);
         }
 
-        // ★ 试用名额：最多 3 个个人码**同时在线**（判定见 AuthSessions：空闲 45 分钟算离线）。
+        // ★ 试用名额：最多 3 个个人码**同时在线**（判定见 AuthSessions：空闲 2 小时算离线）。
         //   同一码重复登录（换设备 / 断线重连）不占新名额；已在线的人不受满员影响。
         //   检查放在密码校验**之后**——否则没验证过的人也能探到在线人数。
         if (!sessions.TrialSlotAvailable(code))
@@ -335,7 +335,7 @@ app.MapGet("/api/agent-setup/download", () =>
 });
 
 // 自用：看当前有哪些试用者在线 + 手动释放名额。
-// 为什么需要它：空闲超时是 45 分钟起步，试用者"人走了页面没关"期间名额被占着，
+// 为什么需要它：空闲超时是 2 小时起步，试用者"人走了页面没关"期间名额被占着，
 // 自用者（也就是管理员）得能立刻腾出来，而不是等超时。
 app.MapGet("/api/accounts/trial-online", (HttpContext ctx, AuthSessions sessions) =>
 {

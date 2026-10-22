@@ -223,10 +223,10 @@ public readonly record struct TrialPresence(string Code, int Sessions, DateTime 
 ///   · <see cref="TokenKind.Mcp"/>：签发后 <see cref="McpInitialLifetime"/>（默认 1 小时）；
 ///     被 agent 真正用过一次就换成 <see cref="McpActiveLifetime"/>（默认 24 小时）滑动有效期。
 ///     没被用过的短命令牌自然过期，用着的长命令牌不会写到一半掉线。
-///   · <see cref="TokenKind.Web"/> + 试用码：<see cref="IdleTimeout"/>（默认 45 分钟）——
-///     试用名额的语义不能变，45 分钟不说话就腾位。
+///   · <see cref="TokenKind.Web"/> + 试用码：<see cref="IdleTimeout"/>（默认 2 小时）——
+///     试用名额的语义是"人走了要腾位"，2 小时不说话就腾位。
 ///   · <see cref="TokenKind.Web"/> + 自用：<see cref="WebLifetime"/>（默认 30 天），
-///     跟 Cookie 的 Max-Age 对齐。★ 以前是 45 分钟无差别清扫，自用登录态会被
+///     跟 Cookie 的 Max-Age 对齐。★ 以前是按空闲无差别清扫，自用登录态会被
 ///     连带扫掉，用户表现为"莫名其妙又要求登录"。
 /// </summary>
 public sealed class AuthSessions
@@ -255,7 +255,7 @@ public sealed class AuthSessions
 
     private readonly ConcurrentDictionary<string, Session> _sessions = new();
 
-    /// <summary>空闲多久算离线。默认 45 分钟；TDXCLAW_TRIAL_IDLE_MIN 可覆盖（实测用它压到分钟级）。</summary>
+    /// <summary>空闲多久算离线。默认 2 小时；TDXCLAW_TRIAL_IDLE_MIN 可覆盖（实测用它压到分钟级）。</summary>
     public static TimeSpan IdleTimeout { get; } = ReadIdleTimeout();
 
     /// <summary>MCP 令牌：签发后第一次使用前的有效期。默认 1 小时。</summary>
@@ -281,7 +281,7 @@ public sealed class AuthSessions
     {
         var raw = Environment.GetEnvironmentVariable("TDXCLAW_TRIAL_IDLE_MIN");
         if (int.TryParse(raw, out var minutes) && minutes > 0) return TimeSpan.FromMinutes(minutes);
-        return TimeSpan.FromMinutes(45);
+        return TimeSpan.FromHours(2);
     }
 
     /// <summary>主体标识："self" 或 "trial:&lt;四位码&gt;"。</summary>
@@ -317,7 +317,7 @@ public sealed class AuthSessions
     /// ★ 同时按用途滚动有效期：
     ///   · MCP 令牌：**第一次被用**就换成 24 小时滑动（"签了不接"会在 1 小时后自然过期，
     ///     "接上以后"就一直续着，直到闲置满 24 小时才失效）。
-    ///   · 试用登录态：45 分钟滑动（试用名额的语义）。
+    ///   · 试用登录态：2 小时滑动（试用名额的语义）。
     ///   · 自用登录态：30 天滑动（跟 Cookie 对齐）。
     /// </summary>
     public string? SubjectOf(string? token)

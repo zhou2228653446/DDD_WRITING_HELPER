@@ -2647,7 +2647,7 @@ async function loadAccountBox() {
   if (!me.isSelf) $('#trialCodeView').textContent = me.code || '';
 }
 // ---- 试用名额（同时在线最多 3 人） ----
-// 判定在服务器：最近 45 分钟内有请求才算在线（AuthSessions）。
+// 判定在服务器：最近 2 小时内有请求才算在线（AuthSessions）。
 // 这里只负责显示与"手动释放"——名额被"人走了页面没关"占住时不用等超时。
 async function loadTrialOnline() {
   const el = $('#trialOnline');

@@ -1106,6 +1106,25 @@ internal static class NovelTools
         var name = Str(args, "name").Trim();
         if (string.IsNullOrWhiteSpace(name)) return ToolResult.Fail("name 不能为空。");
 
+        // 分级 / 状态：先解析再改。写错了要当场报错，不能先把人物卡改了
+        // 再回来说"不认识这个值"——那样数据已经被改了。
+        CharacterScope? newScope = null;
+        CharacterStatus? newStatus = null;
+        if (Has(args, "scope"))
+        {
+            newScope = UltraTools.ParseScope(Str(args, "scope"));
+            if (newScope == null)
+                return ToolResult.Fail(
+                    "scope 只认 core / arc / guest（也可写 常驻 / 本卷 / 客串）。");
+        }
+        if (Has(args, "status"))
+        {
+            newStatus = UltraTools.ParseStatus(Str(args, "status"));
+            if (newStatus == null)
+                return ToolResult.Fail(
+                    "status 只认 active / inactive / retired / deceased（也可写 存活 / 幕后 / 退场 / 阵亡）。");
+        }
+
         var id = Str(args, "id").Trim();
         var c = id.Length > 0
             ? p.Characters.FirstOrDefault(x => x.CharacterId.StartsWith(id, StringComparison.OrdinalIgnoreCase))
@@ -1136,9 +1155,21 @@ internal static class NovelTools
         if (Has(args, "notes")) c.Notes = Str(args, "notes");
         else if (Has(args, "note")) c.Notes = Str(args, "note");
 
+        // 分级 / 状态（长篇结构用；未启用时只是存着，不影响任何行为）
+        if (newScope != null) c.Scope = newScope.Value;
+        if (newStatus != null) c.Status = newStatus.Value;
+
         s.Save();
 
-        return ToolResult.Ok($"已{(isNew ? "新建" : "更新")}人物卡「{c.Name}」 id={ShortId(c.CharacterId)}" +
+        var tier = "";
+        if (newScope != null || newStatus != null)
+        {
+            tier = $"（分级：{UltraTools.ScopeText(c.Scope)} / 状态：{UltraTools.StatusText(c.Status)}）";
+            if (p.UltraLong is not { EnableCharacterLifecycle: true })
+                tier += " ⚠ 本项目没开角色分级，这两项先存着，开启后才影响给 AI 的上下文";
+        }
+
+        return ToolResult.Ok($"已{(isNew ? "新建" : "更新")}人物卡「{c.Name}」 id={ShortId(c.CharacterId)}{tier}" +
                              (isNew ? "（没传的字段留空，之后可再改）" : "（只改了本次传入的字段）"));
     }
 

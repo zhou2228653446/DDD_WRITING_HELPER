@@ -611,6 +611,18 @@ async function loadCharacters() {
   } catch { /* 书没开时静默 */ }
 }
 
+// 人物分级 / 状态的徽标。层级总是显示，状态只在非默认时显示——
+// 满屏"活跃"没有信息量，而"阵亡"必须一眼看见。
+const SCOPE_LABEL = { 0: '本卷', 1: '常驻', 2: '客串' };
+const STATUS_LABEL = { 0: '活跃', 1: '幕后', 2: '退场', 3: '阵亡' };
+function tierBadges(c) {
+  const scope = c?.scope ?? 0;
+  const status = c?.status ?? 0;
+  let h = `<span class="badge tier${scope === 1 ? ' core' : ''}">${SCOPE_LABEL[scope] ?? '本卷'}</span>`;
+  if (status !== 0) h += `<span class="badge tier${status === 3 ? ' dead' : ''}">${STATUS_LABEL[status] ?? ''}</span>`;
+  return h;
+}
+
 function renderCharacters(list) {
   const cards = $('#charCards');
   cards.innerHTML = '';
@@ -625,6 +637,7 @@ function renderCharacters(list) {
       .join('');
     d.innerHTML =
       `<div class="top"><span class="t">${escapeHtml(c.name || '（未命名）')}</span>` +
+      tierBadges(c) +
       `<span class="w">${escapeHtml(c.role || '')}</span></div>` +
       `<div class="fields">${rows}</div>` +
       `<div class="ops"><button class="char-edit">编辑</button></div>`;
@@ -670,6 +683,9 @@ function openCharDlg(c) {
   $('#cBackground').value = c?.background || '';
   $('#cRelationships').value = c?.relationships || '';
   $('#cNotes').value = c?.notes || '';
+  // 枚举在接口里是数字（Arc=0/Core=1/Guest=2；Active=0…Deceased=3）
+  $('#cScope').value = String(c?.scope ?? 0);
+  $('#cStatus').value = String(c?.status ?? 0);
   $('#charDelete').style.display = c ? '' : 'none';
   $('#charDlg').showModal();
 }
@@ -691,6 +707,10 @@ $('#charForm').onsubmit = async e => {
     background: $('#cBackground').value,
     relationships: $('#cRelationships').value,
     notes: $('#cNotes').value,
+    // ⚠ 不传这两个会被后端当成默认（整个 Character 是整体替换的），
+    // 所以哪怕没改也必须原样带回，否则一存就把分级抹成"本卷 / 活跃"。
+    scope: parseInt($('#cScope').value, 10) || 0,
+    status: parseInt($('#cStatus').value, 10) || 0,
   };
   if (!c.name) return;
   await post('/api/characters', c);

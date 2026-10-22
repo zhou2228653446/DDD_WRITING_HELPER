@@ -462,14 +462,14 @@ namespace 编辑器.Mcp
 
         private static string Shorten(string s, int max) => s.Length <= max ? s : s[..max] + "…";
 
-        private static string ScopeText(CharacterScope s) => s switch
+        internal static string ScopeText(CharacterScope s) => s switch
         {
             CharacterScope.Core => "核心常驻",
             CharacterScope.Arc => "本卷关键",
             _ => "单章客串",
         };
 
-        private static string StatusText(CharacterStatus s) => s switch
+        internal static string StatusText(CharacterStatus s) => s switch
         {
             CharacterStatus.Active => "活跃",
             CharacterStatus.Inactive => "隐退",
@@ -477,7 +477,8 @@ namespace 编辑器.Mcp
             _ => "阵亡",
         };
 
-        private static CharacterScope? ParseScope(string text) => text.Trim().ToLowerInvariant() switch
+        /// <summary>分级解析。NovelTools.character_upsert 也用它，所以是 internal。</summary>
+        internal static CharacterScope? ParseScope(string text) => text.Trim().ToLowerInvariant() switch
         {
             "core" or "核心" or "常驻" => CharacterScope.Core,
             "arc" or "本卷" or "分卷" => CharacterScope.Arc,
@@ -485,7 +486,7 @@ namespace 编辑器.Mcp
             _ => null,
         };
 
-        private static CharacterStatus? ParseStatus(string text) => text.Trim().ToLowerInvariant() switch
+        internal static CharacterStatus? ParseStatus(string text) => text.Trim().ToLowerInvariant() switch
         {
             "active" or "活跃" or "存活" => CharacterStatus.Active,
             "inactive" or "隐退" or "幕后" => CharacterStatus.Inactive,

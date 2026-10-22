@@ -212,6 +212,10 @@ aside,section{overflow:auto}
 #charCards .card .fields{font-size:12px;color:var(--muted);margin-top:4px}
 #charCards .card .fields div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #charCards .card .ops{display:flex;gap:6px;margin-top:8px}
+/* 分级 / 状态徽标：常驻用强调色，阵亡用危险色——这两个必须一眼看见 */
+#charCards .tier{font-size:11px;padding:1px 7px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+#charCards .tier.core{color:var(--accent);border-color:var(--accent)}
+#charCards .tier.dead{color:var(--danger);border-color:var(--danger)}
 .appear-list{display:flex;flex-direction:column;gap:4px;font-size:12px}
 .appear-row{
   display:flex;align-items:center;gap:10px;background:var(--panel);

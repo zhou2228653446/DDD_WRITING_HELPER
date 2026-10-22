@@ -622,6 +622,8 @@ internal static class McpServer
                     ["abilities"] = new() { description = "能力 / 技能 / 专长" },
                     ["relationships"] = new() { description = "人际关系" },
                     ["notes"] = new() { description = "备注 / 口头禅 / 补充设定" },
+                    ["scope"] = new() { description = "长篇分级：core 常驻（每轮都进上下文）/ arc 本卷关键（默认）/ guest 单章客串" },
+                    ["status"] = new() { description = "人物状态：active 活跃（默认）/ inactive 幕后 / retired 退场 / deceased 阵亡（阵亡后不再进上下文，审稿当严禁出场）" },
                 },
                 required = new List<string> { "name" },
             },

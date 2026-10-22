@@ -645,6 +645,21 @@
       <label>年龄<input id="cAge" type="number" min="0" max="9999"></label>
       <label>职业<input id="cOccupation"></label>
       <label>能力<input id="cAbilities"></label>
+      <label>层级<select id="cScope" title="长篇分级：常驻角色每轮都进 AI 上下文；客串只在本章出现时给一张精简卡">
+        <option value="0">本卷关键（默认）</option>
+        <option value="1">常驻（每轮都进上下文）</option>
+        <option value="2">客串（单章）</option>
+      </select></label>
+      <label>状态<select id="cStatus" title="阵亡后不再进 AI 上下文，审稿时当作严禁出场名单">
+        <option value="0">活跃（默认）</option>
+        <option value="1">幕后</option>
+        <option value="2">退场</option>
+        <option value="3">阵亡</option>
+      </select></label>
+    </div>
+    <div class="muted" style="margin:6px 0 10px">
+      层级与状态只对<strong>启用了长篇结构</strong>的项目生效：常驻角色每轮都进上下文，
+      本卷关键只在相关章节给一张精简卡，阵亡角色不再出现。
     </div>
     <label>外貌<textarea id="cAppearance" rows="2"></textarea></label>
     <label>性格<textarea id="cPersonality" rows="2"></textarea></label>

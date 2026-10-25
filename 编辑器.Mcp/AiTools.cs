@@ -319,10 +319,12 @@ internal static class AiTools
             result = await service.CompleteTextAsync(
                 user.ToString(),
                 system,
-                new CompletionOptions
+                SamplingPresets.Apply(new CompletionOptions
                 {
                     MaxTokens = maxTokens,
-                    Temperature = task == "review" ? 0.3 : 0.7,
+                    // 采样参数按任务给：续写/人物这类创意任务要高温度 + 重复惩罚，
+                    // 否则模型总挑"最可能的下一句"，写出来就是一股套话味。
+                    // 具体档位见 SamplingPresets（审稿仍然是 0.25，不给发挥空间）。
                     Model = config.Model,
                     // 阶段性提示（"连接不稳定，正在重试（1/4）"、"正在思考…"）直接推给客户端与桌面界面
                     OnNotice = msg =>
@@ -345,7 +347,7 @@ internal static class AiTools
                         latestStreamText = text;
                         PublishStream($"🤖 MCP AI 正在{taskLabel}{(number > 0 ? $"第 {number} 章" : "")}（{StreamPhase(latestOutTokens, text.Length)}）");
                     },
-                });
+                }, task));
         }
         catch (Exception ex)
         {

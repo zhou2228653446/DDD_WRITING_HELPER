@@ -46,6 +46,10 @@ namespace 编辑器.Services
                 ["messages"] = messages
             };
 
+            // Anthropic 只有 top_p，没有 frequency/presence penalty —— 这是供应商限制，
+            // 不是漏做。创意写作的去重主要靠 temperature + top_p 这一对。
+            if (options.TopP is { } topP) request["top_p"] = topP;
+
             if (systemPrompt != null && !systemPrompt.IsEmpty)
                 request["system"] = BuildSystemBlocks(systemPrompt);
 

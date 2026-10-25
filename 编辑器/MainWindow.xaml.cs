@@ -924,7 +924,7 @@ namespace 编辑器
                         CancellationToken = _aiCts!.Token,
                         OnNotice = _aiNotice,
                         OnProgress = _tokenProgress
-                    }));
+                    }.SampleFor("continue")));
             // ★ 用户点「停止」时，Service 会把**已经生成的部分**原样带回来
             //   （见 AiResult.CanceledWithPartial）。续写是**追加**，把已写的接上去
             //   不会破坏任何既有内容 —— 而用户按停止的意图通常正是"就写到这里"。
@@ -996,7 +996,7 @@ namespace 编辑器
                         CancellationToken = _aiCts!.Token,
                         OnNotice = _aiNotice,
                         OnProgress = _tokenProgress
-                    }));
+                    }.SampleFor("polish")));
             if (IsUsable(result))
             {
                 if (result.Truncated)
@@ -1042,7 +1042,7 @@ namespace 编辑器
 
             var result = await CallAiFunctionWithResult(async (apiService) =>
                 await apiService.CompleteTextAsync(userPrompt, systemPrompt,
-                    new CompletionOptions { CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
+                    new CompletionOptions { CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }.SampleFor("name")));
             if (IsUsable(result))
             {
                 chapter.Content += $"\n\n【生成的角色名 — {DateTime.Now:HH:mm}】\n{result.Text}\n";
@@ -1100,7 +1100,7 @@ namespace 编辑器
                 var systemPrompt = AppendChatSummaryBlock(baseSystemPrompt);
 
                 return await apiService.CompleteTextAsync(userPrompt, systemPrompt,
-                    new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress },
+                    new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }.SampleFor("chat"),
                     history);
             });
             if (IsUsable(result))
@@ -1171,7 +1171,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }.SampleFor("outline")));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.FullOutline, result.Text);
@@ -1207,7 +1207,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }.SampleFor("character")));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.CharacterSettings, result.Text);
@@ -1243,7 +1243,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, Temperature = 0.4, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }.SampleFor("background")));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.BackgroundSettings, result.Text);
@@ -1283,7 +1283,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }.SampleFor("chapter_outline")));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.ChapterOutline, result.Text);
@@ -1327,7 +1327,7 @@ namespace 编辑器
                 if (!string.IsNullOrEmpty(input)) userPrompt += $"\n额外要求：{input}";
             }
 
-            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, Temperature = 0.5, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }));
+            var result = await CallAiFunctionWithResult(async (api) => await api.CompleteTextAsync(userPrompt, systemPrompt, new CompletionOptions { MaxTokens = CompletionOptions.GenerousBudget, CancellationToken = _aiCts!.Token, OnNotice = _aiNotice, OnProgress = _tokenProgress }.SampleFor("write_style")));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.WritingStyle, result.Text);
@@ -1378,11 +1378,10 @@ namespace 编辑器
                 userPrompt, systemPrompt, new CompletionOptions
                 {
                     MaxTokens = CompletionOptions.GenerousBudget,
-                    Temperature = 0.4,
                     CancellationToken = _aiCts!.Token,
                     OnNotice = _aiNotice,
                     OnProgress = _tokenProgress
-                }));
+                }.SampleFor("write_style")));
             if (IsUsable(result))
             {
                 SetSettingValue(SettingSection.NarrativeViewpoint, result.Text);
@@ -2532,11 +2531,10 @@ namespace 编辑器
                 new CompletionOptions
                 {
                     MaxTokens = CompletionOptions.GenerousBudget,
-                    Temperature = 0.3,          // 审稿要稳定，不给发挥空间
                     CancellationToken = _aiCts!.Token,
                     OnNotice = _aiNotice,
                     OnProgress = _tokenProgress
-                }));
+                }.SampleFor("review")));
 
             if (IsUsable(result))
             {
@@ -2731,11 +2729,10 @@ namespace 编辑器
                 new CompletionOptions
                 {
                     MaxTokens = CompletionOptions.GenerousBudget,
-                    Temperature = 0.5,
                     CancellationToken = _aiCts!.Token,
                     OnNotice = _aiNotice,
                     OnProgress = _tokenProgress
-                }));
+                }.SampleFor("setting_book")));
 
             if (IsUsable(result))
             {

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace 编辑器.Services
 {
@@ -12,6 +13,12 @@ namespace 编辑器.Services
     /// </summary>
     public class OpenAIService : StreamingApiServiceBase
     {
+        /// <summary>可选字段（top_p 等）没设时整条省略，别给老网关塞 null。</summary>
+        private static readonly JsonSerializerOptions JsonOpts = new()
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        };
+
         /// <summary>
         /// 收到 finish_reason 之后，最多再读多少行继续捞 usage 收尾包。
         /// 官方在 finish_reason 之后会补一个只带 usage 的包；某些网关什么都不补、
@@ -58,10 +65,15 @@ namespace 编辑器.Services
                 stream_options = new { include_usage = true },
                 messages,
                 max_tokens = options.MaxTokens,
-                temperature = options.Temperature
+                temperature = options.Temperature,
+                // 三个可选参数只在显式设过时才发：老服务商（部分自建网关）
+                // 见到未知字段会直接 400，能不传就不传。
+                top_p = options.TopP,
+                frequency_penalty = options.FrequencyPenalty != 0 ? options.FrequencyPenalty : (double?)null,
+                presence_penalty = options.PresencePenalty != 0 ? options.PresencePenalty : (double?)null,
             };
 
-            return JsonSerializer.Serialize(request);
+            return JsonSerializer.Serialize(request, JsonOpts);
         }
 
         protected override void OnStreamEvent(JsonElement evt, StreamState state, CompletionOptions options)

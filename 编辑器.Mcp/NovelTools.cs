@@ -563,6 +563,57 @@ internal static class NovelTools
         return ToolResult.Ok(CharacterAppearanceService.FormatReport(p, stats));
     }
 
+    /// <summary>
+    /// 风格审计（本地统计，不花 token）。三种输入：任意文本 / 某章 / 整本。
+    /// 整本时额外列出最"AI"的三章——那才是该动手改的地方。
+    /// </summary>
+    public static ToolResult StyleCheck(Session s, JsonElement args)
+    {
+        var text = Str(args, "text");
+        if (!string.IsNullOrWhiteSpace(text))
+            return ToolResult.Ok(StyleAudit.Analyze(text).ToText());
+
+        var number = Int(args, "chapter", 0);
+        if (!s.TryGet(out var p, out var err)) return err;
+
+        if (number > 0)
+        {
+            var c = p.Chapters.FirstOrDefault(x => x.ChapterNumber == number);
+            if (c == null) return ToolResult.Fail($"没有第 {number} 章。先 chapters_list 看现有章号。");
+            var r = StyleAudit.Analyze(c.Content);
+            return ToolResult.Ok($"第{number}章「{c.Title}」\n\n" + r.ToText());
+        }
+
+        if (p.Chapters.Count == 0) return ToolResult.Fail("这本书还没有章节。");
+
+        var ordered = p.Chapters.OrderBy(c => c.ChapterNumber).ToList();
+        var whole = string.Join("\n", ordered.Select(c => c.Content ?? ""));
+        var report = StyleAudit.Analyze(whole);
+
+        var worst = ordered
+            .Select(c => (Chapter: c, Score: StyleAudit.Analyze(c.Content).Score, Words: c.WordCount))
+            .Where(x => x.Words >= 200)
+            .OrderBy(x => x.Score)
+            .Take(3)
+            .ToList();
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"全书 {ordered.Count} 章 / {ordered.Sum(c => c.WordCount)} 字");
+        sb.AppendLine();
+        sb.Append(report.ToText());
+
+        if (worst.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine();
+            sb.Append("最需要改的三章：");
+            foreach (var (c, score, words) in worst)
+                sb.AppendLine($"· 第{c.ChapterNumber}章「{c.Title}」 {score} 分（{words} 字）");
+        }
+
+        return ToolResult.Ok(sb.ToString().Trim());
+    }
+
     // ==================================================================
     // 建项目
     // ==================================================================

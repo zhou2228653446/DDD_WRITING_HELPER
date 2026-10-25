@@ -311,6 +311,19 @@ namespace 编辑器.Services
 
         public int MaxTokens { get; set; } = GenerousBudget;
         public double Temperature { get; set; } = 0.7;
+
+        /// <summary>
+        /// 核采样。null = 不传（跟随服务商默认）。
+        /// 创意写作里它和 temperature 要一起调低概率尾巴，只调温度容易把"套话"换成"胡话"。
+        /// </summary>
+        public double? TopP { get; set; }
+
+        /// <summary>频率惩罚：按 token 出现次数压制重复用词。Anthropic 不支持，会被忽略。</summary>
+        public double FrequencyPenalty { get; set; }
+
+        /// <summary>存在惩罚：压制已经出现过的词。Anthropic 不支持，会被忽略。</summary>
+        public double PresencePenalty { get; set; }
+
         public string Model { get; set; } = "";
         public CancellationToken CancellationToken { get; set; } = default;
         public Action<int, int>? OnProgress { get; set; }

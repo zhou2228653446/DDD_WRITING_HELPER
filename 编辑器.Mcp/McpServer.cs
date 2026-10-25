@@ -451,6 +451,23 @@ internal static class McpServer
         },
         new ToolDef
         {
+            name = "style_check",
+            description =
+                "风格审计（本地统计，不花 token）：给正文算「AI 味指数」0~100（越高越像人写），" +
+                "列出套话命中、句长/段长节奏、对话占比、相邻句同头，并给出建议禁用的词。" +
+                "写之前看基线、写之后自查、改完对比，都用它。",
+            inputSchema = new ToolSchema
+            {
+                properties = new Dictionary<string, ToolProp>
+                {
+                    ["text"] = new() { description = "直接审计这段文本（优先于 chapter）" },
+                    ["chapter"] = new() { type = "integer", description = "审计第几章；不传则审整本，并列出最需要改的三章" },
+                },
+                required = new List<string>(),
+            },
+        },
+        new ToolDef
+        {
             name = "chapter_write",
             description = "写章节正文。mode=replace 覆盖（会丢原内容，慎用），mode=append 追加。",
             inputSchema = new ToolSchema
@@ -1012,6 +1029,13 @@ internal static class McpServer
                     // 改的是服务器上的排版配置（typo.json），不碰项目文件——
                     // 所以 projectModified=false。网页端收到 done 会重拉一次排版。
                     var r0 = NovelTools.Typography(args);
+                    PublishToolDone(name, args, r0, projectModified: false, session);
+                    return ToolText(r0.Text, r0.IsError);
+                }
+                case "style_check":
+                {
+                    // 传 text 时连项目都不用开；传 chapter / 不传则读当前项目。
+                    var r0 = NovelTools.StyleCheck(session, args);
                     PublishToolDone(name, args, r0, projectModified: false, session);
                     return ToolText(r0.Text, r0.IsError);
                 }

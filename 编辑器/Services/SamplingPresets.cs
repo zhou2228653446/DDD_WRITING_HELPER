@@ -16,7 +16,7 @@ namespace 编辑器.Services
     {
         /// <summary>一组采样参数。</summary>
         public readonly record struct Setting(
-            double Temperature, double TopP, double Frequency, double Presence);
+            double Temperature, double? TopP, double Frequency, double Presence);
 
         /// <summary>任务 → 参数。任务键与 <see cref="AiPrompts.Keys"/> 保持一致。</summary>
         public static Setting For(string? task)
@@ -44,18 +44,42 @@ namespace 编辑器.Services
             };
         }
 
+        /// <summary>
+        /// 旧版参数（改造前）：创意任务 0.7、审稿 0.3，没有 top_p、没有任何重复惩罚。
+        /// 只给 A/B 对照用——留一个能"回到从前"的开关，才能证明改的这几行真的有差别，
+        /// 而不是拿不同章节、不同心情的产出互相比。
+        /// </summary>
+        public static Setting Legacy(string? task)
+        {
+            var t = (task ?? "").Trim().ToLowerInvariant();
+            return t == "review" ? new Setting(0.30, null, 0, 0) : new Setting(0.70, null, 0, 0);
+        }
+
         /// <summary>链式版本：`new CompletionOptions { ... }.SampleFor("continue")`。</summary>
         public static CompletionOptions SampleFor(this CompletionOptions options, string? task)
             => Apply(options, task);
 
+        /// <summary>链式版本（直接给一组参数，A/B 对照时用）。</summary>
+        public static CompletionOptions SampleFor(this CompletionOptions options, Setting setting)
+        {
+            options.Temperature = setting.Temperature;
+            options.TopP = setting.TopP;
+            options.FrequencyPenalty = setting.Frequency;
+            options.PresencePenalty = setting.Presence;
+            return options;
+        }
+
         /// <summary>把某个任务的采样参数套到 options 上（就地修改并返回，便于链式调用）。</summary>
         public static CompletionOptions Apply(CompletionOptions options, string? task)
+            => Apply(options, For(task));
+
+        /// <summary>直接套一组参数（A/B 对照时用）。</summary>
+        public static CompletionOptions Apply(CompletionOptions options, Setting setting)
         {
-            var s = For(task);
-            options.Temperature = s.Temperature;
-            options.TopP = s.TopP;
-            options.FrequencyPenalty = s.Frequency;
-            options.PresencePenalty = s.Presence;
+            options.Temperature = setting.Temperature;
+            options.TopP = setting.TopP;
+            options.FrequencyPenalty = setting.Frequency;
+            options.PresencePenalty = setting.Presence;
             return options;
         }
     }

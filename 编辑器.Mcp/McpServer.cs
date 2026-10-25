@@ -731,6 +731,7 @@ internal static class McpServer
                     ["profile"] = new() { description = "用哪套 API 配置（如论文走 GPT、小说走 DeepSeek）；留空用当前启用的" },
                     ["skill"] = new() { description = "技能名或 id（如「黄金三章」）；留空用当前方案记住的那个，传 none 表示不用技能" },
                     ["preset"] = new() { description = "本次用哪套提示词方案：novel / academic / official / general / ultra_long_novel 或自定义方案 id；留空用当前生效方案。★ 只影响这一次请求，不改全局设置" },
+                    ["sampling"] = new() { description = "诊断用：传 legacy 回到改造前的采样参数（0.7 / 无惩罚），用于 A/B 对比。正常使用留空" },
                 },
                 required = new List<string> { "task" },
             },

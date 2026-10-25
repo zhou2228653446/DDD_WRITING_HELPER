@@ -132,6 +132,12 @@ internal static class AiTools
                 contractFallback = AiPrompts.TextFor(presetId, AiPrompts.Keys.StructuredOutput);
         }
 
+        // sampling=legacy：临时回到改造前的采样参数，只给 A/B 对照用。
+        // 有了它才能在同一章、同一 prompt 下证明"改采样真的有差别"。
+        var legacySampling = string.Equals(
+            NovelTools.Str(args, "sampling").Trim(), "legacy", StringComparison.OrdinalIgnoreCase);
+        var sampling = legacySampling ? SamplingPresets.Legacy(task) : SamplingPresets.For(task);
+
         // 技能：界面在 AI 面板选一个，命中功能的生成就用该手法。MCP 侧同样要生效，
         // 否则「黄金三章」这类手法只在界面里有效，agent 写出来的是另一种调性。
         var skill = ResolveSkill(args, out var skillErr);
@@ -347,7 +353,7 @@ internal static class AiTools
                         latestStreamText = text;
                         PublishStream($"🤖 MCP AI 正在{taskLabel}{(number > 0 ? $"第 {number} 章" : "")}（{StreamPhase(latestOutTokens, text.Length)}）");
                     },
-                }, task));
+                }, sampling));
         }
         catch (Exception ex)
         {

@@ -170,6 +170,10 @@ public static class AuthorStyleBuilder
         "怒喝", "低喝", "暴喝", "冷哼", "咬牙", "握拳", "皱眉", "挑眉", "撇嘴", "摊手",
         "苦笑", "冷笑", "嗤笑", "大笑", "凛然", "漠然", "悚然", "哑然", "骇然", "愕然",
         "轰鸣", "爆喝", "狞笑", "阴沉", "扭曲", "翻涌", "涌起", "浮现", "弥漫", "笼罩",
+        // 朴素派（白描作者：余华式）——签名落在动作与具体名词上
+        "沉默", "眼泪", "看着", "笑着", "坐下", "低头", "抬头", "点头", "摇头", "蹲下",
+        "屋里", "日子", "声音", "身体", "月光", "阳光", "街道", "田里", "夜里", "早上",
+        "中午", "村口", "说完", "半天", "咳嗽", "眯眼",
     };
 
     private static readonly string[] PathologicalKinds = { "翻译腔", "升华", "僵笑弧度" };
@@ -218,6 +222,10 @@ public static class AuthorStyleBuilder
             "感到", "跑到", "走到", "来到", "遇到", "收到", "接到", "意识到", "注意到" };
         var notTagExact = new HashSet<string> { "一条", "这道", "那道", "几道", "数道" };
         var tags = Regex.Matches(body, @"([\u4e00-\u9fa5]{1,3}道)[，：]")
+            // ★ 引号邻近校验：真引导语必然紧挨引号（说话人刚开口/刚说完）。
+            //   没有这条，「一条街道，」这类"X道，"的巧合同现会混进表里
+            //   （余华语料实测穿帮）。
+            .Where(m => QuoteNearby(body, m.Index, m.Length))
             .Select(m => m.Groups[1].Value)
             .Where(w => !notTagExact.Contains(w) && !notTagSuffix.Any(w.EndsWith))
             .GroupBy(w => w)
@@ -411,6 +419,14 @@ public static class AuthorStyleBuilder
         if (action >= 4.0) return "战斗冲突";
         if (dRatio < 0.08 && action < 2.0) return "环境氛围";
         return "日常推进";
+    }
+
+    /// <summary>位置前后 12 字内出现引号 = 疑似对话引导语。</summary>
+    private static bool QuoteNearby(string text, int index, int length)
+    {
+        var start = Math.Max(0, index - 12);
+        var end = Math.Min(text.Length, index + length + 12);
+        return text.IndexOfAny(new[] { '“', '”', '「', '」' }, start, end - start) >= 0;
     }
 
     private static double MeanSignatureDensity(string allText, int visible)

@@ -86,6 +86,10 @@ public class AuthorStyleTests : IDisposable
         Assert.Contains(p.SignatureWords, w => w.Word == "淡淡");
         // 引导语：轻声道/淡淡地道/低声道 是语料里显式写的
         Assert.Contains(p.DialogueTags, t => t == "轻声道" || t == "淡淡地道");
+        // 新指纹：标点习惯、短句占比、对话节奏
+        Assert.True(p.CommaPerSentence > 0.5, $"每句逗号 {p.CommaPerSentence}");
+        Assert.True(p.ShortSentenceRatio > 0, $"短句占比 {p.ShortSentenceRatio}");
+        Assert.True(p.DialogueRunMedian >= 1, $"引号段连发中位 {p.DialogueRunMedian}");
     }
 
     [Fact]
@@ -99,8 +103,11 @@ public class AuthorStyleTests : IDisposable
             var chars = AuthorStyleBuilder.VisibleChars(s.Text);
             Assert.InRange(chars, 100, 400);
         });
-        // 有对话语料就该挑出对话场景
+        // 有对话语料就该挑出对话场景；多章语料还该有章首样本
         Assert.Contains(p.Samples, s => s.Scene == "对话交锋");
+        Assert.Contains(p.Samples, s => s.Scene == "开篇起笔");
+        Assert.Contains(p.Samples, s => s.Scene == "章末收束");
+        Assert.True(p.Samples.Count <= AuthorStyleBuilder.MaxSamples);
         // 病态段（升华句）不该被选进来
         var pathological = "他知道，这一切才刚刚开始。命运的齿轮悄然转动。\n" + SceneParagraph("萧炎", "环境");
         var corpus = "第1章 试炼\n" + string.Join("\n\n", Enumerable.Repeat(pathological, 6)) + "\n" + Corpus(2);

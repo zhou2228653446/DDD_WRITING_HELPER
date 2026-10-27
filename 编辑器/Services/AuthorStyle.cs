@@ -42,6 +42,15 @@ public sealed record AuthorStyleProfile
     public double ParagraphP75 { get; init; }
     public double DialogueRatio { get; init; }
 
+    /// <summary>平均每句逗号数——标点习惯：连缀长句（土豆≈2.5）vs 短促断句（余华≈1.2）。</summary>
+    public double CommaPerSentence { get; init; }
+
+    /// <summary>≤8 字短句占比——白描作者用短句剁节奏。</summary>
+    public double ShortSentenceRatio { get; init; }
+
+    /// <summary>连续引号段的中位长度（段数）——对话节奏：短促乒乓 vs 长段训话。</summary>
+    public double DialogueRunMedian { get; init; }
+
     /// <summary>签名词 → 每千字目标频次（区间中值，容差 ±35%）。按频次降序。</summary>
     public IReadOnlyList<SignatureWord> SignatureWords { get; init; } = Array.Empty<SignatureWord>();
 
@@ -203,6 +212,37 @@ public static class AuthorStyleBuilder
         var dialogueChars = chapters.Sum(CountDialogueChars);
         var dialogueRatio = visible == 0 ? 0 : (double)dialogueChars / visible;
 
+        // 标点习惯与对话节奏。★ 分子分母必须同源：句子切分带收尾引号
+        // （网文对话常无句末标点，不算会虚增三倍），且短句占比的分母
+        // 就是这一次切分的句数——上版分母用了另一套切分，两个数互相打架。
+        var commaTotal = 0;
+        var sentenceTotal = 0;
+        var shortSentences = 0;
+        foreach (var ch in chapters)
+        {
+            commaTotal += ch.Count(c => c == '，');
+            foreach (var sen in Regex.Split(ch, @"[。！？…；”」]+"))
+            {
+                var n = VisibleChars(sen);
+                if (n >= 4)
+                {
+                    sentenceTotal++;
+                    if (n <= 8) shortSentences++;
+                }
+            }
+        }
+        var dialogueRuns = new List<int>();
+        foreach (var ch in chapters)
+        {
+            var run = 0;
+            foreach (var p in ch.Split('\n'))
+            {
+                if (IsQuoteOnly(p)) run++;
+                else if (run > 0) { dialogueRuns.Add(run); run = 0; }
+            }
+            if (run > 0) dialogueRuns.Add(run);
+        }
+
         // 签名词：候选池中频次 ≥0.3/千字 的，取前 16
         var sig = CandidateSignatureWords
             .Select(w => (Word: w, PerK: visible == 0 ? 0 : CountOf(allText, w) * 1000.0 / visible))
@@ -248,6 +288,9 @@ public static class AuthorStyleBuilder
             ParagraphP25 = Math.Round(Quantile(paraLens, 0.25), 1),
             ParagraphP75 = Math.Round(Quantile(paraLens, 0.75), 1),
             DialogueRatio = Math.Round(dialogueRatio, 3),
+            CommaPerSentence = sentenceTotal == 0 ? 0 : Math.Round((double)commaTotal / sentenceTotal, 2),
+            ShortSentenceRatio = sentenceTotal == 0 ? 0 : Math.Round((double)shortSentences / sentenceTotal, 3),
+            DialogueRunMedian = Math.Round(Median(dialogueRuns), 1),
             SignatureWords = sig,
             DialogueTags = tags,
             Samples = samples,
@@ -266,6 +309,10 @@ public static class AuthorStyleBuilder
                       $"中位段长 {p.ParagraphMedian:0} 字（常见区间 {p.ParagraphP25:0}~{p.ParagraphP75:0} 字），短段瀑布流排版。");
         sb.AppendLine($"· 对话占比约 {p.DialogueRatio:P0}；对话引导语用「{string.Join("、", p.DialogueTags.Take(5))}」这类" +
                       (p.DialogueTags.Any(t => t.EndsWith("道")) ? "「X道」家族，不要用翻译腔的「他说/他说道」堆砌。" : "表达。"));
+        sb.AppendLine($"· 标点：平均每句 {p.CommaPerSentence:0.0} 个逗号、{p.ShortSentenceRatio:P0} 的句子不超过 8 字——" +
+                      (p.CommaPerSentence >= 2.0 ? "长句连缀铺陈，靠逗号推进。" : "短句剁节奏，句号换气，别把句子用逗号连成一长串。"));
+        sb.AppendLine($"· 对话节奏：连续引号段中位 {p.DialogueRunMedian:0} 段——" +
+                      (p.DialogueRunMedian >= 3 ? "对话常连发成片（乒乓快节奏或成段训话）。" : "对话一两段就切回叙述，别让角色滔滔不绝。"));
         if (p.SignatureWords.Count > 0)
         {
             sb.AppendLine($"· 标志词（按自然频次使用，不要堆砌）：{string.Join("、", p.SignatureWords.Take(10).Select(w => w.Word))}。");
@@ -372,9 +419,41 @@ public static class AuthorStyleBuilder
             if (window.Count > 0) Flush(window, winChars, windowScene, buckets);
         }
 
+        // 章首/章末：起笔与收束方式靠指令说不清，靠样本一学就会。
+        // 只取足额章（≥600 字）的首尾窗，避开广告残章。
+        foreach (var ch in chapters)
+        {
+            if (VisibleChars(ch) < 600) continue;
+            // ★ 前言/目录页不是叙事文本：余华档案的开篇样本曾抓到「外文版评论摘要」。
+            var head = ch[..Math.Min(ch.Length, 200)];
+            if (Regex.IsMatch(head, "目录|Contents|自序|序言|附录|后记|出版|评论|评论")) continue;
+            if (!ch.Contains('“') && !ch.Contains('”') && !ch.Contains('「')) continue;
+            var paras = ch.Split('\n').Where(x => VisibleChars(x) >= 4).ToList();
+            if (paras.Count < 4) continue;
+
+            var opening = new List<string>();
+            var openChars = 0;
+            foreach (var p in paras)
+            {
+                opening.Add(p);
+                openChars += VisibleChars(p);
+                if (openChars >= 250) break;
+            }
+            Flush(opening, openChars, "开篇起笔", buckets);
+
+            var closing = new List<string>();
+            var closeChars = 0;
+            for (var i = paras.Count - 1; i >= 0 && closeChars < 250; i--)
+            {
+                closing.Insert(0, paras[i]);
+                closeChars += VisibleChars(paras[i]);
+            }
+            Flush(closing, closeChars, "章末收束", buckets);
+        }
+
         var meanSig = MeanSignatureDensity(allText, visible);
         var picked = new List<AuthorStyleProfile.StyleSample>();
-        foreach (var scene in new[] { "对话交锋", "战斗冲突", "环境氛围", "日常推进" })
+        foreach (var scene in new[] { "开篇起笔", "对话交锋", "战斗冲突", "环境氛围", "日常推进", "章末收束" })
         {
             if (!buckets.TryGetValue(scene, out var windows) || windows.Count == 0) continue;
             AuthorStyleProfile.StyleSample? best = null;
@@ -396,6 +475,9 @@ public static class AuthorStyleBuilder
         }
         return picked;
     }
+
+    /// <summary>样本总数上限（token 预算：锚定段整体控制在 ~1600 token 内）。</summary>
+    internal const int MaxSamples = 6;
 
     /// <summary>窗口入桶。太短的窗口（&lt;120 字）统计不稳，不入。</summary>
     private static void Flush(
@@ -419,6 +501,14 @@ public static class AuthorStyleBuilder
         if (action >= 4.0) return "战斗冲突";
         if (dRatio < 0.08 && action < 2.0) return "环境氛围";
         return "日常推进";
+    }
+
+    /// <summary>段落是否几乎全是引号内容（引号外可见字 &lt; 15）。</summary>
+    private static bool IsQuoteOnly(string p)
+    {
+        if (VisibleChars(p) == 0) return false;
+        var outside = Regex.Replace(p, "[「『“‘][^」』”’]*[」』”’]", " ");
+        return VisibleChars(outside) < 15;
     }
 
     /// <summary>位置前后 12 字内出现引号 = 疑似对话引导语。</summary>

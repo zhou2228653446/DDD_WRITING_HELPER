@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using 编辑器.Services;
 using Xunit;
 
@@ -114,14 +115,16 @@ public class StyleAuditTests
     }
 
     [Fact]
-    public void 短样本要折减分数_不能拿满分()
+    public void 短样本缺维度要注明_且不得虚高()
     {
         var shortText = "他走进屋子。他看见桌子。他想起往事。";
         var r = StyleAudit.Analyze(shortText);
 
+        // v4：短样本不再"折减总分"，而是缺的维度不参与计分、按可测权重归一，
+        // 报告必须把缺什么写清楚——读者得知道这分是打了折的。
         Assert.True(r.Confidence < 0.7, $"置信度 {r.Confidence} 太高");
-        Assert.True(r.Score < 60, $"短样本居然 {r.Score} 分");
-        Assert.Contains("置信度", r.ToText());
+        Assert.Contains("未计分维度", r.ToText());
+        Assert.Contains("词汇复用", string.Join("、", r.Skipped));
     }
 
     [Fact]
@@ -188,5 +191,72 @@ public class StyleAuditTests
         Assert.Equal(0, r.Score);
         Assert.Equal(0, r.SentenceCount);
         Assert.Empty(r.Hits);
+    }
+
+    // ─────────────── v4（第三轮评审）───────────────
+
+    [Fact]
+    public void 白描节奏不该被暴扣_健康区间给满八五折以上()
+    {
+        // 评审点名的灾难：冷峻白描（句长 20 字上下、交替率 54%）被句长维度
+        // 扣 10.7 分再被归一化放大成 23.8 分。v4 要求：RMSSD ≥0.6、交替率
+        // 50%~80%、无任何模型腔命中 → 句长分 ≥ 15×0.85。
+        var sb = new StringBuilder();
+        for (var i = 0; i < 16; i++)
+        {
+            // 长短句用固定的三档轮换，保证 RMSSD 与交替率落在健康区间
+            string line;
+            if (i % 3 == 0)
+                line = "他拉开抽屉取出一本包着油布的值班日志，纸页受了潮，边缘发软，拿在手里沉甸甸的。";
+            else if (i % 3 == 1)
+                line = "他把笔探进墨水瓶。";
+            else
+                line = "笔尖刮在瓶底，发出细微的沙沙声，字迹压得很实。";
+            sb.AppendLine(line);
+        }
+        var r = StyleAudit.Analyze(sb.ToString());
+
+        Assert.True(r.Rhythm.NormRmssd >= 0.6, $"RMSSD {r.Rhythm.NormRmssd:0.00} 不足");
+        Assert.True(r.Rhythm.FlipRate >= 0.5 && r.Rhythm.FlipRate <= 0.8,
+            $"交替率 {r.Rhythm.FlipRate:P0} 不在健康区间");
+        Assert.True(r.SubRhythm >= 15 * 0.85, $"句长节奏 {r.SubRhythm:0.#}/15，白描被暴扣");
+    }
+
+    [Fact]
+    public void 嘴角裂开弧度要被句式树抓住()
+    {
+        var r = StyleAudit.Analyze(
+            "周主任抬起头，惨白的脸在屏幕绿光映照下一片惨淡，嘴角裂开一个生硬的弧度。" +
+            "他看着对面的人，把那份文件推了过去，等对方自己看清楚里面的内容。");
+        Assert.Contains(r.Hits, h => h.Kind == "僵笑弧度");
+    }
+
+    [Fact]
+    public void 对话占比永远计入总分_单人演讲不算对白()
+    {
+        // ① text 模式（无基线）下对话分也要进总分——v3 的失联 Bug。
+        var withSpeech = StyleAudit.Analyze(string.Join("\n", Enumerable.Repeat(
+            "“大家坐。”他敲了敲桌子，环视一圈，等所有人安静下来才继续说下去。", 6)));
+        Assert.DoesNotContain(withSpeech.Skipped, s => s.Contains("对话"));
+        Assert.True(withSpeech.SubDialogue > 0, "对话分被踢出总分了");
+
+        // ② 连续 ≥3 段纯引号 = 演讲/独白，不算交互对白——85% 引号的演讲章
+        //    不该被判成"打乒乓球的空心化对白"。
+        var speech = string.Join("\n", Enumerable.Repeat(
+            "“各位，我今天不讲成绩，我讲五个人，讲一讲他们是谁，他们做过什么。”", 8));
+        var r = StyleAudit.Analyze(speech);
+        Assert.True(r.DialogueRatio < 0.1, $"演讲被算成了对白：{r.DialogueRatio:P0}");
+    }
+
+    [Fact]
+    public void 章节标题行不进统计()
+    {
+        var body = string.Join("\n", Enumerable.Repeat("他沿着走廊往深处走，脚步声在墙上来回撞。", 8));
+        var withHeader = "=== 第3章 常住人口摸排（1856 字）===\n" + body;
+        var r = StyleAudit.Analyze(withHeader);
+
+        Assert.DoesNotContain(r.ParagraphCount.ToString(), "=== ");
+        Assert.DoesNotContain(r.Hits.Select(h => h.Excerpt), e => e.Contains("==="));
+        Assert.True(!r.ToText().Contains("==="), "标题行混进了统计");
     }
 }

@@ -123,7 +123,6 @@ internal static class AiTools
                 return ToolResult.Fail(
                     $"没有叫「{presetArg}」的提示词方案。内置：novel / academic / official / general / ultra_long_novel；" +
                     "也可以传自定义方案的 id。");
-
             presetId = presetArg;
             taskFallback = AiPrompts.TextFor(presetId, taskKey);
 
@@ -137,6 +136,21 @@ internal static class AiTools
         var legacySampling = string.Equals(
             NovelTools.Str(args, "sampling").Trim(), "legacy", StringComparison.OrdinalIgnoreCase);
         var sampling = legacySampling ? SamplingPresets.Legacy(task) : SamplingPresets.For(task);
+
+        // 作者风格：三层覆盖——显式 style 参数 > 书的绑定（AuthorStyleId）> 不启用。
+        // 显式传了不存在的 id 要当场报错（否则静默退回默认文风，agent 根本不知道）。
+        // review 不注入：审稿要的是客观，不是模仿。
+        string? styleId = NovelTools.Str(args, "style").Trim();
+        if (styleId.Length == 0) styleId = p.AuthorStyleId;
+        AuthorStyleProfile? styleProfile = null;
+        if (styleId is { Length: > 0 } && task != "review")
+        {
+            styleProfile = AuthorStyleStore.Get(styleId);
+            if (styleProfile == null)
+                return ToolResult.Fail(
+                    $"没有叫「{styleId}」的作者风格档案。style_profile_list 看现有档案，" +
+                    "或 style_profile_import 从作品 txt 导入新的。");
+        }
 
         // 技能：界面在 AI 面板选一个，命中功能的生成就用该手法。MCP 侧同样要生效，
         // 否则「黄金三章」这类手法只在界面里有效，agent 写出来的是另一种调性。
@@ -181,6 +195,14 @@ internal static class AiTools
         if (p.LiteratureLibrary != null && p.LiteratureLibrary.Count > 0)
             stable = (stable.Length > 0 ? stable + "\n\n" : "") +
                      LiteratureFormatter.BuildContextBlock(p.LiteratureLibrary);
+
+        // 作者风格锚定段：放在稳定段**最前**——它是全篇的风格基调，设定块是参考资料；
+        // 同属可缓存前缀，不破坏缓存分段。
+        if (styleProfile != null)
+        {
+            var anchor = AuthorStyleBuilder.BuildAnchorBlock(styleProfile);
+            stable = anchor + "\n\n" + stable;
+        }
 
         // ★ 必须用 BuildSections 而不是 Build：
         // Build 会 Flatten 成单段字符串，再经 SystemPrompt.FromText 隐式转换时**整段**

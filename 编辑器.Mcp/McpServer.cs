@@ -468,6 +468,42 @@ internal static class McpServer
         },
         new ToolDef
         {
+            name = "style_profile_list",
+            description = "列出作者风格档案库：每位作者一份（签名词、句长指纹、锚定样本数）。" +
+                          "不同书可绑不同作者，请求级覆盖走 ai_write 的 style 参数。",
+        },
+        new ToolDef
+        {
+            name = "style_profile_import",
+            description = "从作者作品 txt（一整部或多部合集）构建风格档案：清洗→分章→统计指纹" +
+                          "（句长/段长/对话占比/签名词/引导语）→按场景自动挑 few-shot 锚定样本。" +
+                          "语料需 ≥20 万字。构建后用 style_profile_bind 绑到书。",
+            inputSchema = new ToolSchema
+            {
+                properties = new Dictionary<string, ToolProp>
+                {
+                    ["name"] = new() { description = "作者笔名（显示名与档案 Id 的来源）" },
+                    ["path"] = new() { description = "作品 txt 的完整路径" },
+                },
+                required = new List<string> { "name", "path" },
+            },
+        },
+        new ToolDef
+        {
+            name = "style_profile_bind",
+            description = "把某份作者风格档案绑定到当前打开的书（写进项目文件，长期生效）；" +
+                          "不传 id 则解绑。只想临时换风格时不要绑定，用 ai_write 的 style 参数。",
+            inputSchema = new ToolSchema
+            {
+                properties = new Dictionary<string, ToolProp>
+                {
+                    ["id"] = new() { description = "档案 Id（style_profile_list 里看）；不传 = 解绑" },
+                },
+                required = new List<string>(),
+            },
+        },
+        new ToolDef
+        {
             name = "chapter_write",
             description = "写章节正文。mode=replace 覆盖（会丢原内容，慎用），mode=append 追加。",
             inputSchema = new ToolSchema
@@ -1038,6 +1074,26 @@ internal static class McpServer
                     // 传 text 时连项目都不用开；传 chapter / 不传则读当前项目。
                     var r0 = NovelTools.StyleCheck(session, args);
                     PublishToolDone(name, args, r0, projectModified: false, session);
+                    return ToolText(r0.Text, r0.IsError);
+                }
+                case "style_profile_list":
+                {
+                    var r0 = AuthorStyleTools.List();
+                    PublishToolDone(name, args, r0, projectModified: false, session);
+                    return ToolText(r0.Text, r0.IsError);
+                }
+                case "style_profile_import":
+                {
+                    // 导入会写档案库（author_profiles/），不碰项目文件。
+                    var r0 = AuthorStyleTools.Import(session, args);
+                    PublishToolDone(name, args, r0, projectModified: false, session);
+                    return ToolText(r0.Text, r0.IsError);
+                }
+                case "style_profile_bind":
+                {
+                    // 绑定写进项目文件（NovelProject.AuthorStyleId）。
+                    var r0 = AuthorStyleTools.Bind(session, args);
+                    PublishToolDone(name, args, r0, projectModified: true, session);
                     return ToolText(r0.Text, r0.IsError);
                 }
             }

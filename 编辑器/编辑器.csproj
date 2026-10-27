@@ -25,4 +25,8 @@
     <PackageReference Include="QuestPDF" Version="2024.12.3" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 单测要覆盖内部实现（AuthorStyleStore 的目录注入、分章管线） -->
+    <InternalsVisibleTo Include="编辑器.Tests" />
+  </ItemGroup>
 </Project>

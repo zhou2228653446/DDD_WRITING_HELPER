@@ -555,7 +555,7 @@ Cursor / WorkBuddy / Cline 这类 AI 客户端就能直接打开你的 `.tdxproj
 `TdxClaw.Mcp.exe`）本来就是进程级隔离，不受此影响。会话闲置 30 分钟后自动回收，
 腾出它常驻的整书内存。
 
-**40 个工具**，分九类：
+**43 个工具**，分九类：
 
 | 类别 | 工具 |
 |---|---|
@@ -897,7 +897,7 @@ MCP 服务器是独立工程，**不重写任何业务逻辑**，全部 ProjectR
 ```
 编辑器.Mcp/
 ├─ Program.cs       入口（--selftest 跑协议自检）
-├─ McpServer.cs     JSON-RPC 2.0 + stdio 主循环 + 40 个工具的 schema
+├─ McpServer.cs     JSON-RPC 2.0 + stdio 主循环 + 43 个工具的 schema
 ├─ NovelTools.cs    读写 / 检索 / 导出 / 删书 + Session（含写前冲突检测）
 ├─ UltraTools.cs    超长篇结构：分卷 / 角色分级 / 状态面板（仅启用后可用）
 ├─ AiTools.cs       ai_write：复用 AiPrompts 与两个 Service，与界面同源

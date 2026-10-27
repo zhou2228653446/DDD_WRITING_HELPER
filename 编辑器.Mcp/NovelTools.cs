@@ -565,7 +565,12 @@ internal static class NovelTools
 
     /// <summary>
     /// 风格审计（本地统计，不花 token）。三种输入：任意文本 / 某章 / 整本。
-    /// 整本时额外列出最"AI"的三章——那才是该动手改的地方。
+    ///
+    /// ★ 章节一律**相对全书基线**来判：段落节奏与对话占比用固定黄金区间去判所有章节，
+    ///   等于假设所有章节都是"匀速推进的普通剧情章"——孤身潜行章（对话 &lt;5%）和
+    ///   朝堂辩论章（对话 70%）都会被无端扣分。同一本书里的章节本来体裁就不同，
+    ///   用它自己的常态当尺子才说得通。
+    /// 整本模式还会列出最该改的三章。
     /// </summary>
     public static ToolResult StyleCheck(Session s, JsonElement args)
     {
@@ -576,39 +581,48 @@ internal static class NovelTools
         var number = Int(args, "chapter", 0);
         if (!s.TryGet(out var p, out var err)) return err;
 
+        var ordered = p.Chapters.OrderBy(c => c.ChapterNumber).ToList();
+        if (ordered.Count == 0) return ToolResult.Fail("这本书还没有章节。");
+
+        var whole = string.Join("\n", ordered.Select(c => c.Content ?? ""));
+        // 基线按章建：取这本书各章对话占比/段长的**取值范围**，
+        // 落在范围内就是正常体裁，不该扣分。
+        var baseline = StyleBaseline.FromChapters(ordered.Select(c => c.Content ?? ""));
+
         if (number > 0)
         {
-            var c = p.Chapters.FirstOrDefault(x => x.ChapterNumber == number);
+            var c = ordered.FirstOrDefault(x => x.ChapterNumber == number);
             if (c == null) return ToolResult.Fail($"没有第 {number} 章。先 chapters_list 看现有章号。");
-            var r = StyleAudit.Analyze(c.Content);
+            var r = StyleAudit.Analyze(c.Content, baseline);
             return ToolResult.Ok($"第{number}章「{c.Title}」\n\n" + r.ToText());
         }
 
-        if (p.Chapters.Count == 0) return ToolResult.Fail("这本书还没有章节。");
+        var report = StyleAudit.Analyze(whole, baseline);
 
-        var ordered = p.Chapters.OrderBy(c => c.ChapterNumber).ToList();
-        var whole = string.Join("\n", ordered.Select(c => c.Content ?? ""));
-        var report = StyleAudit.Analyze(whole);
-
-        var worst = ordered
-            .Select(c => (Chapter: c, Score: StyleAudit.Analyze(c.Content).Score, Words: c.WordCount))
+        var scored = ordered
+            .Select(c => (Chapter: c, Score: StyleAudit.Analyze(c.Content, baseline).Score, Words: c.WordCount))
             .Where(x => x.Words >= 200)
             .OrderBy(x => x.Score)
-            .Take(3)
             .ToList();
 
         var sb = new System.Text.StringBuilder();
         sb.AppendLine($"全书 {ordered.Count} 章 / {ordered.Sum(c => c.WordCount)} 字");
+        sb.AppendLine($"基线：中位句长 {baseline.MedianSentenceLen:0} 字、中位段长 {baseline.MedianParagraphLen:0} 字、对话占比 {baseline.DialogueRatio:P0}");
         sb.AppendLine();
         sb.Append(report.ToText());
 
-        if (worst.Count > 0)
+        if (scored.Count > 0)
         {
             sb.AppendLine();
             sb.AppendLine();
-            sb.Append("最需要改的三章：");
-            foreach (var (c, score, words) in worst)
+            sb.AppendLine("各章得分（相对全书基线）：");
+            foreach (var (c, score, words) in scored)
                 sb.AppendLine($"· 第{c.ChapterNumber}章「{c.Title}」 {score} 分（{words} 字）");
+
+            var worst = scored.Take(3).ToList();
+            sb.AppendLine();
+            sb.Append("最需要改的三章：");
+            sb.Append(string.Join("、", worst.Select(w => $"第{w.Chapter.ChapterNumber}章（{w.Score} 分）")));
         }
 
         return ToolResult.Ok(sb.ToString().Trim());

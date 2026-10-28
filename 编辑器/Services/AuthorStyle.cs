@@ -297,6 +297,114 @@ public static class AuthorStyleBuilder
         };
     }
 
+    /// <summary>
+    /// 作者相似度评分（v5 新增的"打分"职能——对**具体档案**比，不对抽象标准比）。
+    ///
+    /// 与已退役的"AI 味指数"的本质区别：AI 味试图量一个隐形目标（"AI 味"），
+    /// 阈值全靠猜，v4 实测 AI 与人写都在 91~99、毫无区分度；相似度量的
+    /// 是与一份具体语料分布的距离——每个判据都有实数可对。
+    /// </summary>
+    public sealed record SimilarityReport(int Score, string Detail)
+    {
+        public override string ToString() => $"作者相似度 {Score}/100\n{Detail}";
+    }
+
+    public static SimilarityReport ScoreSimilarity(AuthorStyleProfile profile, string text)
+    {
+        var seg = StyleAudit.Split(text);
+        var visible = seg.VisibleChars;
+        if (visible < 100)
+            return new SimilarityReport(0, "样本不足 100 字，无法算相似度。");
+
+        // 句长
+        var mean = seg.SentenceLengths.Count > 0 ? seg.SentenceLengths.Average() : 0;
+        var medSent = Median(seg.SentenceLengths);
+
+        // 每句逗号
+        var commaTotal = text.Count(c => c == '，');
+        var sentenceTotal = 0;
+        foreach (var sen in Regex.Split(text, @"[。！？…；”」]+"))
+            if (VisibleChars(sen) >= 4) sentenceTotal++;
+        var commaPer = sentenceTotal == 0 ? 0 : (double)commaTotal / sentenceTotal;
+
+        var dialogue = StyleAudit.CountInteractiveDialogue(seg.Paragraphs);
+        var dialogueRatio = visible == 0 ? 0 : (double)dialogue / visible;
+
+        // 各成分健康度（1 = 与档案一致）：偏距离按对数尺，±50% 内基本不扣
+        static double Health(double actual, double target, double tolerance)
+        {
+            if (target <= 0) return 1;
+            var dist = Math.Abs(Math.Log(Math.Max(actual, target * 0.05) / target));
+            return Math.Max(0, 1 - dist / tolerance);   // tolerance = ln(2.7) ≈ 1.0 时偏离 e 倍归零
+        }
+
+        var hSentence = Health(medSent, profile.SentenceMedian, 1.0);
+        var hComma = Health(commaPer, profile.CommaPerSentence, 1.1);
+        var hPara = Health(Median(seg.ParagraphLengths), profile.ParagraphMedian, 1.1);
+        var hDialogue = profile.DialogueRatio < 0.02
+            ? 1.0
+            : Health(dialogueRatio, profile.DialogueRatio, 1.2);
+
+        // 签名词：逐词比对实际频次与目标频次（没出现=0.1，不是"没扣分"——
+        // 签名词是这位作者的呼吸，一篇里一次都没有就不像他）
+        var sigDetail = new List<string>();
+        var sigHealth = 0.0;
+        if (profile.SignatureWords.Count > 0)
+        {
+            foreach (var w in profile.SignatureWords)
+            {
+                var actual = CountOf(text, w.Word) * 1000.0 / visible;
+                var h = actual <= 0 ? 0.1 : Health(actual, w.PerK, 1.3);
+                sigHealth += h;
+                if (h < 0.5)
+                    sigDetail.Add($"  {w.Word}：目标 {w.PerK:0.00}/千字，实际 {actual:0.00}");
+            }
+            sigHealth /= profile.SignatureWords.Count;
+        }
+        else sigHealth = 1;
+
+        // 引导语：文中的"X道，"命中档案词表的比例（无对话给中性分）
+        var tagHealth = 1.0;
+        var tagNote = "";
+        if (profile.DialogueTags.Count > 0 && text.Contains('“'))
+        {
+            var matches = Regex.Matches(text, @"([一-龥]{1,3}道)[，：]")
+                .Select(m => m.Groups[1].Value)
+                .ToList();
+            if (matches.Count > 0)
+            {
+                var hit = matches.Count(m => profile.DialogueTags.Any(t => t.EndsWith(m) || m.EndsWith(t)));
+                tagHealth = (double)hit / matches.Count;
+                tagNote = $"（引导语 {hit}/{matches.Count} 命中档案词表）";
+            }
+            else tagNote = "（文中没有「X道」引导语，档案惯例是「" +
+                           string.Join("、", profile.DialogueTags.Take(3)) + "」）";
+        }
+
+        // 病态证据：跨作者通病，出现即扣（这类与"像谁"无关，就是病）
+        var pathological = StyleAudit.Analyze(text).Hits
+            .Where(h => h.Kind is "翻译腔" or "升华" or "僵笑弧度" or "冗余代词")
+            .ToList();
+
+        var score = Math.Clamp((int)Math.Round(
+            20 * hSentence + 15 * hComma + 10 * hPara + 15 * hDialogue
+            + 25 * sigHealth + 15 * tagHealth
+            - 4 * pathological.Count), 0, 100);
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"对照「{profile.Name}」：中位句长 {medSent:0}（目标 {profile.SentenceMedian:0}）、" +
+                      $"每句逗号 {commaPer:0.0}（目标 {profile.CommaPerSentence:0.0}）、" +
+                      $"中位段长 {Median(seg.ParagraphLengths):0}（目标 {profile.ParagraphMedian:0}）、" +
+                      $"对话 {dialogueRatio:P0}（目标 {profile.DialogueRatio:P0}）");
+        sb.AppendLine($"· 签名词贴合度 {sigHealth:P0}{(sigDetail.Count > 0 ? "\n" + string.Join("\n", sigDetail.Take(4)) : "")}");
+        sb.AppendLine($"· 引导语贴合度 {tagHealth:P0}{tagNote}");
+        if (pathological.Count > 0)
+            sb.Append($"· 病态扣分：{string.Join("、", pathological.Select(h => h.Kind))}（-{4 * pathological.Count}）");
+        else sb.Append("· 病态扣分：无");
+
+        return new SimilarityReport(score, sb.ToString());
+    }
+
     /// <summary>生成请求用的锚定块（进可缓存 system 段）。约 1000~1400 token。</summary>
     public static string BuildAnchorBlock(AuthorStyleProfile p)
     {

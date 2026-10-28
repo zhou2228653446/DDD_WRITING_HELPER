@@ -84,7 +84,7 @@ TdxClaw 写作助手 MCP 服务器：直接读写 .tdxproj 长篇写作项目（
 **AI 与产出（4）**
 `ai_write`（与界面点按钮完全同源：提示词方案 + 全部上下文 + 技能）/ `ai_config_check`（AI 报错先跑它；401=Key 失效或欠费，404=模型名不对；它永不输出 Key）/ `project_export`（docx / pdf / txt，论文版式传 `paperMode=true`）/ `guide`（本手册）
 
-**统计（2）** `characters_stats`（出场章次 / 总次数 / 连续缺席几章）、`style_check`（AI 味指数 0~100 + 套话命中 + 句长节奏 + 建议禁用词；传 text 审任意文本、传 chapter 审单章、都不传审整本并列出最该改的三章。纯本地，不花 token）
+**统计（2）** `characters_stats`（出场章次 / 总次数 / 连续缺席几章）、`style_check`（**事实统计 + 病态证据清单**，不打 AI 味总分；传 style 或本书绑定档案时额外输出**作者相似度**——与该作者语料分布逐项对比。纯本地，不花 token）
 
 **作者风格（3）** `style_profile_list` / `style_profile_import` / `style_profile_bind`：多作者风格档案库——从作品 txt 构建指纹与锚定样本、按书绑定（不同书可绑不同作者）；绑定的书在 ai_write 时自动注入「作者文风锚定」段，请求级覆盖传 `style` 参数。
 

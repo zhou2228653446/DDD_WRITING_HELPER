@@ -9,78 +9,7 @@ namespace 编辑器.Services
     /// <summary>一条命中：哪个指标、命中了什么、该怎么处理。</summary>
     public sealed record StyleHit(string Kind, string Excerpt, string Hint);
 
-    /// <summary>
-    /// 全书基线。**段落节奏与对话占比必须相对它来判**——
-    /// 用固定黄金区间去判所有章节，等于假设所有章节都是"匀速推进的普通剧情章"：
-    /// 孤身潜行章（对话 &lt;5%）会被无端扣分，朝堂辩论章（对话 70%）也会被无端扣分。
-    /// 同一本书里所有章节本来就有各自的体裁，用它自己的常态当尺子才说得通。
-    /// </summary>
-    public sealed record StyleBaseline
-    {
-        public double MedianSentenceLen { get; init; }
-        public double MedianParagraphLen { get; init; }
-        public double DialogueRatio { get; init; }
-        public int SentenceCount { get; init; }
-        public int ParagraphCount { get; init; }
-
-        /// <summary>各章对话占比的最小/最大值。落在区间里 = 这本书的正常体裁，不扣分。</summary>
-        public double DialogueMin { get; init; }
-        public double DialogueMax { get; init; }
-
-        /// <summary>各章中位段长的最小/最大值（移动端短段排版的书，这里本来就是短的）。</summary>
-        public double ParagraphMin { get; init; }
-        public double ParagraphMax { get; init; }
-
-        public int ChapterCount { get; init; }
-
-        public static StyleBaseline From(string text) => FromChapters(new[] { text });
-
-        /// <summary>
-        /// 按章建立基线。★ 用"各章的取值范围"而不是"全书平均"：
-        /// 一本书里既有潜行章又有辩论章是正常的，只要落在它自己的范围内就不该扣分。
-        /// </summary>
-        public static StyleBaseline FromChapters(IEnumerable<string> chapters)
-        {
-            var list = chapters.Where(c => !string.IsNullOrWhiteSpace(c)).ToList();
-            var seg = StyleAudit.Split(string.Join("\n", list));
-
-            var dialogueRatios = new List<double>();
-            var paraMedians = new List<double>();
-            foreach (var c in list)
-            {
-                var s = StyleAudit.Split(c);
-                if (s.VisibleChars == 0) continue;
-                dialogueRatios.Add(s.DialogueChars / (double)s.VisibleChars);
-                paraMedians.Add(Median(s.ParagraphLengths));
-            }
-
-            return new StyleBaseline
-            {
-                MedianSentenceLen = Median(seg.SentenceLengths),
-                MedianParagraphLen = Median(seg.ParagraphLengths),
-                DialogueRatio = seg.VisibleChars == 0
-                    ? 0
-                    : seg.DialogueChars / (double)seg.VisibleChars,
-                SentenceCount = seg.SentenceLengths.Count,
-                ParagraphCount = seg.ParagraphLengths.Count,
-                DialogueMin = dialogueRatios.Count > 0 ? dialogueRatios.Min() : 0,
-                DialogueMax = dialogueRatios.Count > 0 ? dialogueRatios.Max() : 0,
-                ParagraphMin = paraMedians.Count > 0 ? paraMedians.Min() : 0,
-                ParagraphMax = paraMedians.Count > 0 ? paraMedians.Max() : 0,
-                ChapterCount = list.Count,
-            };
-        }
-
-        internal static double Median(List<int> values)
-        {
-            if (values.Count == 0) return 0;
-            var sorted = values.OrderBy(v => v).ToList();
-            var mid = sorted.Count / 2;
-            return sorted.Count % 2 == 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2.0;
-        }
-    }
-
-    /// <summary>节奏类指标。</summary>
+    /// <summary>节奏类指标（事实，不判好坏）。</summary>
     public sealed record RhythmMetrics(
         double MeanSentenceLen,
         double SentenceCv,
@@ -108,37 +37,41 @@ namespace 编辑器.Services
         double BodyPartPerK,
         double TagMonotonyRatio);
 
-    /// <summary>一次风格审计的结果。分数越高越像人写（100 = 完全不像 AI）。</summary>
+    /// <summary>
+    /// 一次风格审计的结果。
+    /// ★ v5（2026-10-28）：**0~100 的"AI 味指数"已退役**——统计指标抓不住"AI 味"
+    ///   这个隐形目标（v4 实测 AI 与人写都在 91~99，毫无区分度）。现在只输出
+    ///   两类可信的东西：**事实统计**（读者自己判断）与**病态证据清单**
+    ///   （翻译腔/升华/僵笑弧度这类跨作者通病，逐条带位置）。
+    ///   "像不像某位作者"走作者相似度线（AuthorStyleBuilder.ScoreSimilarity）。
+    /// </summary>
     public sealed record StyleReport(
-        int Score,
         int CharCount,
         int SentenceCount,
         int ParagraphCount,
         RhythmMetrics Rhythm,
         FlavorMetrics Flavor,
         double DialogueRatio,
-        double DialogueDelta,      // 与全书基线的差（相对模式才有意义）
-        double ParagraphLenDelta,   // 与全书基线中位段长的比
-        double SubRhythm,
-        double SubParagraph,
-        double SubDialogue,
-        double SubFlavor,
-        double SubRepeat,
-        double SubFlow,
-        double SubReuse,
-        bool Relative,
         IReadOnlyList<StyleHit> Hits,
         IReadOnlyList<KeyValuePair<string, int>> Clichés)
     {
-        /// <summary>样本太短时分数不可信（统计量在几十个字上没有意义）。</summary>
+        /// <summary>样本太短时统计量不稳（几十个字上没有意义）。</summary>
         public bool TooShort => CharCount < 200;
+
+        /// <summary>相邻句同头率。</summary>
+        public double SameHeadRatio { get; init; }
+
+        /// <summary>平均每句逗号数（标点习惯的事实）。</summary>
+        public double CommaPerSentence { get; init; }
+
+        /// <summary>≤8 字短句占比。</summary>
+        public double ShortSentenceRatio { get; init; }
 
         public string ToText()
         {
             var sb = new StringBuilder();
-            sb.AppendLine($"【风格审计】AI 味指数 {Score}/100（越高越像人写，" +
-                          $"样本 {CharCount} 字 / {SentenceCount} 句 / {ParagraphCount} 段" +
-                          (Relative ? "，已对全书基线" : "") + "）");
+            sb.AppendLine($"【风格审计】样本 {CharCount} 字 / {SentenceCount} 句 / {ParagraphCount} 段" +
+                          "（只报事实与病态证据，不打总分）");
 
             if (SentenceCount == 0)
             {
@@ -147,44 +80,31 @@ namespace 编辑器.Services
             }
 
             sb.AppendLine();
-            sb.AppendLine($"· 句长节奏 {SubRhythm:0.#}/15（RMSSD {Rhythm.NormRmssd:0.00}、交替率 {Rhythm.FlipRate:P0}、CV {Rhythm.SentenceCv:0.00}）");
-            sb.AppendLine($"· 段落节奏 {SubParagraph:0.#}/15（段长 CV {Rhythm.ParagraphCv:0.00}、中位段长 {Rhythm.MeanParagraphLen:0} 字" +
-                          (Relative ? $"、相对全书 {ParagraphLenDelta:P0}" : "") + "）");
-            sb.AppendLine($"· 对话占比 {SubDialogue:0.#}/10（{DialogueRatio:P0}" +
-                          (Relative ? $"，与全书差 {DialogueDelta:P0}" : "") + "）");
-            sb.AppendLine($"· 模型腔 {SubFlavor:0.#}/35（词表 {Flavor.WordClichePerK:0.0}/千字、句式 {Flavor.PatternPerK:0.0}/千字、" +
-                          $"比喻 {Flavor.SimilePerK:0.0}/千字、连接词 {Flavor.ConnectivePerK:0.0}/千字、程度副词 {Flavor.DegreeAdverbPerK:0.0}/千字、" +
-                          $"章末升华 {Flavor.ElevationHits} 处）");
-            sb.AppendLine($"· 重复与同构 {SubRepeat:0.#}/10（相邻句同头率 {SameHeadRatio:P0}）");
-            sb.AppendLine($"· 流水句 {SubFlow:0.#}/5（占比 {Rhythm.FlowRatio:P0}）");
-            if (Skipped.All(x => x != "词汇复用"))
-                sb.AppendLine($"· 词汇复用 {SubReuse:0.#}/10（五官/神态词 {Flavor.BodyPartPerK:0.0}/千字" +
-                              $"、对话引导语单调 {Flavor.TagMonotonyRatio:P0}）");
-            sb.AppendLine(Score >= 85 ? "· 判读：健康人写区间"
-                : Score >= 70 ? "· 判读：可用，局部有 AI 痕迹"
-                : Score >= 50 ? "· 判读：AI 味明显，建议定点改写"
-                : "· 判读：病态模型腔，建议重写");
+            sb.AppendLine($"· 事实：中位句长 {Rhythm.MeanSentenceLen:0} 字（CV {Rhythm.SentenceCv:0.00}）、" +
+                          $"中位段长 {Rhythm.MeanParagraphLen:0} 字、对话 {DialogueRatio:P0}、" +
+                          $"每句逗号 {CommaPerSentence:0.0}、短句占比 {ShortSentenceRatio:P0}、同头率 {SameHeadRatio:P0}");
+            sb.AppendLine($"· 模型腔密度：死词 {Flavor.WordClichePerK:0.0}/千字、句式 {Flavor.PatternPerK:0.0}/千字、" +
+                          $"比喻 {Flavor.SimilePerK:0.0}/千字、连接词 {Flavor.ConnectivePerK:0.0}/千字、" +
+                          $"程度副词 {Flavor.DegreeAdverbPerK:0.0}/千字、章末升华 {Flavor.ElevationHits} 处");
+            sb.AppendLine($"· 流水句占比 {Rhythm.FlowRatio:P0}、五官/神态词 {Flavor.BodyPartPerK:0.0}/千字");
 
             if (TooShort)
             {
                 sb.AppendLine();
-                sb.AppendLine("⚠ 样本不足 200 字，以上分数仅供参考（统计量不够稳定）。");
-            }
-
-            if (Skipped.Count > 0)
-            {
-                sb.AppendLine();
-                sb.Append("未计分维度（样本量不够，不参与打分，总分已按可测权重归一）：");
-                sb.Append(string.Join("、", Skipped));
-                sb.Append($"。可测权重占比 {Confidence:P0}。");
+                sb.AppendLine("⚠ 样本不足 200 字，以上统计量不稳定，仅供参考。");
             }
 
             if (Hits.Count > 0)
             {
                 sb.AppendLine();
-                sb.AppendLine("命中（前 12 条）：");
+                sb.AppendLine("病态与套话命中（证据，逐条可改）：");
                 foreach (var h in Hits.Take(12))
                     sb.AppendLine($"· [{h.Kind}] {h.Excerpt} —— {h.Hint}");
+            }
+            else
+            {
+                sb.AppendLine();
+                sb.Append("病态与套话命中：无。");
             }
 
             if (Clichés.Count > 0)
@@ -196,19 +116,6 @@ namespace 编辑器.Services
 
             return sb.ToString().Trim();
         }
-
-        /// <summary>相邻句同头率（报告里要显示，得留在报告上）。</summary>
-        public double SameHeadRatio { get; init; }
-
-        /// <summary>
-        /// 可测权重占比（满分 100 中实际参与了计分的部分）。v4 起足额样本（≥400 字）
-        /// 全维度可测，此值恒为 1；只有真缺维度的短样本才 &lt; 1，且那时总分才按
-        /// 可测权重归一（报告会列明缺了什么）。
-        /// </summary>
-        public double Confidence { get; init; } = 1;
-
-        /// <summary>样本量不足、未参与计分的维度（报告里必须写明）。</summary>
-        public IReadOnlyList<string> Skipped { get; init; } = Array.Empty<string>();
     }
 
     /// <summary>
@@ -363,7 +270,7 @@ namespace 编辑器.Services
         ///   演讲），文学体裁上根本不是"两人打乒乓球的对白"。把它算进对话占比，
         ///   一个感人演讲章会被误判成 85% 空心化对白——体裁误判（评审点名）。
         /// </summary>
-        private static int CountInteractiveDialogue(List<string> paragraphs)
+        internal static int CountInteractiveDialogue(List<string> paragraphs)
         {
             var mono = new bool[paragraphs.Count];
             var run = 0;
@@ -412,8 +319,8 @@ namespace 编辑器.Services
             if (commas >= 4 && CountVisible(s) >= 45) seg.FlowSentences++;
         }
 
-        /// <summary>主入口。不给基线就是绝对判；给了基线就相对判。</summary>
-        public static StyleReport Analyze(string? text, StyleBaseline? baseline = null)
+        /// <summary>主入口。只测事实与病态证据，不打分（v5）。</summary>
+        public static StyleReport Analyze(string? text)
         {
             var seg = Split(text);
             var visible = seg.VisibleChars;
@@ -422,10 +329,9 @@ namespace 编辑器.Services
             {
                 var empty = new RhythmMetrics(0, 0, 0, 0, 0, 0, 0, 0, 0);
                 var emptyFlavor = new FlavorMetrics(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-                return new StyleReport(0, visible, 0, seg.Paragraphs.Count, empty, emptyFlavor,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false,
-                    Array.Empty<StyleHit>(), Array.Empty<KeyValuePair<string, int>>())
-                { SameHeadRatio = 0, Confidence = 0, Skipped = new[] { "全部维度（正文为空）" } };
+                return new StyleReport(visible, 0, seg.Paragraphs.Count, empty, emptyFlavor,
+                    0, Array.Empty<StyleHit>(), Array.Empty<KeyValuePair<string, int>>())
+                { SameHeadRatio = 0 };
             }
 
             var hits = new List<StyleHit>();
@@ -567,123 +473,10 @@ namespace 编辑器.Services
             if (parallels >= 3)
                 hits.Add(new StyleHit("排比", "不仅…而且 / 既…又 / 一边…一边", "对仗句式密度高"));
 
-            // ── 打分（v4）：每个维度都是"实测得分/满分"，总分 = 直接相加（满分合计 100）──
-            //
-            // ★ v4 废除"按可测权重归一化"的乘法器（v3 的审美倒挂元凶）：
-            //   那会把某一项的扣分放大 100/可测权重 倍——样本 1 句长扣 10.7 分、
-            //   对话被误判不可测后只剩 45 分可测权重，扣分被放大 2.2 倍成 23.8 分，
-            //   《守灯人》这种白描标杆被打进 75 分。现在满分权重合计恰为 100，
-            //   足额样本下每一分扣分就是一分，不放大。
-            //   只有样本短到某维度真不可测时才把缺的权重按比例补回（见尾部），并注明。
-            var relative = baseline != null;
-            var skipped = new List<string>();
-
-            // 句长节奏 15（v3 是 25）：变化幅度 + 是否在长短交替。
-            // ★ 阈值放宽：交替率 50%~80%、RMSSD ≥0.60 是健康的文学节奏（含冷峻
-            //   白描——短促有力的连续动作推进本来就不需要剧烈换档），给 85% 以上。
-            //   只有匀速催眠句（RMSSD ≤0.30 且交替率 ≤0.30）才拿不到分。
-            var subRhythm = 15 * (0.5 * Clamp((normRmssd - 0.30) / 0.40)
-                                 + 0.5 * Clamp((flipRate - 0.30) / 0.30));
-            var measRhythm = seg.Sentences.Count >= 5;
-            if (!measRhythm) skipped.Add("句长节奏（句子太少）");
-
-            // 段落节奏 15：内部参差（一半）+ 与全书各章区间的关系（一半），下限 3 分
-            var medianPara = StyleBaseline.Median(seg.ParagraphLengths);
-            var paraRatio = baseline != null && baseline.MedianParagraphLen > 0
-                ? medianPara / baseline.MedianParagraphLen : 0;
-            var cvTerm = Clamp(Cv(seg.ParagraphLengths) / 0.6);
-            var conformTerm = 1.0;
-            if (baseline != null && baseline.ChapterCount >= 3)
-            {
-                var inRange = medianPara >= baseline.ParagraphMin && medianPara <= baseline.ParagraphMax;
-                conformTerm = inRange
-                    ? 1.0
-                    : Clamp(1 - Math.Abs(Math.Log(Math.Max(paraRatio, 0.01))) / 1.5);
-            }
-            var subParagraph = Math.Max(3, 15 * (0.5 * cvTerm + 0.5 * conformTerm));
-            var measParagraph = seg.ParagraphLengths.Count >= 3;
-            if (!measParagraph) skipped.Add("段落节奏（段落太少）");
-
-            // 对话占比 10：**永远可测**（v3 的失联 Bug——text 模式下打印了得分
-            //   却因 baseline==null 被踢出总分，评审验算当场穿帮）。
-            //   有基线：落在本书各章取值区间内即满分；无基线：只罚 >70% 的
-            //   剧本杀式对白（"没有对话"是体裁，不是 AI 味）。
-            var dialogueDelta = baseline != null ? dialogueRatio - baseline.DialogueRatio : 0;
-            double subDialogue;
-            if (baseline != null && baseline.ChapterCount >= 3)
-            {
-                var inRange = dialogueRatio >= baseline.DialogueMin && dialogueRatio <= baseline.DialogueMax;
-                var dist = inRange
-                    ? 0
-                    : dialogueRatio < baseline.DialogueMin
-                        ? baseline.DialogueMin - dialogueRatio
-                        : dialogueRatio - baseline.DialogueMax;
-                subDialogue = 10 * Clamp(1 - dist / 0.25);
-            }
-            else
-            {
-                subDialogue = 10 * (dialogueRatio <= 0.70 ? 1.0 : Clamp(1 - (dialogueRatio - 0.70) / 0.25));
-            }
-
-            // 模型腔 35：**累加扣分制**——基础 35 分，六个成分按"严重度 × 权重"直接扣，
-            // 严重度 = 密度 / 阈值，**不封顶**。
-            // ★ 为什么不能用"最差项 60% + 其余 40%"：那会给纯套话文本留 7 分保底
-            //   （它不写比喻、不写连接词、不在段末升华，其余四项全是"没命中=满分"）。
-            //   累加扣分下，只要有一项爆表（严重度 > 4），35 分就能被单独一项扣穿。
-            var flavorPenalty = 0.25 * (wordClichePerK / 8.0)       // 死词表
-                              + 0.25 * (patternPerK / 10.0)         // 正则句式
-                              + 0.15 * (similePerK / 4.0)           // 比喻泛滥
-                              + 0.15 * (connectivePerK / 6.0)       // 连接词
-                              + 0.10 * (degreePerK / 8.0)           // 程度副词
-                              + 0.10 * (elevationHits / 3.0);       // 章末升华
-            var subFlavor = 35 * Clamp(1 - flavorPenalty);
-            var measFlavor = visible >= 100;   // 死词表是词频证据，百字级就有效
-            if (!measFlavor) skipped.Add("模型腔（样本太短）");
-
-            // 重复与同构 10
-            var subRepeat = Math.Max(0, 10 * Clamp(1 - sameHeadRatio / 0.35));
-            if (parallels >= 3) subRepeat = Math.Max(0, subRepeat - 2);
-            var measRepeat = seg.Sentences.Count >= 6;
-            if (!measRepeat) skipped.Add("重复与同构（句子太少）");
-
-            // 流水句 5（权重下调：它是真实特征，但单靠它会搅浑 A/B 的差距）
-            var subFlow = 5 * Clamp(1 - flowRatio / 0.35);
-            var measFlow = seg.Sentences.Count >= 5;
-            if (!measFlow) skipped.Add("流水句（句子太少）");
-
-            // 词汇复用 10：五官/神态词密度（AI 千字内能把这张表用 15 次）
-            //             + 对话引导语单调（引号外只剩"说/道/问"，没有动作锚点）
-            var bodySeverity = Math.Min(2.0, bodyPerK / 12.0);
-            var tagSeverity = Math.Min(2.0, tagMonotony / 0.60);
-            var subReuse = 10 * Clamp(1 - (0.5 * bodySeverity + 0.5 * tagSeverity));
-            var measReuse = visible >= 400;
-            if (!measReuse) skipped.Add("词汇复用（样本太短）");
-
-            // ── 合成（v4）：直接相加，不放大 ──
-            // 满分权重：15(句) + 15(段) + 10(对话) + 35(模型腔) + 10(同构) + 5(流水) + 10(复用) = 100。
-            // 足额样本（≥400 字、≥6 句、≥3 段）下所有维度都可测，总分就是简单加总；
-            // 只有真缺维度的短样本才按可测权重归一（并在报告里列明缺了什么）。
-            var total = 0.0;
-            var totalWeight = 0;
-            void Add(double score, int weight, bool measurable)
-            {
-                if (!measurable) return;
-                total += score;
-                totalWeight += weight;
-            }
-            Add(subRhythm, 15, measRhythm);
-            Add(subParagraph, 15, measParagraph);
-            Add(subDialogue, 10, true);
-            Add(subFlavor, 35, measFlavor);
-            Add(subRepeat, 10, measRepeat);
-            Add(subFlow, 5, measFlow);
-            Add(subReuse, 10, measReuse);
-
-            var confidence = totalWeight / 100.0;
-            var score = totalWeight >= 100
-                ? (int)Math.Round(Math.Clamp(total, 0, 100))
-                : (int)Math.Round(Math.Clamp(total / totalWeight * 100, 0, 100));
-
+            // ── v5：只出事实，不出分数 ──
+            // "AI 味"抓不住（隐形目标、阈值全靠猜），能可信报告的是：
+            // ① 事实统计（自己判断）② 病态证据（hits，跨作者通病）。
+            // 打分职能移交给 AuthorStyleBuilder.ScoreSimilarity（对具体档案比）。
             var rhythm = new RhythmMetrics(mean, cv, rmssd, normRmssd, flipRate,
                 seg.ParagraphLengths.Count == 0 ? 0 : seg.ParagraphLengths.Average(),
                 Cv(seg.ParagraphLengths), flowRatio, seg.FlowSentences);
@@ -691,15 +484,24 @@ namespace 编辑器.Services
                 patternPerK, similePerK, connectivePerK, degreePerK, elevationHits, fillerCount, fillerPerK, leadInHits,
                 bodyPerK, tagMonotony);
 
+            // 事实层补充：每句逗号数与短句占比（切句把收尾引号当断句，见 AuthorStyle 同款修正）
+            var commaTotal = raw.Count(c => c == '，');
+            var sentenceCount = 0;
+            var shortSentences = 0;
+            foreach (var sen in Regex.Split(raw, @"[。！？…；”」]+"))
+            {
+                var n = CountVisible(sen);
+                if (n >= 4) { sentenceCount++; if (n <= 8) shortSentences++; }
+            }
+
             return new StyleReport(
-                score, visible, seg.Sentences.Count, seg.Paragraphs.Count,
-                rhythm, flavor, dialogueRatio, dialogueDelta, paraRatio,
-                subRhythm, subParagraph, subDialogue, subFlavor, subRepeat, subFlow, subReuse,
-                relative, hits.Take(20).ToList(), found.Take(12).ToList())
+                visible, seg.Sentences.Count, seg.Paragraphs.Count,
+                rhythm, flavor, dialogueRatio,
+                hits.Take(20).ToList(), found.Take(12).ToList())
             {
                 SameHeadRatio = sameHeadRatio,
-                Confidence = confidence,
-                Skipped = skipped,
+                CommaPerSentence = sentenceCount == 0 ? 0 : Math.Round((double)commaTotal / sentenceCount, 2),
+                ShortSentenceRatio = sentenceCount == 0 ? 0 : Math.Round((double)shortSentences / sentenceCount, 3),
             };
         }
 

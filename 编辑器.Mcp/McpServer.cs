@@ -453,15 +453,17 @@ internal static class McpServer
         {
             name = "style_check",
             description =
-                "风格审计（本地统计，不花 token）：给正文算「AI 味指数」0~100（越高越像人写），" +
-                "列出套话命中、句长/段长节奏、对话占比、相邻句同头，并给出建议禁用的词。" +
-                "写之前看基线、写之后自查、改完对比，都用它。",
+                "风格审计（本地统计，不花 token）：输出**事实统计**（句长/段长/对话占比/每句逗号/同头率）" +
+                "与**病态证据清单**（翻译腔、章末升华、僵笑弧度等跨作者通病，逐条带位置）。" +
+                "不打 AI 味总分。传 style（或本书绑定了作者档案）时，额外输出**作者相似度**——" +
+                "与该作者语料分布逐项对比的 0~100 分，模仿任务用它自查。",
             inputSchema = new ToolSchema
             {
                 properties = new Dictionary<string, ToolProp>
                 {
                     ["text"] = new() { description = "直接审计这段文本（优先于 chapter）" },
-                    ["chapter"] = new() { type = "integer", description = "审计第几章；不传则审整本，并列出最需要改的三章" },
+                    ["chapter"] = new() { type = "integer", description = "审计第几章；不传则审整本" },
+                    ["style"] = new() { description = "按哪份作者档案算相似度（style_profile_list 里看）；不传则用本书绑定的档案" },
                 },
                 required = new List<string>(),
             },

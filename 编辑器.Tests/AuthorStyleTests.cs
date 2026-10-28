@@ -136,6 +136,55 @@ public class AuthorStyleTests : IDisposable
         Assert.NotNull(AuthorStyleStore.Get("烽火戏诸侯"));
     }
 
+    // ─────────────── 作者相似度（打分职能的新家）───────────────
+
+    private const string LongStyleParagraph =
+        "他缓缓地抬起了头，目光越过人群，落在了远处那座高塔的顶端，旋即在心底泛起了一阵难以名状的悸动。";
+
+    private static string LongStyleCorpus(int chapters = 10)
+    {
+        var sb = new StringBuilder();
+        for (var i = 1; i <= chapters; i++)
+        {
+            sb.AppendLine($"第{i}章 试炼");
+            // 每章 10 段 ≈ 450 字，须超过"太短当广告"的 300 字门槛
+            for (var k = 0; k < 10; k++) sb.AppendLine(LongStyleParagraph);
+        }
+        return sb.ToString();
+    }
+
+    [Fact]
+    public void 同风格文本得分高_相反风格得分低()
+    {
+        var profile = AuthorStyleBuilder.Build("测试作者", LongStyleCorpus(), "语料");
+
+        // 同风格：同样的长句连缀 + 签名词按目标密度出现（千字各 1 次左右）
+        var same = string.Join("\n", Enumerable.Repeat(LongStyleParagraph, 22));
+
+        // 相反风格：短句剁节奏、签名词绝迹
+        var opposite = string.Join("", Enumerable.Repeat("他看她。她低头。屋里很静。风起了。灯灭了。", 4));
+
+        var s1 = AuthorStyleBuilder.ScoreSimilarity(profile, same).Score;
+        var s2 = AuthorStyleBuilder.ScoreSimilarity(profile, opposite).Score;
+
+        Assert.True(s1 >= 70, $"同风格只有 {s1}");
+        Assert.True(s2 <= 50, $"相反风格也有 {s2}");
+        Assert.True(s1 - s2 >= 20, $"区分度只有 {s1 - s2}");
+    }
+
+    [Fact]
+    public void 病态句要扣相似度分()
+    {
+        var profile = AuthorStyleBuilder.Build("测试作者", LongStyleCorpus(), "语料");
+        var clean = string.Join("\n", Enumerable.Repeat(LongStyleParagraph, 22));
+        var withDisease = clean + "\n他知道，这一切才刚刚开始。命运的齿轮悄然转动。";
+
+        Assert.True(
+            AuthorStyleBuilder.ScoreSimilarity(profile, withDisease).Score
+            < AuthorStyleBuilder.ScoreSimilarity(profile, clean).Score,
+            "病态句没有扣分");
+    }
+
     [Fact]
     public void 锚定块要含指纹_签名词_引导语与样本()
     {

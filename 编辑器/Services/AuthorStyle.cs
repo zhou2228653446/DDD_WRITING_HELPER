@@ -59,7 +59,11 @@ public sealed record AuthorStyleProfile
 
     // ── L2 软指纹 ──
 
-    /// <summary>few-shot 锚定样本。每类场景至多一段，总计 ≤6 段、每段 200~320 字。</summary>
+    /// <summary>
+    /// few-shot 锚定**样本池**。构建时每类场景留 Top-N（默认 8），总计 ≤48 段、每段 120~350 字；
+    /// 生成时按当前场景 + 章号只取 2~3 段放进**不可缓存段**（见
+    /// <see cref="AuthorStyleBuilder.SelectSamples"/>）。旧档案只有 6 段也能照常读取。
+    /// </summary>
     public IReadOnlyList<StyleSample> Samples { get; init; } = Array.Empty<StyleSample>();
 
     // ── L3 规则 ──
@@ -69,7 +73,27 @@ public sealed record AuthorStyleProfile
 
     public sealed record SignatureWord(string Word, double PerK);
 
-    public sealed record StyleSample(string Scene, string Text);
+    /// <summary>
+    /// 一条锚定样本。前两个位置参数保持与旧档案 JSON 兼容（旧档只有 Scene/Text），
+    /// 其余字段都有默认值，反序列化旧档不会炸。
+    /// </summary>
+    public sealed record StyleSample(string Scene, string Text)
+    {
+        /// <summary>池内稳定编号（s01…），供 style_profile_samples 禁用/启用。</summary>
+        public string Id { get; init; } = "";
+
+        /// <summary>出处（第 N 章 / 用户定稿），便于人工抽查与按作品分组。</summary>
+        public string Source { get; init; } = "";
+
+        /// <summary>「这段示范了什么」，由该段指纹自动生成，注入时一并给模型。</summary>
+        public string Note { get; init; } = "";
+
+        /// <summary>与全书指纹的贴合度（0~1，越大越典型）。</summary>
+        public double Fit { get; init; }
+
+        /// <summary>人工禁用后不参与选样；旧档默认 true。</summary>
+        public bool Enabled { get; init; } = true;
+    }
 }
 
 /// <summary>
@@ -100,6 +124,40 @@ public static class AuthorStyleStore
     internal static void SetDirForTests(string dir) => _dirOverride = dir;
     internal static void ClearDirForTests() => _dirOverride = null;
 
+    /// <summary>Id 只允许字母数字连字符下划线与中文——防路径穿越。</summary>
+    private static bool ValidId(string id) =>
+        !string.IsNullOrWhiteSpace(id) && id.Length <= 60 && Regex.IsMatch(id, @"^[\w\-一-龥]+$");
+
+    private static string? SafePath(string id) => ValidId(id) ? Path.Combine(Directory, id + ".json") : null;
+
+    /// <summary>守则独立文件名。与主档案分开，重算档案不会冲掉人工确认过的守则。</summary>
+    private static string RulesFile(string id) => Path.Combine(Directory, id + ".rules.json");
+
+    /// <summary>读取守则；文件不存在返回空表（旧档则由 Get 自动迁移）。</summary>
+    public static IReadOnlyList<string> LoadRules(string id)
+    {
+        if (!ValidId(id)) return Array.Empty<string>();
+        var file = RulesFile(id);
+        if (!File.Exists(file)) return Array.Empty<string>();
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<string[]>(File.ReadAllText(file), JsonOpts)
+                   ?? Array.Empty<string>();
+        }
+        catch { return Array.Empty<string>(); }
+    }
+
+    /// <summary>写守则（唯一真相）。传空表 = 清空。</summary>
+    public static void SaveRules(string id, IEnumerable<string> rules)
+    {
+        if (!ValidId(id)) throw new ArgumentException($"非法档案 Id：{id}");
+        System.IO.Directory.CreateDirectory(Directory);
+        var lines = rules.Where(r => !string.IsNullOrWhiteSpace(r))
+            .Select(r => r.Trim()).ToArray();
+        File.WriteAllText(RulesFile(id),
+            System.Text.Json.JsonSerializer.Serialize(lines, JsonOpts));
+    }
+
     /// <summary>全部档案（按创建时间降序）。目录不存在返回空表。</summary>
     public static List<AuthorStyleProfile> List()
     {
@@ -107,13 +165,10 @@ public static class AuthorStyleStore
         if (!System.IO.Directory.Exists(Directory)) return result;
         foreach (var file in System.IO.Directory.GetFiles(Directory, "*.json"))
         {
-            try
-            {
-                var p = System.Text.Json.JsonSerializer.Deserialize<AuthorStyleProfile>(
-                    File.ReadAllText(file), JsonOpts);
-                if (p != null && !string.IsNullOrWhiteSpace(p.Id)) result.Add(p);
-            }
-            catch { /* 单个档案损坏不拖垮整库 */ }
+            if (file.EndsWith(".rules.json", StringComparison.Ordinal)) continue;
+            // 走 Get 才能合并独立守则 + 顺带迁移旧档
+            var p = Get(Path.GetFileNameWithoutExtension(file));
+            if (p != null) result.Add(p);
         }
         return result.OrderByDescending(p => p.Created).ToList();
     }
@@ -125,8 +180,16 @@ public static class AuthorStyleStore
         if (file == null || !File.Exists(file)) return null;
         try
         {
-            return System.Text.Json.JsonSerializer.Deserialize<AuthorStyleProfile>(
+            var p = System.Text.Json.JsonSerializer.Deserialize<AuthorStyleProfile>(
                 File.ReadAllText(file), JsonOpts);
+            if (p == null || string.IsNullOrWhiteSpace(p.Id)) return null;
+
+            var rules = LoadRules(p.Id);
+            if (rules.Count > 0) return p with { Rules = rules };
+            // 旧档案的 Rules 还嵌在主 JSON 里：首次读取时迁移到独立文件，
+            // 之后 style_profile_import 重算档案就不会把它们冲掉。
+            if (p.Rules.Count > 0) SaveRules(p.Id, p.Rules);
+            return p;
         }
         catch { return null; }
     }
@@ -136,8 +199,11 @@ public static class AuthorStyleStore
         System.IO.Directory.CreateDirectory(Directory);
         var file = SafePath(profile.Id)
                    ?? throw new ArgumentException($"非法档案 Id：{profile.Id}");
+        // 守则只存 rules.json；主档案留空，避免出现两份真相。
+        if (profile.Rules.Count > 0) SaveRules(profile.Id, profile.Rules);
         File.WriteAllText(file,
-            System.Text.Json.JsonSerializer.Serialize(profile, JsonOpts));
+            System.Text.Json.JsonSerializer.Serialize(
+                profile with { Rules = Array.Empty<string>() }, JsonOpts));
     }
 
     public static bool Delete(string id)
@@ -145,15 +211,9 @@ public static class AuthorStyleStore
         var file = SafePath(id);
         if (file == null || !File.Exists(file)) return false;
         File.Delete(file);
+        var rf = RulesFile(id);
+        if (File.Exists(rf)) File.Delete(rf);
         return true;
-    }
-
-    /// <summary>Id 只允许字母数字连字符下划线与中文——防路径穿越。</summary>
-    private static string? SafePath(string id)
-    {
-        if (string.IsNullOrWhiteSpace(id) || id.Length > 60) return null;
-        if (!Regex.IsMatch(id, @"^[\w\-一-龥]+$")) return null;
-        return Path.Combine(Directory, id + ".json");
     }
 
     private static readonly System.Text.Json.JsonSerializerOptions JsonOpts = new()
@@ -274,8 +334,14 @@ public static class AuthorStyleBuilder
             .Select(g => g.Key)
             .ToList();
 
-        // ── L2 样本 ──
-        var samples = PickSamples(chapters, allText, visible);
+        // ── L2 样本池 ──
+        // 把全书 L1 指纹当"典型"的靶子传进去：挑样不再只看签名词密度，
+        // 句长/标点/对话/段长都要靠近全书均值，才配当 few-shot 锚点。
+        var samples = PickSamples(chapters, allText, visible,
+            Median(sentenceLens),
+            sentenceTotal == 0 ? 0 : (double)commaTotal / sentenceTotal,
+            dialogueRatio,
+            Median(paraLens));
 
         return new AuthorStyleProfile
         {
@@ -405,7 +471,11 @@ public static class AuthorStyleBuilder
         return new SimilarityReport(score, sb.ToString());
     }
 
-    /// <summary>生成请求用的锚定块（进可缓存 system 段）。约 1000~1400 token。</summary>
+    /// <summary>
+    /// 生成**稳定前缀**（进可缓存 system 段）：只有指纹与守则，约 200~300 token。
+    /// 原文样本改由 <see cref="BuildSampleBlock"/> 按场景动态注入不可缓存段——
+    /// 前缀不随章节变化，缓存才能一直命中。
+    /// </summary>
     public static string BuildAnchorBlock(AuthorStyleProfile p)
     {
         var sb = new StringBuilder();
@@ -431,16 +501,115 @@ public static class AuthorStyleBuilder
             sb.AppendLine("【作者守则】");
             foreach (var r in p.Rules) sb.AppendLine($"- {r}");
         }
-        if (p.Samples.Count > 0)
+        return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>把 agent/界面给的场景提示归一到 6 个桶名；认不出返回 null。</summary>
+    public static string? NormalizeScene(string? hint)
+    {
+        if (string.IsNullOrWhiteSpace(hint)) return null;
+        var h = hint.Trim();
+        foreach (var s in SceneOrder)
+            if (h.Contains(s, StringComparison.Ordinal)) return s;
+
+        static bool Has(string s, params string[] keys) =>
+            keys.Any(k => s.Contains(k, StringComparison.OrdinalIgnoreCase));
+
+        if (Has(h, "开篇", "起笔", "opening")) return "开篇起笔";
+        if (Has(h, "章末", "收束", "结尾", "ending")) return "章末收束";
+        if (Has(h, "战斗", "打斗", "大战", "冲突", "厮杀", "交手", "battle", "action")) return "战斗冲突";
+        if (Has(h, "对话", "交谈", "争执", "dialogue")) return "对话交锋";
+        if (Has(h, "环境", "氛围", "景物", "scene")) return "环境氛围";
+        if (Has(h, "日常", "过渡", "推进")) return "日常推进";
+        return null;
+    }
+
+    /// <summary>
+    /// 猜本次写作的场景：显式提示 &gt; 章节标题 &gt; 指令 &gt; 正文末尾 600 字的段落投票。
+    /// 纯本地、确定性，不调模型。猜不出返回 null（此时从整个池轮换）。
+    /// </summary>
+    public static string? GuessScene(string? title, string? hint, string? tail)
+    {
+        var byTitle = NormalizeScene(title);
+        if (byTitle != null) return byTitle;
+        var byHint = NormalizeScene(hint);
+        if (byHint != null) return byHint;
+        if (string.IsNullOrWhiteSpace(tail)) return null;
+
+        var cut = tail.Length > 600 ? tail[^600..] : tail;
+        var paras = cut.Split('\n').Where(p => VisibleChars(p) >= 8).TakeLast(6).ToList();
+        if (paras.Count == 0) return null;
+        return paras.Select(SceneOf)
+            .GroupBy(x => x, StringComparer.Ordinal)
+            .OrderByDescending(g => g.Count())
+            .First().Key;
+    }
+
+    /// <summary>
+    /// 从样本池挑本次要注入的 2~3 段：先命中场景，再按**章号确定性轮换**。
+    /// 同一章反复生成拿到同一组（章内连贯），换章自动换组（不会把同几段原文背下来）。
+    /// 池不足时从其他场景补位；池为空返回空表（不注入，不报错）。
+    /// </summary>
+    public static List<AuthorStyleProfile.StyleSample> SelectSamples(
+        AuthorStyleProfile p, string? scene, int chapterNumber, int count = SamplesPerRequest)
+    {
+        var pool = p.Samples.Where(s => s.Enabled && !string.IsNullOrWhiteSpace(s.Text)).ToList();
+        if (pool.Count == 0 || count <= 0) return new();
+
+        var want = NormalizeScene(scene);
+        var primary = new List<int>();
+        var secondary = new List<int>();
+        for (var i = 0; i < pool.Count; i++)
+        {
+            if (want == null || pool[i].Scene == want) primary.Add(i);
+            else secondary.Add(i);
+        }
+        if (primary.Count == 0)
+        {
+            primary = secondary;
+            secondary = new List<int>();
+        }
+
+        var seed = StableHash(chapterNumber);
+        var picked = Rotate(primary, seed).Take(count).ToList();
+        if (picked.Count < count)
+            picked.AddRange(Rotate(secondary, seed).Take(count - picked.Count));
+        return picked.Select(i => pool[i]).ToList();
+    }
+
+    private static List<int> Rotate(List<int> src, int seed)
+    {
+        if (src.Count == 0) return new List<int>();
+        var start = seed % src.Count;
+        return src.Skip(start).Concat(src.Take(start)).ToList();
+    }
+
+    private static int StableHash(int n)
+    {
+        unchecked
+        {
+            var x = (uint)n;
+            x ^= x >> 16; x *= 0x7feb352d; x ^= x >> 15; x *= 0x846ca68b; x ^= x >> 16;
+            return (int)(x & 0x7fffffff);
+        }
+    }
+
+    /// <summary>动态样本块（进不可缓存段）。每段带场景、出处与「示范了什么」。</summary>
+    public static string BuildSampleBlock(
+        AuthorStyleProfile p, IReadOnlyList<AuthorStyleProfile.StyleSample> samples)
+    {
+        if (samples.Count == 0) return "";
+        var sb = new StringBuilder();
+        sb.AppendLine($"【本次风格示例 —— {p.Name} 原文】");
+        sb.AppendLine($"以下是与本次写作场景最接近的 {samples.Count} 段原文。模仿它的句式、节奏、对话接续与情绪处理；");
+        sb.AppendLine("只学怎么写，不要抄情节、人名、专名与题材词。");
+        sb.AppendLine("接着上文写时向示例的句法靠拢，但内容与人物一律以本书设定为准。");
+        foreach (var s in samples)
         {
             sb.AppendLine();
-            sb.AppendLine("【风格示例（摘自其原文，模仿基准）】");
-            foreach (var s in p.Samples)
-            {
-                sb.AppendLine($"──{s.Scene}──");
-                sb.AppendLine(s.Text);
-                sb.AppendLine();
-            }
+            sb.AppendLine($"──{s.Scene}｜{s.Source}" +
+                          (string.IsNullOrWhiteSpace(s.Note) ? "" : "｜" + s.Note) + "──");
+            sb.AppendLine(s.Text);
         }
         return sb.ToString().TrimEnd();
     }
@@ -489,15 +658,40 @@ public static class AuthorStyleBuilder
     //  场景分桶与代表段挑选
     // ------------------------------------------------------------------
 
+    /// <summary>每类场景留几段。6 类 × 8 = 上限 48 段。</summary>
+    internal const int SamplesPerScene = 8;
+
+    /// <summary>样本池上限（构建期）。注入期每次只取 2~3 段，不占缓存前缀。</summary>
+    internal const int MaxSamples = 48;
+
+    /// <summary>每次请求注入几段。</summary>
+    public const int SamplesPerRequest = 3;
+
+    /// <summary>场景固定顺序——决定样本 Id 的稳定性。</summary>
+    public static readonly string[] SceneOrder =
+        { "开篇起笔", "对话交锋", "战斗冲突", "环境氛围", "日常推进", "章末收束" };
+
+    private sealed record SampleWindow(List<string> Paragraphs, int Chars, string Source);
+
+    /// <summary>
+    /// 构建样本池：场景分桶 → 多维贴合度排序 → 病态过滤 + 去重 → 每场景 Top-N。
+    /// 与旧版（每场景只取"签名词密度最接近均值"的一段）的三个差别：
+    /// ① 留池不留单段；② 贴合度看句长/标点/对话/段长而不止词频；③ 同章、近似重复段只留一份，
+    /// 免得扩到 48 段后全是同一个角色在同一章里打转。
+    /// </summary>
     internal static List<AuthorStyleProfile.StyleSample> PickSamples(
-        List<string> chapters, string allText, int visible)
+        List<string> chapters, string allText, int visible,
+        double targetSentence = 0, double targetComma = 0,
+        double targetDialogue = 0, double targetPara = 0)
     {
         // 场景分桶：对话交锋 / 战斗冲突 / 环境氛围 / 日常推进。
         // ★ 先按段分类，再把**同场景连续段落**聚成 250~350 字的窗口——
         //   跨场景聚窗会把对话段和环境段搅在一起，哪种场景都判不准。
-        var buckets = new Dictionary<string, List<List<string>>>();
-        foreach (var ch in chapters)
+        var buckets = new Dictionary<string, List<SampleWindow>>();
+        for (var ci = 0; ci < chapters.Count; ci++)
         {
+            var ch = chapters[ci];
+            var source = $"第{ci + 1}章";
             var paras = ch.Split('\n').Where(p => VisibleChars(p) >= 4).ToList();
             if (paras.Count < 3) continue;
 
@@ -509,7 +703,7 @@ public static class AuthorStyleBuilder
                 var scene = SceneOf(p);
                 if (scene != windowScene && window.Count > 0)
                 {
-                    Flush(window, winChars, windowScene, buckets);
+                    Flush(window, winChars, windowScene, buckets, source);
                     window = new List<string>();
                     winChars = 0;
                 }
@@ -518,19 +712,21 @@ public static class AuthorStyleBuilder
                 winChars += VisibleChars(p);
                 if (winChars >= 300)
                 {
-                    Flush(window, winChars, windowScene, buckets);
+                    Flush(window, winChars, windowScene, buckets, source);
                     window = new List<string>();
                     winChars = 0;
                     windowScene = "";
                 }
             }
-            if (window.Count > 0) Flush(window, winChars, windowScene, buckets);
+            if (window.Count > 0) Flush(window, winChars, windowScene, buckets, source);
         }
 
         // 章首/章末：起笔与收束方式靠指令说不清，靠样本一学就会。
         // 只取足额章（≥600 字）的首尾窗，避开广告残章。
-        foreach (var ch in chapters)
+        for (var ci = 0; ci < chapters.Count; ci++)
         {
+            var ch = chapters[ci];
+            var source = $"第{ci + 1}章";
             if (VisibleChars(ch) < 600) continue;
             // ★ 前言/目录页不是叙事文本：余华档案的开篇样本曾抓到「外文版评论摘要」。
             var head = ch[..Math.Min(ch.Length, 200)];
@@ -547,7 +743,7 @@ public static class AuthorStyleBuilder
                 openChars += VisibleChars(p);
                 if (openChars >= 250) break;
             }
-            Flush(opening, openChars, "开篇起笔", buckets);
+            Flush(opening, openChars, "开篇起笔", buckets, source + "·开头");
 
             var closing = new List<string>();
             var closeChars = 0;
@@ -556,45 +752,129 @@ public static class AuthorStyleBuilder
                 closing.Insert(0, paras[i]);
                 closeChars += VisibleChars(paras[i]);
             }
-            Flush(closing, closeChars, "章末收束", buckets);
+            Flush(closing, closeChars, "章末收束", buckets, source + "·结尾");
         }
 
         var meanSig = MeanSignatureDensity(allText, visible);
         var picked = new List<AuthorStyleProfile.StyleSample>();
-        foreach (var scene in new[] { "开篇起笔", "对话交锋", "战斗冲突", "环境氛围", "日常推进", "章末收束" })
+        var seq = 1;
+        foreach (var scene in SceneOrder)
         {
             if (!buckets.TryGetValue(scene, out var windows) || windows.Count == 0) continue;
-            AuthorStyleProfile.StyleSample? best = null;
-            var bestDist = double.MaxValue;
-            foreach (var w in windows)
-            {
-                // 剔除跨作者通用的模型腔（签名词本身不剔——那是风格）
-                var report = StyleAudit.Analyze(string.Join("\n", w));
-                if (report.Hits.Any(h => PathologicalKinds.Contains(h.Kind))) continue;
 
-                var dist = Math.Abs(SignatureDensity(w) - meanSig);
-                if (dist < bestDist)
+            // ★ 贴合度排序很便宜、StyleAudit.Analyze 很贵：先排序取候选，
+            //   再对候选跑病态检查。百万字语料下比"每个窗口都 Analyze 一遍"快一个量级。
+            var ranked = windows
+                .Select(w => (W: w, Fit: WindowFit(w, meanSig,
+                    targetSentence, targetComma, targetDialogue, targetPara)))
+                .OrderByDescending(x => x.Fit)
+                .Take(SamplesPerScene * 8)
+                .ToList();
+
+            var grams = new List<HashSet<string>>();
+            var perChapter = new Dictionary<string, int>(StringComparer.Ordinal);
+            var taken = 0;
+            foreach (var (w, fit) in ranked)
+            {
+                if (taken >= SamplesPerScene || picked.Count >= MaxSamples) break;
+                var text = string.Join("\n", w.Paragraphs);
+
+                // 剔除跨作者通用的模型腔（签名词本身不剔——那是风格）
+                if (StyleAudit.Analyze(text).Hits.Any(h => PathologicalKinds.Contains(h.Kind))) continue;
+
+                // 近似重复段（同一情节的两种切窗）只留一份
+                var g = Bigrams(text);
+                if (grams.Any(prev => Jaccard(prev, g) > 0.72)) continue;
+                perChapter.TryGetValue(w.Source, out var used);
+                if (used >= 2) continue;                       // 同一章最多 2 段
+                perChapter[w.Source] = used + 1;
+
+                grams.Add(g);
+                picked.Add(new AuthorStyleProfile.StyleSample(scene, text)
                 {
-                    bestDist = dist;
-                    best = new AuthorStyleProfile.StyleSample(scene, string.Join("\n", w));
-                }
+                    Id = $"s{seq++:00}",
+                    Source = w.Source,
+                    Note = DescribeSample(text),
+                    Fit = Math.Round(fit, 3),
+                    Enabled = true,
+                });
+                taken++;
             }
-            if (best != null) picked.Add(best);
         }
         return picked;
     }
 
-    /// <summary>样本总数上限（token 预算：锚定段整体控制在 ~1600 token 内）。</summary>
-    internal const int MaxSamples = 6;
-
     /// <summary>窗口入桶。太短的窗口（&lt;120 字）统计不稳，不入。</summary>
     private static void Flush(
         List<string> window, int chars, string scene,
-        Dictionary<string, List<List<string>>> buckets)
+        Dictionary<string, List<SampleWindow>> buckets, string source)
     {
         if (chars < 120) return;
         if (!buckets.TryGetValue(scene, out var list)) buckets[scene] = list = new();
-        list.Add(window);
+        list.Add(new SampleWindow(new List<string>(window), chars, source));
+    }
+
+    /// <summary>一段有多"典型的他"：五个指纹按健康度加权。目标全为 0 时退回只看签名词。</summary>
+    private static double WindowFit(SampleWindow w, double meanSig,
+        double tSent, double tComma, double tDlg, double tPara)
+    {
+        var text = string.Join("\n", w.Paragraphs);
+        static double H(double a, double t, double tol)
+        {
+            if (t <= 0) return 1;
+            return Math.Max(0, 1 - Math.Abs(Math.Log(Math.Max(a, t * 0.05) / t)) / tol);
+        }
+
+        var sigFit = H(SignatureDensity(w.Paragraphs), meanSig, 1.2);
+        if (tSent <= 0) return sigFit;
+
+        var lens = new List<int>();
+        foreach (var sen in Regex.Split(text, @"[。！？…；”」]+"))
+        {
+            var n = VisibleChars(sen);
+            if (n >= 4) lens.Add(n);
+        }
+        var commaPer = lens.Count == 0 ? 0 : (double)text.Count(c => c == '，') / lens.Count;
+        var visible = Math.Max(1, VisibleChars(text));
+        var dlg = (double)CountDialogueChars(text) / visible;
+        var paras = w.Paragraphs.Select(VisibleChars).Where(n => n >= 4).ToList();
+
+        return 0.30 * sigFit
+             + 0.25 * H(Median(lens), tSent, 1.2)
+             + 0.20 * H(commaPer, tComma, 1.2)
+             + 0.15 * H(dlg, tDlg, 1.4)
+             + 0.10 * H(Median(paras), tPara, 1.3);
+    }
+
+    private static HashSet<string> Bigrams(string text)
+    {
+        var flat = Regex.Replace(text, @"\s+", "");
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i + 1 < flat.Length; i++) set.Add(flat.Substring(i, 2));
+        return set;
+    }
+
+    private static double Jaccard(HashSet<string> a, HashSet<string> b)
+    {
+        if (a.Count == 0 || b.Count == 0) return 0;
+        var inter = a.Count(x => b.Contains(x));
+        return (double)inter / (a.Count + b.Count - inter);
+    }
+
+    /// <summary>把"这段示范了什么"写成一行，注入时让模仿从隐式变半显式。</summary>
+    private static string DescribeSample(string text)
+    {
+        var lens = new List<int>();
+        foreach (var sen in Regex.Split(text, @"[。！？…；”」]+"))
+        {
+            var n = VisibleChars(sen);
+            if (n >= 4) lens.Add(n);
+        }
+        var visible = Math.Max(1, VisibleChars(text));
+        var comma = lens.Count == 0 ? 0 : (double)text.Count(c => c == '，') / lens.Count;
+        var dlg = (double)CountDialogueChars(text) / visible;
+        var quotes = text.Split('\n').Count(IsQuoteOnly);
+        return $"中位句长 {Median(lens):0} 字、每句 {comma:0.0} 逗号、对话 {dlg:P0}、连续引号段 {quotes}";
     }
 
     /// <summary>按段判场景。阈值针对"一段"而非窗口——对话段引号占大半，一眼可辨。</summary>

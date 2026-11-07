@@ -111,7 +111,7 @@ internal static class SelfTest
 
             var tools = lines[1].RootElement.GetProperty("result").GetProperty("tools").EnumerateArray()
                               .Select(t => t.GetProperty("name").GetString()!).ToList();
-            Assert("tools/list 列出 43 个工具", tools.Count == 43, string.Join(",", tools));
+            Assert("tools/list 列出 44 个工具", tools.Count == 44, string.Join(",", tools));
             Assert("工具集覆盖 读/写/导出/AI",
                 tools.Contains("chapter_read") && tools.Contains("chapter_write")
                 && tools.Contains("project_export") && tools.Contains("ai_write"), "");
@@ -334,8 +334,8 @@ internal static class SelfTest
                                .Select(x => x.GetProperty("name").GetString() ?? "").ToList();
             Assert("I1 工具含 ai_config_check", names.Contains("ai_config_check"), "");
             Assert("I2 工具含 project_create", names.Contains("project_create"), "");
-            Assert("I3 工具数为 39（新增超长篇 8 件：ultra_config / volume_* / state_board_* / character_scope_set）",
-                names.Count == 43, names.Count.ToString());
+            Assert("I3 工具数为 44（含超长篇 8 件、作者风格 4 件、style_profile_samples）",
+                names.Count == 44, names.Count.ToString());
             Assert("I3b 工具含 guide（agent 自己能读到怎么做）", names.Contains("guide"), "");
             Assert("I4 章节结构管理齐备（改名/删除/重排）",
                 names.Contains("chapter_rename") && names.Contains("chapter_delete")

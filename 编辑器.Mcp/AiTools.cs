@@ -152,6 +152,24 @@ internal static class AiTools
                     "或 style_profile_import 从作品 txt 导入新的。");
         }
 
+        // 本次风格示例：按场景命中 + 章号确定性轮换，只取 2~3 段，进**不可缓存段**。
+        // ★ 缓存前缀只放指纹与守则（见 BuildAnchorBlock），不随章节变化——
+        //   样本每次换也不打断 prompt caching，这正是 BuildSections 第三个参数的用途。
+        // 场景优先级：ai_write 的 scene 参数 > 章节标题/本次指令 > 当前章正文末尾投票。
+        string volatileStyle = "";
+        if (styleProfile != null)
+        {
+            var chapterForScene = number > 0
+                ? p.Chapters.FirstOrDefault(c => c.ChapterNumber == number)
+                : null;
+            var scene = AuthorStyleBuilder.NormalizeScene(NovelTools.Str(args, "scene").Trim())
+                        ?? AuthorStyleBuilder.GuessScene(
+                            chapterForScene?.Title, instruction, chapterForScene?.Content);
+            var samples = AuthorStyleBuilder.SelectSamples(
+                styleProfile, scene, number > 0 ? number : 0);
+            volatileStyle = AuthorStyleBuilder.BuildSampleBlock(styleProfile, samples);
+        }
+
         // 技能：界面在 AI 面板选一个，命中功能的生成就用该手法。MCP 侧同样要生效，
         // 否则「黄金三章」这类手法只在界面里有效，agent 写出来的是另一种调性。
         var skill = ResolveSkill(args, out var skillErr);
@@ -196,8 +214,8 @@ internal static class AiTools
             stable = (stable.Length > 0 ? stable + "\n\n" : "") +
                      LiteratureFormatter.BuildContextBlock(p.LiteratureLibrary);
 
-        // 作者风格锚定段：放在稳定段**最前**——它是全篇的风格基调，设定块是参考资料；
-        // 同属可缓存前缀，不破坏缓存分段。
+        // 作者风格锚定段：放在稳定段**最前**——它是全篇的风格基调，设定块是参考资料。
+        // 这里只有 L1 数值指令 + L3 守则；原文样本在下面的不可缓存段注入。
         if (styleProfile != null)
         {
             var anchor = AuthorStyleBuilder.BuildAnchorBlock(styleProfile);
@@ -208,7 +226,9 @@ internal static class AiTools
         // Build 会 Flatten 成单段字符串，再经 SystemPrompt.FromText 隐式转换时**整段**
         // 被标成可缓存；而任务段每次请求都可能不同，前缀永远对不上——缓存命中率≈0，
         // 还要按 1.25 倍付写入价。分段后只有「身份 + 设定」那段打断点，才真的能命中。
-        var system = AiPrompts.BuildSections(taskPrompt, stable, null, outputContract, presetId);
+        // volatileContext 以前传 null：现在放本次的 2~3 段原文样本。
+        // 它属于"每章都变"的那一类，进不可缓存段；稳定前缀一个字都不动。
+        var system = AiPrompts.BuildSections(taskPrompt, stable, volatileStyle, outputContract, presetId);
 
         // ---- 3. 拼 user 侧素材 ----
         var chapter = number > 0

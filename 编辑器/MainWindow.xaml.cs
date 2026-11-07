@@ -2921,8 +2921,30 @@ namespace 编辑器
             if (literature != null && literature.Count > 0)
                 stable = (stable.Length > 0 ? stable + "\n\n" : "") + LiteratureFormatter.BuildContextBlock(literature);
 
+            // 作者风格锚定：与 MCP ai_write 走同一份档案、同一套拼法。
+            // 稳定段只放 L1 指纹 + L3 守则；本次原文样本放不可缓存段（不打断缓存前缀）。
+            // 审稿要客观，不模仿——按任务文本识别，避免给十几个调用点各加一个参数。
+            AuthorStyleProfile? authorStyle = null;
+            var isReview = task == ResolveTaskText(AiPrompts.Keys.Review, AiPrompts.Task.Review);
+            if (!isReview && !string.IsNullOrWhiteSpace(_currentProject?.AuthorStyleId))
+                authorStyle = AuthorStyleStore.Get(_currentProject!.AuthorStyleId);
+            if (authorStyle != null)
+                stable = AuthorStyleBuilder.BuildAnchorBlock(authorStyle) + "\n\n" + stable;
+
             var related = BuildRelatedChaptersContext();
-            return AiPrompts.BuildSections(task, stable, related, outputContract);
+            var volatileParts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(related)) volatileParts.Add(related);
+            if (authorStyle != null)
+            {
+                var ch = GetSelectedChapter();
+                var scene = AuthorStyleBuilder.GuessScene(ch?.Title, null, ch?.Content);
+                var samples = AuthorStyleBuilder.SelectSamples(
+                    authorStyle, scene, ch?.ChapterNumber ?? 0);
+                var sampleBlock = AuthorStyleBuilder.BuildSampleBlock(authorStyle, samples);
+                if (!string.IsNullOrWhiteSpace(sampleBlock)) volatileParts.Add(sampleBlock);
+            }
+            return AiPrompts.BuildSections(task, stable,
+                string.Join("\n\n", volatileParts), outputContract);
         }
 
         private void RecordAiInteraction(string type, string input, string result)

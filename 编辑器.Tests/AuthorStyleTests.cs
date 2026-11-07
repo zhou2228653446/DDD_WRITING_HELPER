@@ -186,19 +186,136 @@ public class AuthorStyleTests : IDisposable
     }
 
     [Fact]
-    public void 锚定块要含指纹_签名词_引导语与样本()
+    public void 锚定块只放指纹与守则_样本单独成块()
     {
         var p = AuthorStyleBuilder.Build("测试作者", Corpus(), "测试语料");
         p = p with { Rules = new[] { "章末用悬念句收束，不做总结升华。" } };
 
-        var block = AuthorStyleBuilder.BuildAnchorBlock(p);
+        var anchor = AuthorStyleBuilder.BuildAnchorBlock(p);
 
-        Assert.Contains("作者文风锚定", block);
-        Assert.Contains("测试作者", block);
-        Assert.Contains("旋即", block);
-        Assert.Contains("轻声道", block);
-        Assert.Contains("作者守则", block);
-        Assert.Contains("风格示例", block);
-        Assert.Contains("对话交锋", block);
+        Assert.Contains("作者文风锚定", anchor);
+        Assert.Contains("测试作者", anchor);
+        Assert.Contains("旋即", anchor);
+        Assert.Contains("轻声道", anchor);
+        Assert.Contains("作者守则", anchor);
+        // ★ 稳定前缀里不能有原文样本：它每次请求都换，塞进缓存段会打断缓存。
+        Assert.DoesNotContain("风格示例", anchor);
+        Assert.DoesNotContain("对话交锋", anchor);
+        Assert.Equal(anchor, AuthorStyleBuilder.BuildAnchorBlock(p));
+
+        var samples = AuthorStyleBuilder.SelectSamples(p, "对话交锋", 7);
+        var block = AuthorStyleBuilder.BuildSampleBlock(p, samples);
+        Assert.NotEmpty(samples);
+        Assert.Contains("本次风格示例", block);
+        Assert.Contains("只学怎么写", block);
+        Assert.Contains(samples[0].Text, block);
+    }
+
+    // ─────────────── 样本池 / 动态选样 / 守则独立 ───────────────
+
+    private static AuthorStyleProfile Pool(int count = 18) => new()
+    {
+        Id = "pool",
+        Name = "池作者",
+        Samples = Enumerable.Range(0, count).Select(i =>
+            new AuthorStyleProfile.StyleSample(
+                i % 2 == 0 ? "对话交锋" : "战斗冲突",
+                $"这是第 {i} 段示例原文，用来验证按场景挑选与章号轮换是否稳定。他看着她，没有说话。")
+            {
+                Id = $"s{i + 1:00}",
+                Source = $"第{i + 1}章",
+                Note = "示范：短句白描",
+                Fit = 0.8,
+                Enabled = true,
+            }).ToArray(),
+    };
+
+    [Fact]
+    public void 样本池要带元数据_且每类场景可不止一段()
+    {
+        var p = AuthorStyleBuilder.Build("测试作者", Corpus(20), "测试语料");
+
+        Assert.NotEmpty(p.Samples);
+        Assert.All(p.Samples, s =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(s.Id));
+            Assert.False(string.IsNullOrWhiteSpace(s.Source));
+            Assert.False(string.IsNullOrWhiteSpace(s.Note));
+            Assert.False(string.IsNullOrWhiteSpace(s.Text));
+            Assert.InRange(s.Fit, 0, 1);
+            Assert.True(s.Enabled);
+        });
+        Assert.Equal(p.Samples.Count, p.Samples.Select(s => s.Id).Distinct().Count());
+        Assert.True(p.Samples.Count <= AuthorStyleBuilder.MaxSamples);
+        // 同一场景允许多段：池不再是"每场景至多 1 段"
+        Assert.True(p.Samples.GroupBy(s => s.Scene).Any(g => g.Count() > 1),
+            "样本池没有扩起来，仍是每场景 1 段");
+    }
+
+    [Fact]
+    public void 动态选样_同章稳定_换章轮换_场景命中()
+    {
+        var p = Pool();
+        var a1 = AuthorStyleBuilder.SelectSamples(p, "对话交锋", 7);
+        var a2 = AuthorStyleBuilder.SelectSamples(p, "对话交锋", 7);
+        var b = AuthorStyleBuilder.SelectSamples(p, "对话交锋", 8);
+
+        Assert.Equal(AuthorStyleBuilder.SamplesPerRequest, a1.Count);
+        Assert.Equal(a1.Select(x => x.Id), a2.Select(x => x.Id));      // 同章反复生成完全一致
+        Assert.All(a1, s => Assert.Equal("对话交锋", s.Scene));          // 只取命中场景的
+        Assert.NotEqual(a1.Select(x => x.Id), b.Select(x => x.Id));      // 换章自动换组
+        Assert.NotEqual(
+            AuthorStyleBuilder.BuildSampleBlock(p, a1),
+            AuthorStyleBuilder.BuildSampleBlock(p, b));
+    }
+
+    [Fact]
+    public void 禁用样本不再入选_空池不报错()
+    {
+        var p = Pool(4);
+        var first = p.Samples[0].Id;
+        var disabled = p with
+        {
+            Samples = p.Samples.Select(s => s.Id == first ? s with { Enabled = false } : s).ToArray(),
+        };
+        Assert.DoesNotContain(AuthorStyleBuilder.SelectSamples(disabled, null, 3, 4),
+            s => s.Id == first);
+
+        var empty = p with { Samples = Array.Empty<AuthorStyleProfile.StyleSample>() };
+        Assert.Empty(AuthorStyleBuilder.SelectSamples(empty, "对话交锋", 1));
+        Assert.Equal("", AuthorStyleBuilder.BuildSampleBlock(empty,
+            AuthorStyleBuilder.SelectSamples(empty, null, 1)));
+    }
+
+    [Fact]
+    public void 场景归一与兜底判定()
+    {
+        Assert.Equal("战斗冲突", AuthorStyleBuilder.NormalizeScene("这一章是大战"));
+        Assert.Equal("对话交锋", AuthorStyleBuilder.NormalizeScene("dialogue"));
+        Assert.Equal("章末收束", AuthorStyleBuilder.NormalizeScene("章末收束"));
+        Assert.Null(AuthorStyleBuilder.NormalizeScene("随便写点什么"));
+        // 标题里带场景词时优先用标题，不被正文带偏
+        Assert.Equal("开篇起笔", AuthorStyleBuilder.GuessScene("开篇 起笔", null, "无关的正文内容"));
+    }
+
+    [Fact]
+    public void 守则独立保存_重算档案不覆盖()
+    {
+        var p = AuthorStyleBuilder.Build("守则作者", Corpus(4), "语料")
+                with { Rules = new[] { "章末不点题。", "情绪外化成动作。" } };
+        AuthorStyleStore.Save(p);
+
+        // 模拟 style_profile_import：重算同名档案，Rules 为空
+        var rebuilt = AuthorStyleBuilder.Build("守则作者", Corpus(4), "新语料");
+        Assert.Empty(rebuilt.Rules);
+        AuthorStyleStore.Save(rebuilt);
+
+        var loaded = AuthorStyleStore.Get("守则作者")!;
+        Assert.Equal(2, loaded.Rules.Count);
+        Assert.Contains("章末不点题。", loaded.Rules);
+
+        // 显式改写守则仍生效（rules.json 是唯一真相）
+        AuthorStyleStore.SaveRules("守则作者", new[] { "只有一条。" });
+        Assert.Single(AuthorStyleStore.Get("守则作者")!.Rules);
     }
 }

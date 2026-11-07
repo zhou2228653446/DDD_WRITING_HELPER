@@ -471,7 +471,7 @@ internal static class McpServer
         new ToolDef
         {
             name = "style_profile_list",
-            description = "列出作者风格档案库：每位作者一份（签名词、句长指纹、锚定样本数）。" +
+            description = "列出作者风格档案库：每位作者一份（签名词、句长指纹、样本池规模与守则数）。" +
                           "不同书可绑不同作者，请求级覆盖走 ai_write 的 style 参数。",
         },
         new ToolDef
@@ -500,6 +500,28 @@ internal static class McpServer
                 properties = new Dictionary<string, ToolProp>
                 {
                     ["id"] = new() { description = "档案 Id（style_profile_list 里看）；不传 = 解绑" },
+                },
+                required = new List<string>(),
+            },
+        },
+        new ToolDef
+        {
+            name = "style_profile_samples",
+            description = "管理作者风格样本池：列样本 / 预览全文 / 禁用 / 启用 / 删除 / 加入自己定稿 / 写作者守则。" +
+                          "生成时按当前场景 + 章号从池里取 2~3 段原文注入（放在不可缓存段，不打断缓存前缀）。" +
+                          "导入语料后先 action=list 抽查，遇到杂页或串专名的样本就 disable。" +
+                          "守则单独保存，重新 style_profile_import 不会覆盖。",
+            inputSchema = new ToolSchema
+            {
+                properties = new Dictionary<string, ToolProp>
+                {
+                    ["id"] = new() { description = "档案 Id；留空用当前书绑定的档案" },
+                    ["action"] = new() { description = "list（默认）/ preview / disable / enable / delete / add / rules" },
+                    ["sample"] = new() { description = "样本编号（list 里的 s01/u01…），preview/disable/enable/delete 用" },
+                    ["text"] = new() { description = "action=add 时，一段你自己的定稿正文（≥60 字）" },
+                    ["scene"] = new() { description = "action=add 时的场景归类，留空自动判" },
+                    ["note"] = new() { description = "action=add 时这段的示范说明，可留空" },
+                    ["rules"] = new() { description = "action=rules 时的作者守则，一行一条" },
                 },
                 required = new List<string>(),
             },
@@ -770,6 +792,8 @@ internal static class McpServer
                     ["skill"] = new() { description = "技能名或 id（如「黄金三章」）；留空用当前方案记住的那个，传 none 表示不用技能" },
                     ["preset"] = new() { description = "本次用哪套提示词方案：novel / academic / official / general / ultra_long_novel 或自定义方案 id；留空用当前生效方案。★ 只影响这一次请求，不改全局设置" },
                     ["sampling"] = new() { description = "诊断用：传 legacy 回到改造前的采样参数（0.7 / 无惩罚），用于 A/B 对比。正常使用留空" },
+                    ["style"] = new() { description = "本次临时用哪份作者风格档案（style_profile_list 里的 id）；留空用书绑定的档案" },
+                    ["scene"] = new() { description = "本次写作的场景：对话交锋 / 战斗冲突 / 环境氛围 / 日常推进 / 开篇起笔 / 章末收束。决定从样本池取哪几段原文；留空按章节标题与正文末尾自动判" },
                 },
                 required = new List<string> { "task" },
             },
@@ -1096,6 +1120,13 @@ internal static class McpServer
                     // 绑定写进项目文件（NovelProject.AuthorStyleId）。
                     var r0 = AuthorStyleTools.Bind(session, args);
                     PublishToolDone(name, args, r0, projectModified: true, session);
+                    return ToolText(r0.Text, r0.IsError);
+                }
+                case "style_profile_samples":
+                {
+                    // 只改档案库（author_profiles/），不碰项目文件。
+                    var r0 = AuthorStyleTools.Samples(session, args);
+                    PublishToolDone(name, args, r0, projectModified: false, session);
                     return ToolText(r0.Text, r0.IsError);
                 }
             }

@@ -555,16 +555,17 @@ Cursor / WorkBuddy / Cline 这类 AI 客户端就能直接打开你的 `.tdxproj
 `TdxClaw.Mcp.exe`）本来就是进程级隔离，不受此影响。会话闲置 30 分钟后自动回收，
 腾出它常驻的整书内存。
 
-**43 个工具**，分九类：
+**44 个工具**，分十类：
 
 | 类别 | 工具 |
 |---|---|
 | 入门 | **`guide`**（内置手册：黄金规则 / 工具地图 / 任务剧本，任何时候可调，不依赖项目） |
 | 找项目 · 看进度 | `project_list`（扫目录找 .tdxproj）、`project_open`、`project_create`（新书自动带设定集 12 章骨架；同名文件拒绝覆盖）、**`project_status`**（一次拿到进度画像 + 下一步建议）、**`project_delete`**（整本移入回收站，需原样回传书名确认） |
-| 读 | `chapters_list`、`chapter_read`、`chapter_search`（全文搜词，查伏笔/矛盾）、`settings_get`、`settings_book_get`（设定集 12 章）、`characters_stats`（谁多久没出场了）、**`style_check`**（AI 味指数 + 套话命中，本地零 token）、`characters_list`、`memory_get`、`snapshot_list` |
+| 读 | `chapters_list`、`chapter_read`、`chapter_search`（全文搜词，查伏笔/矛盾）、`settings_get`、`settings_book_get`（设定集 12 章）、`characters_stats`（谁多久没出场了）、**`style_check`**（事实统计 + 病态证据；传 style 时额外给作者相似度，本地零 token）、`characters_list`、`memory_get`、`snapshot_list` |
 | 写正文 | `chapter_write`（replace 覆盖 / append 追加）、`chapter_create`、`chapter_rename`、`chapter_delete`、`chapter_reorder`、`chapter_summary_set`（写章节梗概） |
 | 写设定 | `settings_set`、`settings_book_set`、`character_upsert`（建/改人物卡）、`character_delete`、`memory_set`（沉淀作者偏好） |
 | 产出 | `project_export`（docx / pdf / txt，论文版式传 `paperMode`）、**`ai_write`** |
+| **作者风格** | **`style_profile_list`**（多作者档案库）、`style_profile_import`（从作品 txt 构建指纹 + 场景样本池）、`style_profile_bind`（按书绑定，不同书可用不同作者）、**`style_profile_samples`**（抽查/禁用样本、加入自己定稿、写作者守则）；`ai_write` 的 `style` / `scene` 参数做请求级覆盖 |
 | **长篇结构** | **`ultra_config`**（查看/启用分卷·角色分级·状态面板）、`volume_list`、`volume_upsert`、`volume_delete`、`chapter_volume_set`、`state_board_get`、`state_board_update`、`character_scope_set` |
 | 网页端界面 | **`ui_typography`**（字体 / 字号 / 行距 / 字距，与网页「外观 → 正文排版」同一份配置、同一个校验） |
 | 诊断 · 回滚 | `ai_config_check`（服务商/模型/Key 状态 + 可选真连通探测；**绝不输出 Key 本身**）、`snapshot_restore` |
@@ -897,7 +898,7 @@ MCP 服务器是独立工程，**不重写任何业务逻辑**，全部 ProjectR
 ```
 编辑器.Mcp/
 ├─ Program.cs       入口（--selftest 跑协议自检）
-├─ McpServer.cs     JSON-RPC 2.0 + stdio 主循环 + 43 个工具的 schema
+├─ McpServer.cs     JSON-RPC 2.0 + stdio 主循环 + 44 个工具的 schema
 ├─ NovelTools.cs    读写 / 检索 / 导出 / 删书 + Session（含写前冲突检测）
 ├─ UltraTools.cs    超长篇结构：分卷 / 角色分级 / 状态面板（仅启用后可用）
 ├─ AiTools.cs       ai_write：复用 AiPrompts 与两个 Service，与界面同源

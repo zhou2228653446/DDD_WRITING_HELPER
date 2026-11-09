@@ -2,6 +2,8 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
+using 编辑器.Mcp;
 using 编辑器.Services;
 using Xunit;
 
@@ -317,5 +319,77 @@ public class AuthorStyleTests : IDisposable
         // 显式改写守则仍生效（rules.json 是唯一真相）
         AuthorStyleStore.SaveRules("守则作者", new[] { "只有一条。" });
         Assert.Single(AuthorStyleStore.Get("守则作者")!.Rules);
+    }
+
+    [Fact]
+    public void 动态样本只进不可缓存段_缓存前缀跨章恒定()
+    {
+        var p = Pool();
+        var stable = AuthorStyleBuilder.BuildAnchorBlock(p) +
+                     "\n\n【项目设定】林守义，58 岁，北岬灯塔看守人。";
+
+        var sys7 = AiPrompts.BuildSections("续写本章", stable,
+            AuthorStyleBuilder.BuildSampleBlock(p, AuthorStyleBuilder.SelectSamples(p, null, 7)));
+        var sys8 = AiPrompts.BuildSections("续写本章", stable,
+            AuthorStyleBuilder.BuildSampleBlock(p, AuthorStyleBuilder.SelectSamples(p, null, 8)));
+
+        // 第 0 段是可缓存前缀：不同章号必须一字不差，否则缓存全废
+        Assert.True(sys7.Parts.Count >= 2);
+        Assert.True(sys7.Parts[0].Cacheable);
+        Assert.Equal(sys7.Parts[0].Text, sys8.Parts[0].Text);
+        Assert.Contains("作者文风锚定", sys7.Parts[0].Text);
+        Assert.DoesNotContain("本次风格示例", sys7.Parts[0].Text);
+
+        // 原文样本在后面的不可缓存段；换章确实换了内容
+        var vol7 = string.Join("\n", sys7.Parts.Skip(1).Select(x => x.Text));
+        var vol8 = string.Join("\n", sys8.Parts.Skip(1).Select(x => x.Text));
+        Assert.Contains("本次风格示例", vol7);
+        Assert.NotEqual(vol7, vol8);
+    }
+
+    [Fact]
+    public void 续写空章时_场景要从上章末尾推断_不再退化成全池轮换()
+    {
+        var outline = "第1章 雨夜：巡视灯塔，海面起雾。\n" +
+                      "第2章 来信：补给船带来一封信，屋里很静。";
+        var prev = "他轻声道：“明天还会来吗？”\n“会。”另一个人淡淡地道：“船总要靠岸的。”\n" +
+                   "他低声道：“那就再等一夜。”\n“等吧。”他说。";
+        var p = new NovelProject { ChapterOutline = outline };
+        p.Chapters.Add(new Chapter { ChapterNumber = 1, Title = "雨夜", Content = prev });
+
+        // 第 2 章是刚建的空章：标题、大纲行、指令里都没有场景词
+        using var doc = JsonDocument.Parse("{}");
+        var scene = AiTools.ResolveScene(p, doc.RootElement, "写本章正文。", 2, "来信", "");
+
+        Assert.Contains("来信", AiTools.ChapterOutlineLine(outline, 2)!);
+        Assert.Equal("对话交锋", scene);   // 来自上一章末尾的对话段落投票
+
+        // 显式 scene 参数仍然最高优先
+        using var doc2 = JsonDocument.Parse("{\"scene\":\"战斗冲突\"}");
+        Assert.Equal("战斗冲突",
+            AiTools.ResolveScene(p, doc2.RootElement, "写本章正文。", 2, "来信", ""));
+    }
+
+    [Fact]
+    public void 场景未知时样本要跨场景分层_不能整组落在同一类()
+    {
+        var p = new AuthorStyleProfile
+        {
+            Id = "six",
+            Name = "六类",
+            Samples = AuthorStyleBuilder.SceneOrder.SelectMany((sc, si) =>
+                Enumerable.Range(0, 3).Select(k =>
+                    new AuthorStyleProfile.StyleSample(sc, $"{sc}第{k}段示例原文，内容足够长以便通过检查。")
+                    {
+                        Id = $"s{si}{k}", Source = $"第{si * 3 + k + 1}章", Enabled = true,
+                    })).ToArray(),
+        };
+
+        var picked = AuthorStyleBuilder.SelectSamples(p, null, 2);
+        Assert.Equal(3, picked.Count);
+        Assert.Equal(3, picked.Select(x => x.Scene).Distinct().Count());
+        // 分层抽样同样要确定性：同一章反复生成不能换组
+        Assert.Equal(picked.Select(x => x.Id),
+            AuthorStyleBuilder.SelectSamples(p, null, 2).Select(x => x.Id));
     }
 }

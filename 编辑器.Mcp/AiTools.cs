@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using 编辑器.Services;
 
 namespace 编辑器.Mcp;
@@ -155,19 +156,23 @@ internal static class AiTools
         // 本次风格示例：按场景命中 + 章号确定性轮换，只取 2~3 段，进**不可缓存段**。
         // ★ 缓存前缀只放指纹与守则（见 BuildAnchorBlock），不随章节变化——
         //   样本每次换也不打断 prompt caching，这正是 BuildSections 第三个参数的用途。
-        // 场景优先级：ai_write 的 scene 参数 > 章节标题/本次指令 > 当前章正文末尾投票。
+        // 场景优先级：ai_write 的 scene 参数 > 章节标题/本章大纲行/本次指令 >
+        // 当前章正文末尾（扩写·润色）或上一章正文末尾（续写空章）。
+        // ★ 续写时当前章是刚建的、正文为空，只看它会永远判不出场景、
+        //   退化成全池轮换——真正决定"接下来写什么"的是上章末尾与本章大纲。
         string volatileStyle = "";
+        string? styleScene = null;
+        IReadOnlyList<AuthorStyleProfile.StyleSample>? styleSamples = null;
         if (styleProfile != null)
         {
             var chapterForScene = number > 0
                 ? p.Chapters.FirstOrDefault(c => c.ChapterNumber == number)
                 : null;
-            var scene = AuthorStyleBuilder.NormalizeScene(NovelTools.Str(args, "scene").Trim())
-                        ?? AuthorStyleBuilder.GuessScene(
-                            chapterForScene?.Title, instruction, chapterForScene?.Content);
-            var samples = AuthorStyleBuilder.SelectSamples(
-                styleProfile, scene, number > 0 ? number : 0);
-            volatileStyle = AuthorStyleBuilder.BuildSampleBlock(styleProfile, samples);
+            styleScene = ResolveScene(p, args, instruction, number,
+                chapterForScene?.Title, chapterForScene?.Content);
+            styleSamples = AuthorStyleBuilder.SelectSamples(
+                styleProfile, styleScene, number > 0 ? number : 0);
+            volatileStyle = AuthorStyleBuilder.BuildSampleBlock(styleProfile, styleSamples);
         }
 
         // 技能：界面在 AI 面板选一个，命中功能的生成就用该手法。MCP 侧同样要生效，
@@ -433,7 +438,14 @@ internal static class AiTools
 
         // 头部把"这次到底带了什么"摊开给 agent：技能/记忆/人物卡/设定集/文献有没有生效，一眼能看出来，
         // 不用猜——尤其是技能静默不生效这类问题，不显示就永远发现不了。
-        var head = $"[task={task} · model={config.Model}" +
+        // 文风这次到底用了哪一组样本，摊开给 agent —— 排查「相邻两章调性不一致」
+        // 时不用猜：场景判定和样本轮换结果一眼可见。
+        var styleHead = styleProfile == null ? "" :
+            $" · 文风={styleProfile.Name}" +
+            $" · 场景={styleScene ?? "自动"}" +
+            $" · 样本={string.Join(",", (styleSamples ?? Array.Empty<AuthorStyleProfile.StyleSample>())
+                .Select(x => x.Id))}";
+        var head = $"[task={task} · model={config.Model}" + styleHead +
                    $" · 技能={(skill == null ? "无" : skill.Name)}" +
                    $" · 人物卡={(p.Characters?.Count ?? 0)}张" +
                    $" · 设定集={(string.IsNullOrWhiteSpace(sbBlock) ? "无" : "已注入")}" +
@@ -515,6 +527,43 @@ internal static class AiTools
               "或自行整理后用 chapter_write 写入。）";
 
         return ToolResult.Ok(body + "\n\n" + hint);
+    }
+
+    /// <summary>
+    /// 判定本次写作的场景，决定从样本池取哪一类原文。
+    /// 显式 scene 参数优先；之后是章节标题 / 本章大纲行 / 本次指令；
+    /// 都没有场景词时，用**上章末尾**（续写空章）或当前章末尾（扩写·润色）做段落投票。
+    /// </summary>
+    internal static string? ResolveScene(NovelProject p, JsonElement args, string instruction,
+        int number, string? title, string? currentContent)
+    {
+        var explicitScene = AuthorStyleBuilder.NormalizeScene(NovelTools.Str(args, "scene").Trim());
+        if (explicitScene != null) return explicitScene;
+
+        var outlineLine = ChapterOutlineLine(p.ChapterOutline, number);
+        var byText = AuthorStyleBuilder.GuessScene(title, outlineLine ?? instruction, null);
+        if (byText != null) return byText;
+
+        // ★ 续写空章时当前章没有正文，真正决定"接下来写什么"的是上一章末尾。
+        //   只看当前章的话，最常见的续写路径会永远判不出场景，退化成全池轮换。
+        var prev = p.Chapters.Where(c => c.ChapterNumber < number)
+            .MaxBy(c => c.ChapterNumber);
+        var tail = !string.IsNullOrWhiteSpace(currentContent) ? currentContent : prev?.Content;
+        return AuthorStyleBuilder.GuessScene(null, null, tail);
+    }
+
+    /// <summary>从章节大纲里取「第N章」那一行；没有章号时按行序兜底。</summary>
+    internal static string? ChapterOutlineLine(string? outline, int number)
+    {
+        if (string.IsNullOrWhiteSpace(outline) || number <= 0) return null;
+        var lines = outline.Split('\n').Where(l => l.Trim().Length > 0).ToList();
+        foreach (var line in lines)
+        {
+            var m = Regex.Match(line, @"第\s*(\d+)\s*章");
+            if (m.Success && int.TryParse(m.Groups[1].Value, out var n) && n == number)
+                return line.Trim();
+        }
+        return number <= lines.Count ? lines[number - 1].Trim() : null;
     }
 
     /// <summary>

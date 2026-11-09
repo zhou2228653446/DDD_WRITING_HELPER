@@ -557,6 +557,32 @@ public static class AuthorStyleBuilder
         if (pool.Count == 0 || count <= 0) return new();
 
         var want = NormalizeScene(scene);
+        var seed = StableHash(chapterNumber);
+
+        if (want == null)
+        {
+            // 没判出场景时按**场景分层**取样：池是按场景顺序连续排的，
+            // 直接连续取 count 段会整组落在「开篇起笔」里（实测首章拿到
+            // s02/s03/s04 三段开场文）。分层后每类一段，风格示范不偏科。
+            var byScene = SceneOrder
+                .Select(sc => Enumerable.Range(0, pool.Count)
+                    .Where(i => pool[i].Scene == sc).ToList())
+                .Where(g => g.Count > 0)
+                .ToList();
+            if (byScene.Count > 0)
+            {
+                var start = seed % byScene.Count;
+                var mixed = new List<int>();
+                for (var k = 0; k < count && k < byScene.Count; k++)
+                {
+                    var group = byScene[(start + k) % byScene.Count];
+                    var chosen = group[(seed / byScene.Count + k) % group.Count];
+                    if (!mixed.Contains(chosen)) mixed.Add(chosen);
+                }
+                return mixed.Select(i => pool[i]).ToList();
+            }
+        }
+
         var primary = new List<int>();
         var secondary = new List<int>();
         for (var i = 0; i < pool.Count; i++)
@@ -570,7 +596,6 @@ public static class AuthorStyleBuilder
             secondary = new List<int>();
         }
 
-        var seed = StableHash(chapterNumber);
         var picked = Rotate(primary, seed).Take(count).ToList();
         if (picked.Count < count)
             picked.AddRange(Rotate(secondary, seed).Take(count - picked.Count));

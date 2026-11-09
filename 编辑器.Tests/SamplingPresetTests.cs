@@ -63,4 +63,24 @@ public class SamplingPresetTests
         Assert.Equal(0.25, o.FrequencyPenalty);
         Assert.Equal(0.15, o.PresencePenalty);
     }
+
+    [Fact]
+    public void 稳定档只用于验收_默认参数一个字都不变()
+    {
+        var stable = SamplingPresets.Stable("continue");
+
+        Assert.Equal(0.65, stable.Temperature);
+        Assert.True(stable.Temperature < SamplingPresets.For("continue").Temperature,
+            "稳定档必须比创作默认档低，否则测不出方差改善");
+        Assert.True(stable.Frequency > 0, "稳定档仍要保留轻惩罚，避免套话回潮");
+        // 审稿要可复现，不能被稳定档反倒抬高
+        Assert.True(SamplingPresets.Stable("review").Temperature <= 0.3);
+        // 创作默认仍是原来的高温档
+        Assert.Equal(0.95, SamplingPresets.For("continue").Temperature);
+        Assert.Equal(0.25, SamplingPresets.For("continue").Frequency);
+        // 套到 options 上确实生效
+        var o = SamplingPresets.Apply(new CompletionOptions(), stable);
+        Assert.Equal(0.65, o.Temperature);
+        Assert.Equal(0.10, o.FrequencyPenalty);
+    }
 }

@@ -791,7 +791,7 @@ internal static class McpServer
                     ["profile"] = new() { description = "用哪套 API 配置（如论文走 GPT、小说走 DeepSeek）；留空用当前启用的" },
                     ["skill"] = new() { description = "技能名或 id（如「黄金三章」）；留空用当前方案记住的那个，传 none 表示不用技能" },
                     ["preset"] = new() { description = "本次用哪套提示词方案：novel / academic / official / general / ultra_long_novel 或自定义方案 id；留空用当前生效方案。★ 只影响这一次请求，不改全局设置" },
-                    ["sampling"] = new() { description = "诊断用：传 legacy 回到改造前的采样参数（0.7 / 无惩罚），用于 A/B 对比。正常使用留空" },
+                    ["sampling"] = new() { description = "诊断用：legacy 回到改造前的采样参数（0.7 / 无惩罚）；stable 用低温稳定档（0.65），供验收与跨章一致性测量。正常创作留空" },
                     ["style"] = new() { description = "本次临时用哪份作者风格档案（style_profile_list 里的 id）；留空用书绑定的档案" },
                     ["scene"] = new() { description = "本次写作的场景：对话交锋 / 战斗冲突 / 环境氛围 / 日常推进 / 开篇起笔 / 章末收束。决定从样本池取哪几段原文；留空按章节标题与正文末尾自动判" },
                 },

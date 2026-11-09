@@ -55,6 +55,19 @@ namespace 编辑器.Services
             return t == "review" ? new Setting(0.30, null, 0, 0) : new Setting(0.70, null, 0, 0);
         }
 
+        /// <summary>
+        /// 稳定档：**只给验收 / 一致性测量用**，不是创作默认档。
+        ///
+        /// 默认续写是 0.95 高温，同一 prompt 重复生成的方差大到淹没法判断
+        /// "是策略变了还是模型抽风"。压到 0.65 并保留轻惩罚，多次生成才可比。
+        /// 审稿本来就要求可复现，保持它自己的 0.25，别被这档抬高。
+        /// </summary>
+        public static Setting Stable(string? task)
+        {
+            var t = (task ?? "").Trim().ToLowerInvariant();
+            return t == "review" ? For("review") : new Setting(0.65, 0.90, 0.10, 0.05);
+        }
+
         /// <summary>链式版本：`new CompletionOptions { ... }.SampleFor("continue")`。</summary>
         public static CompletionOptions SampleFor(this CompletionOptions options, string? task)
             => Apply(options, task);

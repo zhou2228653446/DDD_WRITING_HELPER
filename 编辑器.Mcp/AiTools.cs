@@ -132,11 +132,14 @@ internal static class AiTools
                 contractFallback = AiPrompts.TextFor(presetId, AiPrompts.Keys.StructuredOutput);
         }
 
-        // sampling=legacy：临时回到改造前的采样参数，只给 A/B 对照用。
-        // 有了它才能在同一章、同一 prompt 下证明"改采样真的有差别"。
-        var legacySampling = string.Equals(
-            NovelTools.Str(args, "sampling").Trim(), "legacy", StringComparison.OrdinalIgnoreCase);
-        var sampling = legacySampling ? SamplingPresets.Legacy(task) : SamplingPresets.For(task);
+        // sampling 三档：默认（按任务）/ legacy（改造前，A/B 对照）/
+        // stable（低温稳定档，验收与一致性测量用）。默认行为一个字都不变。
+        var samplingArg = NovelTools.Str(args, "sampling").Trim();
+        var legacySampling = samplingArg.Equals("legacy", StringComparison.OrdinalIgnoreCase);
+        var stableSampling = samplingArg.Equals("stable", StringComparison.OrdinalIgnoreCase);
+        var sampling = legacySampling ? SamplingPresets.Legacy(task)
+            : stableSampling ? SamplingPresets.Stable(task)
+            : SamplingPresets.For(task);
 
         // 作者风格：三层覆盖——显式 style 参数 > 书的绑定（AuthorStyleId）> 不启用。
         // 显式传了不存在的 id 要当场报错（否则静默退回默认文风，agent 根本不知道）。
@@ -445,7 +448,8 @@ internal static class AiTools
             $" · 场景={styleScene ?? "自动"}" +
             $" · 样本={string.Join(",", (styleSamples ?? Array.Empty<AuthorStyleProfile.StyleSample>())
                 .Select(x => x.Id))}";
-        var head = $"[task={task} · model={config.Model}" + styleHead +
+        var samplingLabel = legacySampling ? "legacy" : stableSampling ? "stable" : "default";
+        var head = $"[task={task} · model={config.Model} · 采样={samplingLabel}" + styleHead +
                    $" · 技能={(skill == null ? "无" : skill.Name)}" +
                    $" · 人物卡={(p.Characters?.Count ?? 0)}张" +
                    $" · 设定集={(string.IsNullOrWhiteSpace(sbBlock) ? "无" : "已注入")}" +

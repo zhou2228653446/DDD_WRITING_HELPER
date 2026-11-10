@@ -181,12 +181,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--profile", default="", help="api_profiles.json 里的配置名；留空用当前启用")
     ap.add_argument("--sampling", default="stable", help="连载用档：default / stable / legacy")
-    ap.add_argument("--compare", default="stable,default", help="方差对照档，逗号分隔（稳的档先跑，避免高温档挂起拖垮整轮）")
+    ap.add_argument("--compare", default="stable,default", help="方差对照档，逗号分隔。网关连跑易挂起时只填一档，" +
+                    "配合固定 --baseline 分两轮跑完再合并")
     ap.add_argument("--repeat", type=int, default=3, help="每档重复生成次数")
     ap.add_argument("--chapters", type=int, default=4, help="连载章数（2~4）")
     ap.add_argument("--style", default="余华", help="绑定的作者风格档案 Id")
     ap.add_argument("--out", default="", help="产物目录")
     ap.add_argument("--timeout", type=int, default=120, help="单次生成等待上限（秒）；网关挂起时别拖垮整轮")
+    ap.add_argument("--baseline", default="", help="固定前情基准：第 1 章正文 txt 路径。给了就直接写回、不再生成，" +
+                    "使跨轮 / 跨档的方差样本可以合并比较；首次运行会在产物目录留 baseline.txt")
     ap.add_argument("--exe", default=DEFAULT_EXE)
     a = ap.parse_args()
 
@@ -243,37 +246,59 @@ def main():
             return "", "", True
 
     # ── 第 1 章：写回做前情基准 ──
+    # ★ 方差对照要求「同一 prompt 逐字相同」。如果每轮重新生成第 1 章，
+    #   跨轮的前情就不同，两档数据永远合不到一张表里——哪怕网关全成功。
+    #   所以支持固定基准：首次生成后落盘 baseline.txt，之后用 --baseline 指回来。
     mcp.call("chapter_create", {"title": TITLES[0]})
-    say("[第1章] 生成前情基准…")
-    body, head, bad = safe_generate(1, a.sampling, True)
-    if not body:
-        # 基准章挂了会让整轮连载失去前情、事实表全空，值得重试一次。
-        say("  ⚠ 前情基准没生成，重试一次…")
+    baseline_src = "本轮生成"
+    if a.baseline and os.path.exists(a.baseline):
+        body = open(a.baseline, encoding="utf-8").read()
+        baseline_src = a.baseline
+        mcp.call("chapter_write", {"number": 1, "content": body, "mode": "append"})
+        say("[第1章] 用固定前情基准:", a.baseline, len(body), "字")
+        bad = False
+    else:
+        if a.baseline:
+            say("  ⚠ 指定的基准文件不存在，退回本轮生成")
+        say("[第1章] 生成前情基准…")
         body, head, bad = safe_generate(1, a.sampling, True)
+        if not body:
+            # 基准章挂了会让整轮连载失去前情、事实表全空，值得重试一次。
+            say("  ⚠ 前情基准没生成，重试一次…")
+            body, head, bad = safe_generate(1, a.sampling, True)
+        say("  ", "失败" if bad or not body else "OK", len(body), "字 |", head[:150])
+        if body:
+            save(out, "baseline.txt", body)
+            say("  基准已存:", os.path.join(out, "baseline.txt"), "（后续轮用 --baseline 指回来）")
     baseline_ok = bool(body)
-    say("  ", "失败" if bad or not body else "OK", len(body), "字 |", head[:150])
     if not baseline_ok:
-        say("  ⚠ 前情基准仍失败，本轮连载数据无前情，仅供参考")
+        say("  ⚠ 前情基准失败，本轮连载数据无前情，仅供参考")
     chapters = {1: body}
 
     # ── 第 2 章：同 prompt 重复，测采样方差 ──
     mcp.call("chapter_create", {"title": TITLES[1]})
     stability = {}
+    # 挂起 = 该次没有产出，不属于方差样本，重试即可；早先「连续 2 次失败就跳过整档」
+    # 会在网关恰好连挂两次时白白丢掉一整档数据，这才是前几轮测不成的直接原因。
+    # 现在改成「凑够 repeat 个成功样本为止」，另设连续失败上限防死等。
     for mode in [x.strip() for x in a.compare.split(",") if x.strip()]:
         rows = []
-        fails = 0
-        for k in range(a.repeat):
-            say(f"[方差] {mode} 第 {k + 1}/{a.repeat} 次…")
+        attempts = 0
+        consecutive = 0
+        max_attempts = a.repeat * 3 + 2
+        while len(rows) < a.repeat and attempts < max_attempts:
+            attempts += 1
+            say(f"[方差] {mode} 第 {len(rows) + 1}/{a.repeat} 次（尝试 {attempts}）…")
             b, h, bad = safe_generate(2, mode, False)
             if b:
-                fails = 0
+                consecutive = 0
                 rows.append(metrics(b, sigwords))
-                save(out, f"stability_{mode}_{k + 1}.txt", b)
+                save(out, f"stability_{mode}_{len(rows)}.txt", b)
             else:
-                fails += 1
-                say("    生成失败，跳过")
-                if fails >= 2:
-                    say(f"    {mode} 连续 {fails} 次失败，跳过该档剩余重复")
+                consecutive += 1
+                say("    生成失败，重试")
+                if consecutive >= 4:
+                    say(f"    {mode} 连续 {consecutive} 次失败，放弃该档剩余样本")
                     break
         stability[mode] = rows
 
@@ -314,7 +339,7 @@ def main():
     lines = [f"# 风格验收 · 配置={a.profile or '当前启用'} · 连载采样={a.sampling}", "",
              "> 相似度总分不进表：单章样本下噪声过大，不能当一致性判据。", "",
              f"- 网关挂起 / 连接重启次数：{timeouts[0]}",
-             f"- 前情基准（第 1 章）：{'成功' if baseline_ok else '失败（连载数据无前情）'}",
+             f"- 前情基准（第 1 章）：{'成功' if baseline_ok else '失败（连载数据无前情）'}｜来源：{baseline_src}",
              f"- 第 2 章正文取自：{chosen_key or '无（方差阶段全失败）'}", "",
              "## 1. 采样方差（第 2 章，同一 prompt 重复生成）", "",
              "| 档 | 成功次数 | " + " | ".join(f"{k} 中位±σ" for k in keys) + " |",

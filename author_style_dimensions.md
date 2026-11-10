@@ -248,13 +248,41 @@ python style_acceptance.py --profile gemini --sampling stable \
 句长 18.75±2.47、逗号 1.25±0.24；stable 2 次 → 句长 17.50±2.12、
 逗号 1.17±0.02。n=2 不足以下结论。
 
-**下一步（不需要加任何配置）**：两轮都用同一份固定基准，各跑一档：
+**复现命令（不需要加任何配置）**：两轮都用同一份固定基准，各跑一档：
 
 ```bash
-python style_acceptance.py --profile gemini --compare default --repeat 3 \
-  --chapters 2 --baseline <baseline.txt 路径> --out <目录A>
-python style_acceptance.py --profile gemini --compare stable --repeat 3 \
-  --chapters 2 --baseline <同一个 baseline.txt 路径> --out <目录B>
+python style_acceptance.py --profile gemini --compare default --repeat 3 --chapters 2 --timeout 90 --baseline <baseline.txt 路径> --out <目录A>
+python style_acceptance.py --profile gemini --compare stable  --repeat 3 --chapters 2 --timeout 90 --baseline <同一个 baseline.txt 路径> --out <目录B>
 ```
 
 `--chapters 2` 跳过连载、只测方差。两份 `report.md` 的方差表可直接合并比较。
+
+### 固定前情对照结果（2026-11-10，gemini）
+
+两轮各 3/3 成功、**0 挂起**（单档跑不再触发此前的连跑挂起），总耗时约 5 分钟。
+响应头核验：六次 `输入 4539 token` 完全一致，`文风=余华 · 场景=环境氛围 ·
+样本=s26,s27,s28` 全部相同，唯一变量是 `采样=default` / `采样=stable`——
+一次干净的单变量对照。六份正文均完整、无截断、无他作专名串词，
+开头都接「天亮 / 雨停 / 雾」，说明固定前情把续写锚住了。
+
+| 指标 | default 中位±σ | stable 中位±σ | σ 变化 | 余华目标 |
+|---|---|---|---|---|
+| 句长 | 21.00 ± 1.15 | 19.00 ± 0.87 | -25% | 27 |
+| 每句逗号 | 1.39 ± 0.13 | 1.37 ± 0.19 | +44% | 1.82 |
+| 段长 | 41.50 ± 5.07 | 44.00 ± 0.58 | -89% | 30 |
+| 对话% | 3.40 ± 4.28 | 4.80 ± 5.11 | +19% | 13.6 |
+| 签名词密度 | 7.02 ± 2.41 | 6.17 ± 2.84 | +18% | — |
+
+**结论**：
+
+1. `stable` **不是全面更稳**。段长 σ 大幅收窄（5.07→0.58）、句长略收窄，
+   但每句逗号、对话占比、签名词密度的 σ 反而变大。n=3 偏小，段长那个 -89%
+   尤其可能是三次恰好收敛到相似分段结构的巧合，**不宜据此宣称降温度有效**。
+2. 两档的**中心值都系统性偏离余华目标**：句长短 6~8 字、每句逗号少约 0.45、
+   段长多 11~14 字、对话占比只有目标的三分之一；stable 的句长甚至更短。
+   → 瓶颈不在采样温度，而在锚定指令与样本（定性口号「短句剁节奏」被过度执行、
+   样本本身偏短句短段）。**继续在采样参数上调优收益有限，下一步应动 B（指令具体化）**。
+3. 对话占比的变异系数超过 100%（引号对 3~14）：模型有时几乎不写对话、有时写很多，
+   这是内容层面的不稳定，降温度没有解决。
+4. 网关口径异常仍在：default 第 3 次报「输出 5376 token」但正文仅 1236 可见字，
+   与此前 16941 token 同类，属第三方网关统计问题；正文完整性已抽查确认，不影响方差结论。

@@ -213,6 +213,87 @@ public class AuthorStyleTests : IDisposable
         Assert.Contains(samples[0].Text, block);
     }
 
+    // ─────────────── 方案 B：可执行区间替代定性口号 ───────────────
+
+    [Fact]
+    public void 锚定块要给区间与反例_旧定性口号一条不留()
+    {
+        var p = AuthorStyleBuilder.Build("测试作者", Corpus(), "测试语料")
+                with { Rules = new[] { "章末不点题。" } };
+
+        var anchor = AuthorStyleBuilder.BuildAnchorBlock(p);
+
+        // 区间由档案统计值推导，不是写死的数字
+        var lo = (int)Math.Round(p.SentenceMedian * 0.75);
+        var hi = (int)Math.Round(p.SentenceMedian * 1.35);
+        Assert.Contains($"{lo}~{hi} 字", anchor);
+        Assert.Contains("【句子】", anchor);
+        Assert.Contains("【段落】", anchor);
+        Assert.Contains("【对话】", anchor);
+        Assert.Contains("反例", anchor);
+        Assert.Contains("作者守则", anchor);
+        Assert.Contains("统计参照", anchor);
+        Assert.Contains("一律以区间为准", anchor);  // 守则 / few-shot 与区间冲突时的优先级
+        Assert.Contains("不要为凑长度把几句并成一段", anchor);
+        Assert.DoesNotContain("允许少量更厚的段落", anchor);  // 这句曾把段长推到 72~115
+
+        // 旧版口号是实测系统性偏短的元凶：数字说 1.8 个逗号，口号却叫「别连成长串」
+        foreach (var slogan in new[]
+                 {
+                     "短句剁节奏", "瀑布流", "别把句子用逗号连成一长串",
+                     "句号换气", "长句连缀铺陈", "对话一两段就切回叙述",
+                 })
+            Assert.DoesNotContain(slogan, anchor);
+
+        // 仍是可缓存的稳定前缀：同档案两次构建一字不差、不含原文样本
+        Assert.Equal(anchor, AuthorStyleBuilder.BuildAnchorBlock(p));
+        Assert.DoesNotContain("本次风格示例", anchor);
+        Assert.InRange(anchor.Length, 200, 1800);
+    }
+
+    [Fact]
+    public void 区间按作者各自出数_不硬编码任何人的统计量()
+    {
+        var a = AuthorStyleBuilder.Build("甲", Corpus(4), "语料") with
+        {
+            SentenceMedian = 27, CommaPerSentence = 1.8, ParagraphMedian = 30,
+            ParagraphP25 = 12, ParagraphP75 = 85,
+            DialogueRatio = 0.14, ShortSentenceRatio = 0.07,
+        };
+        var b = a with
+        {
+            Id = "乙", Name = "乙", SentenceMedian = 43, CommaPerSentence = 4.2,
+            ParagraphMedian = 60, DialogueRatio = 0.20, ShortSentenceRatio = 0.20,
+        };
+
+        var ba = AuthorStyleBuilder.BuildAnchorBlock(a);
+        var bb = AuthorStyleBuilder.BuildAnchorBlock(b);
+
+        Assert.Contains("20~36 字", ba);
+        Assert.Contains("32~58 字", bb);
+        Assert.Contains("1.5~2.0 个", ba);
+        Assert.Contains("3.6~4.6 个", bb);
+        Assert.Contains("带 2~3 个逗号", ba);   // 长句里的逗号数也按作者推导
+        Assert.Contains("带 4~5 个逗号", bb);   // 不能给均值 4.2 的作者写「2~3 个」
+        Assert.Contains("段长以 30 字为中心", ba);
+        Assert.Contains("21~45 字", ba);        // 围绕中位值，不是照抄 12~85 的 P25~P75
+        Assert.Contains("段长以 60 字为中心", bb);
+        Assert.Contains("42~90 字", bb);
+        Assert.DoesNotContain("12~85 字", ba);
+        Assert.Contains("每千字约 140 字", ba);
+        Assert.Contains("每千字约 200 字", bb);
+        Assert.NotEqual(ba, bb);
+
+        // 反例方向跟着档案走：短句作者防碎片，长句作者防匀速长句
+        Assert.Contains("通篇碎片", ba);
+        Assert.Contains("匀速长句", bb);
+        Assert.DoesNotContain("匀速长句", ba);
+        Assert.DoesNotContain("通篇碎片", bb);
+        // 长句 + 低短句占比（天蚕土豆那类）也该防匀速长句，而不是防碎片
+        var c = a with { Id = "丙", Name = "丙", SentenceMedian = 43, ShortSentenceRatio = 0.07 };
+        Assert.Contains("匀速长句", AuthorStyleBuilder.BuildAnchorBlock(c));
+    }
+
     // ─────────────── 样本池 / 动态选样 / 守则独立 ───────────────
 
     private static AuthorStyleProfile Pool(int count = 18) => new()

@@ -472,29 +472,75 @@ public static class AuthorStyleBuilder
     }
 
     /// <summary>
-    /// 生成**稳定前缀**（进可缓存 system 段）：只有指纹与守则，约 200~300 token。
+    /// 生成**稳定前缀**（进可缓存 system 段）：指纹的可执行区间 + 守则，约 350~450 token。
     /// 原文样本改由 <see cref="BuildSampleBlock"/> 按场景动态注入不可缓存段——
     /// 前缀不随章节变化，缓存才能一直命中。
+    ///
+    /// 2026-11-10 方案 B：旧版是「数字 + 定性口号」，且自相矛盾——余华档案每句
+    /// 1.8 个逗号却写「别把句子用逗号连成一长串」，7% 短句却写「短句剁节奏」。
+    /// 模型只抓口号：固定前情对照实测六篇全部写成 19~21 字 / 1.37~1.39 逗号 /
+    /// 对话 3~5%，系统性偏离目标 27 字 / 1.82 / 14%。现在改成「区间 + 边界 + 反例」，
+    /// 且**所有数字从档案推导**，多作者各自出数，不硬编码任何作者的统计量。
     /// </summary>
     public static string BuildAnchorBlock(AuthorStyleProfile p)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"【作者文风锚定 —— 目标作者：{p.Name}】");
-        sb.AppendLine("以下要素统计自该作者的真实作品语料。本次写作在题材与剧情之外，");
-        sb.AppendLine("句长、用词、引导语、段落节奏必须向这位作者对齐。");
+        sb.AppendLine("以下区间统计自该作者的真实作品。题材、人物、情节一律以本书设定为准；");
+        sb.AppendLine("只让句子、段落、用词与对话的节奏向这些区间靠拢。");
+
+        // ── 句子：主区间要让实测偏差落在区间外，才有纠偏作用 ──
+        var m = p.SentenceMedian;
+        var comma = p.CommaPerSentence;
         sb.AppendLine();
-        sb.AppendLine($"· 节奏：中位句长 {p.SentenceMedian:0} 字（句长 CV {p.SentenceCv:0.00}）；" +
-                      $"中位段长 {p.ParagraphMedian:0} 字（常见区间 {p.ParagraphP25:0}~{p.ParagraphP75:0} 字），短段瀑布流排版。");
-        sb.AppendLine($"· 对话占比约 {p.DialogueRatio:P0}；对话引导语用「{string.Join("、", p.DialogueTags.Take(5))}」这类" +
-                      (p.DialogueTags.Any(t => t.EndsWith("道")) ? "「X道」家族，不要用翻译腔的「他说/他说道」堆砌。" : "表达。"));
-        sb.AppendLine($"· 标点：平均每句 {p.CommaPerSentence:0.0} 个逗号、{p.ShortSentenceRatio:P0} 的句子不超过 8 字——" +
-                      (p.CommaPerSentence >= 2.0 ? "长句连缀铺陈，靠逗号推进。" : "短句剁节奏，句号换气，别把句子用逗号连成一长串。"));
-        sb.AppendLine($"· 对话节奏：连续引号段中位 {p.DialogueRunMedian:0} 段——" +
-                      (p.DialogueRunMedian >= 3 ? "对话常连发成片（乒乓快节奏或成段训话）。" : "对话一两段就切回叙述，别让角色滔滔不绝。"));
+        sb.AppendLine("【句子】");
+        sb.AppendLine($"· 中位句长 {N(m)} 字（句长 CV {p.SentenceCv:0.00}）：多数句子落在 " +
+                      $"{N(m * 0.75)}~{N(m * 1.35)} 字，长短要有起伏，不要通篇一个长度。");
+        sb.AppendLine($"· 每句平均 {comma:0.0} 个逗号，多数句子 {Math.Max(0.5, comma * 0.85):0.0}~{comma * 1.1:0.0} 个；" +
+                      $"每章要有几句 {N(m * 1.1)} 字以上、带 {N(comma)}~{N(comma) + 1} 个逗号的长句，" +
+                      "也要有不带逗号的短句。不为凑数硬加逗号。");
+        sb.AppendLine($"· 8 字以内的短句约占 {p.ShortSentenceRatio:P0}，" +
+                      $"不超过 {ShortCap(p.ShortSentenceRatio):P0}，且不要连续三句短句。");
+        sb.AppendLine(ShortCounterExample(p));
+
+        // ── 段落：档案已有四分位，直接当区间用 ──
+        sb.AppendLine();
+        sb.AppendLine("【段落】");
+        // ★ 别直接把 P25~P75 当「多数段落」区间：余华是 12~85，跨度太宽，
+        //   模型一律往上界靠（实测段长 41→72、段数 33→16），反而离中位 30 更远。
+        //   区间围绕中位值收窄，并明确厚段配额与断段依据。
+        sb.AppendLine($"· 段长以 {N(p.ParagraphMedian)} 字为中心：多数段落 " +
+                      $"{N(p.ParagraphMedian * 0.7)}~{N(p.ParagraphMedian * 1.5)} 字，" +
+                      $"全章段长的中位数要达到 {N(p.ParagraphMedian)} 字左右。");
+        sb.AppendLine($"· 超过 {N(p.ParagraphMedian * 2)} 字的厚段全章不超过两三处；" +
+                      "段落按动作、视线或对话的自然切换断开，不要为凑长度把几句并成一段。");
+
+        // ── 对话：给「每千字字数」与「至少一两处」，避免只写一个比例没人执行 ──
+        sb.AppendLine();
+        sb.AppendLine("【对话】");
+        sb.AppendLine($"· 带引号的对话约占全篇 {p.DialogueRatio:P0}（每千字约 {p.DialogueRatio * 1000:0} 字）；" +
+                      "一章里至少安排一两处人物交谈。");
+        sb.AppendLine($"· 连续对话以 {N(p.DialogueRunMedian)} 段为常见长度。" +
+                      (p.DialogueTags.Count > 0
+                          ? $"引导语用「{string.Join("、", p.DialogueTags.Take(5))}」这类表达，不要用翻译腔的「他说/他说道」堆砌。"
+                          : "引导语用简短的说话动词，不要堆砌。"));
+        sb.AppendLine("· 不要整章只有叙述，也不要为凑比例让角色没话找话。");
+
+        // ── 用词：把 PerK 目标频次真正写进去（旧版只给词表，没给频次）──
         if (p.SignatureWords.Count > 0)
         {
-            sb.AppendLine($"· 标志词（按自然频次使用，不要堆砌）：{string.Join("、", p.SignatureWords.Take(10).Select(w => w.Word))}。");
+            sb.AppendLine();
+            sb.AppendLine("【用词】");
+            var lo = p.SignatureWords.Min(w => w.PerK);
+            var hi = p.SignatureWords.Max(w => w.PerK);
+            sb.AppendLine($"· 标志词按自然频次使用：{string.Join("、", p.SignatureWords.Take(10).Select(w => w.Word))}…" +
+                          $"（每词每千字约 {lo:0.0}~{hi:0.0} 次）；同一词不在相邻两段重复，不要堆砌。");
         }
+
+        sb.AppendLine();
+        sb.AppendLine("（以上是统计参照，不是逐句硬指标；读起来自然优先。下面的作者守则与原文示例只用于" +
+                      "学句式接续、情绪处理与结构习惯；一旦与上述数字区间冲突，一律以区间为准。）");
+
         if (p.Rules.Count > 0)
         {
             sb.AppendLine();
@@ -503,6 +549,21 @@ public static class AuthorStyleBuilder
         }
         return sb.ToString().TrimEnd();
     }
+
+    /// <summary>区间取整（至少 1）——避免档案缺字段时出现「0 字」。</summary>
+    private static int N(double v) => Math.Max(1, (int)Math.Round(v));
+
+    /// <summary>短句占比上限：以档案值的两倍为界，夹在 12%~30%，防止反例和区间互相打架。</summary>
+    private static double ShortCap(double r) => Math.Min(0.30, Math.Max(0.12, r * 2));
+
+    /// <summary>
+    /// 反例方向跟着档案走：短句作者防「通篇碎片」（旧口号把人带偏成 19 字句），
+    /// 长句作者（中位 ≥35 字）防「每句一样长的匀速长句」。
+    /// </summary>
+    private static string ShortCounterExample(AuthorStyleProfile p) =>
+        p.ShortSentenceRatio < 0.12 && p.SentenceMedian < 35
+            ? "  反例：「他停住。风很大。灯灭了。」——这不是节奏，是通篇碎片。"
+            : "  反例：每句都拉到同样长度的匀速长句。";
 
     /// <summary>把 agent/界面给的场景提示归一到 6 个桶名；认不出返回 null。</summary>
     public static string? NormalizeScene(string? hint)

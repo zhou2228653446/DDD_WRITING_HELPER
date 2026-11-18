@@ -502,4 +502,22 @@ public class AuthorStyleTests : IDisposable
         var anchor = AuthorStyleBuilder.BuildAnchorBlock(p);
         Assert.DoesNotContain("张三说道", anchor);
     }
+
+    [Fact]
+    public void 高对话档案要写成主要推进手段_低对话仍给下限()
+    {
+        // 实测踩过：32% 的档案配「至少安排一两处人物交谈」，生成只有 12.9%。
+        // 比例与措辞必须同向，否则模型只抓那句容易执行的下限。
+        var p = AuthorStyleBuilder.Build("测试作者", Corpus(), "测试语料");
+
+        var hi = AuthorStyleBuilder.BuildAnchorBlock(p with { DialogueRatio = 0.32 });
+        Assert.Contains("对话是主要推进手段", hi);
+        Assert.Contains("每三段", hi);
+        Assert.Contains("每千字约 320 字", hi);
+        Assert.DoesNotContain("至少安排一两处人物交谈", hi);
+
+        var lo = AuthorStyleBuilder.BuildAnchorBlock(p with { DialogueRatio = 0.14 });
+        Assert.Contains("至少安排一两处人物交谈", lo);
+        Assert.DoesNotContain("对话是主要推进手段", lo);
+    }
 }

@@ -520,16 +520,28 @@ public static class AuthorStyleBuilder
         sb.AppendLine($"· 超过 {N(p.ParagraphMedian * 2)} 字的厚段全章不超过两三处；" +
                       "段落按动作、视线或对话的自然切换断开，不要为凑长度把几句并成一段。");
 
-        // ── 对话：给「每千字字数」与「至少一两处」，避免只写一个比例没人执行 ──
+        // ── 对话：高对话作者必须写成"主要推进手段" ──
+        //   实测（杀虫队队员 32%）：旧措辞写「至少安排一两处人物交谈」，
+        //   生成只有 12.9%——一句下限把 32% 的比例废掉了，
+        //   和旧版「短句剁节奏」压掉句长数字是同一个病。
         sb.AppendLine();
         sb.AppendLine("【对话】");
-        sb.AppendLine($"· 带引号的对话约占全篇 {p.DialogueRatio:P0}（每千字约 {p.DialogueRatio * 1000:0} 字）；" +
-                      "一章里至少安排一两处人物交谈。");
-        sb.AppendLine($"· 连续对话以 {N(p.DialogueRunMedian)} 段为常见长度。" +
-                      (p.DialogueTags.Count > 0
+        if (p.DialogueRatio >= 0.25)
+        {
+            sb.AppendLine($"· 对话是主要推进手段：约占全篇 {p.DialogueRatio:P0}（每千字约 {p.DialogueRatio * 1000:0} 字），" +
+                          "大致每三段就有一段是带引号的人物对话。规则、冲突、信息都让人物开口说出来，不要压成叙述概述。");
+            sb.AppendLine("· 允许人物连着说话，不要刚说两句就切回环境描写；也不要整章只有叙述。");
+        }
+        else
+        {
+            sb.AppendLine($"· 带引号的对话约占全篇 {p.DialogueRatio:P0}（每千字约 {p.DialogueRatio * 1000:0} 字）；" +
+                          "一章里至少安排一两处人物交谈。");
+            sb.AppendLine($"· 连续对话以 {N(p.DialogueRunMedian)} 段为常见长度；不要整章只有叙述。");
+        }
+        sb.AppendLine((p.DialogueTags.Count > 0
                           ? $"引导语用「{string.Join("、", p.DialogueTags.Take(5))}」这类表达，不要用翻译腔的「他说/他说道」堆砌。"
                           : "引导语用简短的说话动词，不要堆砌。"));
-        sb.AppendLine("· 不要整章只有叙述，也不要为凑比例让角色没话找话。");
+        sb.AppendLine("· 不要为凑比例让角色没话找话。");
 
         // ── 用词：把 PerK 目标频次真正写进去（旧版只给词表，没给频次）──
         if (p.SignatureWords.Count > 0)

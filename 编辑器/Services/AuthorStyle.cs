@@ -328,6 +328,11 @@ public static class AuthorStyleBuilder
             .Where(m => QuoteNearby(body, m.Index, m.Length))
             .Select(m => m.Groups[1].Value)
             .Where(w => !notTagExact.Contains(w) && !notTagSuffix.Any(w.EndsWith))
+            // ★ 贪婪捕获会把主语一起吞进来：「齐夏说道」→ 引导语表第一位是角色名，
+            //   写进锚定块等于让模型拿别人的主角名当模板（《十日终焉》实测穿帮）。
+            .Select(NormalizeTag)
+            .Where(w => w != null)
+            .Select(w => w!)
             .GroupBy(w => w)
             .OrderByDescending(g => g.Count())
             .Take(8)
@@ -984,6 +989,47 @@ public static class AuthorStyleBuilder
         var outside = Regex.Replace(p, "[「『“‘][^」』”’]*[」』”’]", " ");
         return VisibleChars(outside) < 15;
     }
+
+    /// <summary>
+    /// 引导语规范化：从自由捕获的「X道」里取出**已知引导语**，取不到就丢弃。
+    ///
+    /// 为什么不用"剥人名"：正则只能看到「1~3 个汉字 + 道」，分不清
+    /// 「齐夏说道」（专名）和「低声说道」（方式状语），剥的时候必然误伤。
+    /// 改成白名单最长后缀匹配后，只保留确定是引导语的词——
+    /// 召回率低一点无所谓（只要 top 8），但专名一个字都进不来。
+    /// </summary>
+    internal static string? NormalizeTag(string w)
+    {
+        if (string.IsNullOrEmpty(w) || !w.EndsWith("道", StringComparison.Ordinal)) return null;
+        foreach (var t in TagLexicon)
+            if (w.EndsWith(t, StringComparison.Ordinal)) return t;
+        return null;
+    }
+
+    /// <summary>
+    /// 引导语白名单，按长度降序（最长后缀优先：「低声说道」不能被拆成「说道」）。
+    /// 新增语料若出现表外引导语，宁可丢弃也不要放开自由捕获。
+    /// </summary>
+    private static readonly string[] TagLexicon =
+        new[]
+        {
+            // 方式状语 + 说话动词 + 道
+            "低声说道", "沉声说道", "轻声说道", "冷冷说道", "笑着说道", "接口说道", "接着说道",
+            "开口问道", "开口说道", "点头说道", "摇头说道", "低声问道", "沉声问道", "轻声问道",
+            // 状语 + 道
+            "淡淡地道", "缓缓地道", "冷冷地道", "轻轻地道", "慢慢地道", "重重地道",
+            "淡淡道", "缓缓道", "冷冷道", "轻轻道", "慢慢道", "重重道",
+            "轻声道", "低声道", "沉声道", "冷声道", "厉声道", "柔声道", "哑声道", "颤声道",
+            "高声说道", "大声说道", "高声问道", "大声问道",
+            // 表情 / 动作 + 道
+            "冷笑道", "苦笑道", "怒道", "忙道", "急道", "顿道", "接口道", "接着道", "跟着道",
+            "补充道", "解释道", "吩咐道", "嘟囔道", "咕哝道", "喃喃道", "答道", "应道", "回道",
+            // 单字说话动词 + 道
+            "说道", "问道", "叫道", "喊道", "喝道", "笑道", "骂道", "叹道",
+            "嚷道", "吼道", "哼道", "念道", "讲道", "劝道", "催道",
+        }
+        .OrderByDescending(t => t.Length)
+        .ToArray();
 
     /// <summary>位置前后 12 字内出现引号 = 疑似对话引导语。</summary>
     private static bool QuoteNearby(string text, int index, int length)

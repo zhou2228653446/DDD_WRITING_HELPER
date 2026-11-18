@@ -473,4 +473,33 @@ public class AuthorStyleTests : IDisposable
         Assert.Equal(picked.Select(x => x.Id),
             AuthorStyleBuilder.SelectSamples(p, null, 2).Select(x => x.Id));
     }
+
+    // ─────────────── 引导语：人名不得进提示词 ───────────────
+
+    [Theory]
+    [InlineData("齐夏说道", "说道")]        // 人名 + 说话动词 + 道 → 剥掉人名
+    [InlineData("俊南问道", "问道")]
+    [InlineData("家劲说道", "说道")]
+    [InlineData("他说道", "说道")]
+    [InlineData("低声说道", "低声说道")]    // 方式状语是风格信号，要保留
+    [InlineData("开口问道", "开口问道")]
+    [InlineData("冷笑道", "冷笑道")]
+    [InlineData("轻声道", "轻声道")]        // 不含说话动词，原样返回
+    [InlineData("淡淡地道", "淡淡地道")]
+    [InlineData("补充道", "补充道")]
+    [InlineData("说道", "说道")]
+    public void 引导语规范化_剥人名但不剥方式词(string raw, string expected)
+        => Assert.Equal(expected, AuthorStyleBuilder.NormalizeTag(raw));
+
+    [Fact]
+    public void 锚定块里不得出现角色名式引导语()
+    {
+        // 语料里刻意让人名紧贴「说道」——旧正则会把「张三说道」整块收进引导语表，
+        // 写进锚定块等于把别的书的角色名当模板（《十日终焉》实测穿帮）。
+        var p = AuthorStyleBuilder.Build("测试作者", Corpus(), "测试语料");
+
+        Assert.DoesNotContain(p.DialogueTags, t => t.Contains('张') || t.Contains('李'));
+        var anchor = AuthorStyleBuilder.BuildAnchorBlock(p);
+        Assert.DoesNotContain("张三说道", anchor);
+    }
 }

@@ -487,7 +487,7 @@ public static class AuthorStyleBuilder
     /// 对话 3~5%，系统性偏离目标 27 字 / 1.82 / 14%。现在改成「区间 + 边界 + 反例」，
     /// 且**所有数字从档案推导**，多作者各自出数，不硬编码任何作者的统计量。
     /// </summary>
-    public static string BuildAnchorBlock(AuthorStyleProfile p)
+    public static string BuildAnchorBlock(AuthorStyleProfile p, bool sceneBound = false)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"【作者文风锚定 —— 目标作者：{p.Name}】");
@@ -499,14 +499,34 @@ public static class AuthorStyleBuilder
         var comma = p.CommaPerSentence;
         sb.AppendLine();
         sb.AppendLine("【句子】");
-        sb.AppendLine($"· 中位句长 {N(m)} 字（句长 CV {p.SentenceCv:0.00}）：多数句子落在 " +
-                      $"{N(m * 0.75)}~{N(m * 1.35)} 字，长短要有起伏，不要通篇一个长度。");
-        sb.AppendLine($"· 每句平均 {comma:0.0} 个逗号，多数句子 {Math.Max(0.5, comma * 0.85):0.0}~{comma * 1.1:0.0} 个；" +
-                      $"每章要有几句 {N(m * 1.1)} 字以上、带 {N(comma)}~{N(comma) + 1} 个逗号的长句，" +
-                      "也要有不带逗号的短句。不为凑数硬加逗号。");
-        sb.AppendLine($"· 8 字以内的短句约占 {p.ShortSentenceRatio:P0}，" +
-                      $"不超过 {ShortCap(p.ShortSentenceRatio):P0}，且不要连续三句短句。");
-        sb.AppendLine(ShortCounterExample(p));
+        if (sceneBound)
+        {
+            // 实验分支（ai_write anchor=scene）：不把离散度当指标，改成「长度跟场景走」。
+            // 理由：直接要求"句长有变化"会换来机械顿挫（长-短-长-短），
+            // 而人的长短起伏是内容驱动的，所以只绑定场景，不给 CV 数字。
+            sb.AppendLine($"· 句长跟着场景走，不要全章一个节奏：动作、冲突、视线切换处用短句" +
+                          $"（{N(m * 0.3)}~{N(m * 0.55)} 字，允许一句一段）；交代往事、说明规则、" +
+                          $"铺陈环境时用长句（{N(m * 1.3)}~{N(m * 1.9)} 字，带 3~5 个逗号），" +
+                          "可以连着两三句长句。");
+            sb.AppendLine($"· 全章中位句长落在 {N(m * 0.9)}~{N(m * 1.1)} 字即可，不要求每段都靠近这个数。");
+            sb.AppendLine($"· 8 字以内的短句全章约占 {p.ShortSentenceRatio:P0}，出现在动作与对话的间隙；" +
+                          "不要为了制造节奏在叙述中间硬插短句。");
+            sb.AppendLine("  禁止项：「他停住。风很大。灯灭了。」——为顿挫而顿挫的三连短句，比通篇长句更假。");
+            sb.AppendLine($"· 每句平均 {comma:0.0} 个逗号（多数句子 " +
+                          $"{Math.Max(0.5, comma * 0.85):0.0}~{comma * 1.1:0.0} 个）：长句靠逗号推进，" +
+                          "短句不带逗号；不为凑数硬加。");
+        }
+        else
+        {
+            sb.AppendLine($"· 中位句长 {N(m)} 字（句长 CV {p.SentenceCv:0.00}）：多数句子落在 " +
+                          $"{N(m * 0.75)}~{N(m * 1.35)} 字，长短要有起伏，不要通篇一个长度。");
+            sb.AppendLine($"· 每句平均 {comma:0.0} 个逗号，多数句子 {Math.Max(0.5, comma * 0.85):0.0}~{comma * 1.1:0.0} 个；" +
+                          $"每章要有几句 {N(m * 1.1)} 字以上、带 {N(comma)}~{N(comma) + 1} 个逗号的长句，" +
+                          "也要有不带逗号的短句。不为凑数硬加逗号。");
+            sb.AppendLine($"· 8 字以内的短句约占 {p.ShortSentenceRatio:P0}，" +
+                          $"不超过 {ShortCap(p.ShortSentenceRatio):P0}，且不要连续三句短句。");
+            sb.AppendLine(ShortCounterExample(p));
+        }
 
         // ── 段落：档案已有四分位，直接当区间用 ──
         sb.AppendLine();
@@ -629,7 +649,8 @@ public static class AuthorStyleBuilder
     /// 池不足时从其他场景补位；池为空返回空表（不注入，不报错）。
     /// </summary>
     public static List<AuthorStyleProfile.StyleSample> SelectSamples(
-        AuthorStyleProfile p, string? scene, int chapterNumber, int count = SamplesPerRequest)
+        AuthorStyleProfile p, string? scene, int chapterNumber, int count = SamplesPerRequest,
+        bool spread = false)
     {
         var pool = p.Samples.Where(s => s.Enabled && !string.IsNullOrWhiteSpace(s.Text)).ToList();
         if (pool.Count == 0 || count <= 0) return new();
@@ -677,7 +698,40 @@ public static class AuthorStyleBuilder
         var picked = Rotate(primary, seed).Take(count).ToList();
         if (picked.Count < count)
             picked.AddRange(Rotate(secondary, seed).Take(count - picked.Count));
+
+        // 实验分支（anchor=scene）：留一段场景命中，再补**长短两极**各一段。
+        // 目的不是拉高 CV，而是让模型眼前同时有"短句密集"和"长句铺陈"两种样本，
+        // 分布靠示例带过去，而不是靠一句"长短要有起伏"的指令。
+        if (spread && pool.Count >= count)
+        {
+            var ordered = Enumerable.Range(0, pool.Count)
+                .OrderBy(i => MedianSentenceLen(pool[i].Text))
+                .ToList();
+            var band = Math.Max(1, ordered.Count / 3);
+            var wantLong = Rotate(ordered.Skip(ordered.Count - band).ToList(), seed).First();
+            var wantShort = Rotate(ordered.Take(band).ToList(), seed / 7 + 3).First();
+
+            var keep = picked.Take(Math.Max(0, count - 2)).ToList();
+            foreach (var i in new[] { wantLong, wantShort })
+                if (!keep.Contains(i)) keep.Add(i);
+            foreach (var i in picked)
+                if (keep.Count < count && !keep.Contains(i)) keep.Add(i);
+            picked = keep.Take(count).ToList();
+        }
         return picked.Select(i => pool[i]).ToList();
+    }
+
+    /// <summary>样本自身的句长中位（用于长短两极取样）。</summary>
+    private static double MedianSentenceLen(string text)
+    {
+        var lens = text
+            .Split(new[] { '。', '！', '？', '…', '；', '”', '」' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(VisibleChars)
+            .Where(x => x >= 4)
+            .OrderBy(x => x)
+            .ToList();
+        if (lens.Count == 0) return 0;
+        return lens[lens.Count / 2];
     }
 
     private static List<int> Rotate(List<int> src, int seed)

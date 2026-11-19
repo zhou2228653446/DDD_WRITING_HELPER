@@ -794,6 +794,7 @@ internal static class McpServer
                     ["sampling"] = new() { description = "诊断用：legacy 回到改造前的采样参数（0.7 / 无惩罚）；stable 用低温稳定档（0.65），供验收与跨章一致性测量。正常创作留空" },
                     ["style"] = new() { description = "本次临时用哪份作者风格档案（style_profile_list 里的 id）；留空用书绑定的档案" },
                     ["scene"] = new() { description = "本次写作的场景：对话交锋 / 战斗冲突 / 环境氛围 / 日常推进 / 开篇起笔 / 章末收束。决定从样本池取哪几段原文；留空按章节标题与正文末尾自动判" },
+                    ["anchor"] = new() { description = "诊断用 A/B/C：scene=锚定块改成「句长跟场景走」且样本取长短两极；spread=只换成长短两极样本、锚定块不变。正常写作留空" },
                 },
                 required = new List<string> { "task" },
             },

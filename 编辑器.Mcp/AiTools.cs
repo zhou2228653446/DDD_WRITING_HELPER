@@ -166,6 +166,13 @@ internal static class AiTools
         string volatileStyle = "";
         string? styleScene = null;
         IReadOnlyList<AuthorStyleProfile.StyleSample>? styleSamples = null;
+        // anchor 诊断参数（A/B/C）：
+        //   scene  = 锚定块改成「句长跟场景走」+ 长短两极样本
+        //   spread = 只换样本（长短两极），锚定块不动 —— 用来分离两个变量的作用
+        // 默认（不传）= 现有行为，界面与既有书不受影响。
+        var anchorArg = NovelTools.Str(args, "anchor").Trim();
+        var sceneBound = string.Equals(anchorArg, "scene", StringComparison.OrdinalIgnoreCase);
+        var spreadOnly = string.Equals(anchorArg, "spread", StringComparison.OrdinalIgnoreCase);
         if (styleProfile != null)
         {
             var chapterForScene = number > 0
@@ -174,7 +181,8 @@ internal static class AiTools
             styleScene = ResolveScene(p, args, instruction, number,
                 chapterForScene?.Title, chapterForScene?.Content);
             styleSamples = AuthorStyleBuilder.SelectSamples(
-                styleProfile, styleScene, number > 0 ? number : 0);
+                styleProfile, styleScene, number > 0 ? number : 0,
+                spread: sceneBound || spreadOnly);
             volatileStyle = AuthorStyleBuilder.BuildSampleBlock(styleProfile, styleSamples);
         }
 
@@ -226,7 +234,7 @@ internal static class AiTools
         // 这里只有 L1 数值指令 + L3 守则；原文样本在下面的不可缓存段注入。
         if (styleProfile != null)
         {
-            var anchor = AuthorStyleBuilder.BuildAnchorBlock(styleProfile);
+            var anchor = AuthorStyleBuilder.BuildAnchorBlock(styleProfile, sceneBound);
             stable = anchor + "\n\n" + stable;
         }
 
@@ -447,7 +455,8 @@ internal static class AiTools
             $" · 文风={styleProfile.Name}" +
             $" · 场景={styleScene ?? "自动"}" +
             $" · 样本={string.Join(",", (styleSamples ?? Array.Empty<AuthorStyleProfile.StyleSample>())
-                .Select(x => x.Id))}";
+                .Select(x => x.Id))}" +
+            (sceneBound ? " · 锚定=场景绑定" : spreadOnly ? " · 锚定=两极样本" : "");
         var samplingLabel = legacySampling ? "legacy" : stableSampling ? "stable" : "default";
         var head = $"[task={task} · model={config.Model} · 采样={samplingLabel}" + styleHead +
                    $" · 技能={(skill == null ? "无" : skill.Name)}" +

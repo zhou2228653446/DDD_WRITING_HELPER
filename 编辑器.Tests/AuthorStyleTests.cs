@@ -520,4 +520,48 @@ public class AuthorStyleTests : IDisposable
         Assert.Contains("至少安排一两处人物交谈", lo);
         Assert.DoesNotContain("对话是主要推进手段", lo);
     }
+
+    // ─────────────── A/B：场景绑定锚定 + 长短两极取样 ───────────────
+
+    [Fact]
+    public void 场景绑定锚定不再报CV数字_且保留禁止项()
+    {
+        // 直接要求"句长有起伏"会换来长-短-长-短的机械顿挫，
+        // 所以实验分支只绑定场景，不给 CV 数字，并写明禁止项。
+        var p = AuthorStyleBuilder.Build("测试作者", Corpus(), "测试语料");
+        var byNumber = AuthorStyleBuilder.BuildAnchorBlock(p);
+        var byScene = AuthorStyleBuilder.BuildAnchorBlock(p, sceneBound: true);
+
+        Assert.Contains("句长 CV", byNumber);
+        Assert.DoesNotContain("句长 CV", byScene);
+        Assert.DoesNotContain("长短要有起伏", byScene);
+        Assert.Contains("句长跟着场景走", byScene);
+        Assert.Contains("为顿挫而顿挫", byScene);
+        Assert.NotEqual(byNumber, byScene);
+    }
+
+    [Fact]
+    public void 两极取样同时给到短句密集与长句铺陈()
+    {
+        var samples = new List<AuthorStyleProfile.StyleSample>();
+        for (var i = 0; i < 6; i++)
+            samples.Add(new AuthorStyleProfile.StyleSample("日常推进",
+                string.Concat(Enumerable.Repeat("他慢慢走了。", 20)))
+            { Id = $"short{i}", Enabled = true });
+        var longSentence = "风从远处的山脊上慢慢吹下来，带着雨后泥土和青草的气味，把院子里那盏灯吹得轻轻摇晃。";
+        for (var i = 0; i < 6; i++)
+            samples.Add(new AuthorStyleProfile.StyleSample("环境氛围",
+                string.Concat(Enumerable.Repeat(longSentence, 6)))
+            { Id = $"long{i}", Enabled = true });
+
+        var p = new AuthorStyleProfile { Id = "t", Name = "测试", Samples = samples };
+
+        var picked = AuthorStyleBuilder.SelectSamples(p, "对话交锋", 3, 3, spread: true);
+        Assert.Equal(3, picked.Count);
+        Assert.Contains(picked, x => x.Id.StartsWith("short"));
+        Assert.Contains(picked, x => x.Id.StartsWith("long"));
+        // 同一章重复生成必须同一组（章内连贯）
+        Assert.Equal(picked.Select(x => x.Id),
+            AuthorStyleBuilder.SelectSamples(p, "对话交锋", 3, 3, spread: true).Select(x => x.Id));
+    }
 }

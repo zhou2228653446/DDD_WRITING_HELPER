@@ -57,6 +57,11 @@ public sealed record AuthorStyleProfile
     /// <summary>对话引导语（"轻声道""淡淡地道"），按语料频次降序。</summary>
     public IReadOnlyList<string> DialogueTags { get; init; } = Array.Empty<string>();
 
+    /// <summary>
+    /// 引导语总频次（每千字处数）。旧档案没有这个字段，反序列化得 0，
+    /// 锚定块会省略频次约束、只留词表与反堆砌。</summary>
+    public double DialogueTagPerK { get; init; }
+
     // ── L2 软指纹 ──
 
     /// <summary>
@@ -247,6 +252,27 @@ public static class AuthorStyleBuilder
 
     private static readonly string[] PathologicalKinds = { "翻译腔", "升华", "僵笑弧度" };
 
+    /// <summary>
+    /// 候选池里**不该当"风格"教给模型**的词：通用叙述词与题材词。
+    ///
+    /// 判据不是"看起来普通"，而是实测：这些词一旦写进锚定块，生成就会爆。
+    /// 《规则怪谈》实测「看着」2.96/千字（原书 0.49，6 倍）、「声音」2.66（原书 0.46），
+    /// 而同一张表里 6 个真正的风格词（微微/缓缓/瞬间/忽然/眼神/摇头）**一次都没出现**——
+    /// 因为通用词在叙述里随处可塞，风格词要刻意才写得出来，模型只做省力的那半。
+    /// 更麻烦的是通用词跨题材穿帮：写都市却按余华档案挂「田里」「村口」。
+    ///
+    /// 所以：只有风格标记进提示词；这两类词照样参与统计（档案是事实），
+    /// 但判定侧只对"超量堆砌"报警，不当贴合度算。
+    /// </summary>
+    private static readonly HashSet<string> NonStyleWords = new(StringComparer.Ordinal)
+    {
+        // 通用叙述：任何题材、任何作者的叙事都会自然产生，不需要教
+        "看着", "笑着", "声音", "身体", "一声", "点头", "摇头", "低头", "抬头",
+        "坐下", "蹲下", "半天", "说完", "眯眼", "轻轻",
+        // 题材/地点：由故事发生在哪里决定，跨题材提示会穿帮
+        "屋里", "日子", "街道", "田里", "夜里", "早上", "中午", "村口",
+    };
+
     private static readonly string[] ActionVerbs =
     {
         "冲", "轰", "斩", "劈", "砸", "爆", "射", "炸", "撞", "踢", "抓", "撕", "绞", "砸落",
@@ -321,23 +347,47 @@ public static class AuthorStyleBuilder
         var notTagSuffix = new[] { "知道", "得到", "做到", "用到", "想到", "听到", "看到",
             "感到", "跑到", "走到", "来到", "遇到", "收到", "接到", "意识到", "注意到" };
         var notTagExact = new HashSet<string> { "一条", "这道", "那道", "几道", "数道" };
-        var tags = Regex.Matches(body, @"([\u4e00-\u9fa5]{1,3}道)[，：]")
+        var daoRaw = Regex.Matches(body, @"([\u4e00-\u9fa5]{1,3}道)[，：]")
             // ★ 引号邻近校验：真引导语必然紧挨引号（说话人刚开口/刚说完）。
             //   没有这条，「一条街道，」这类"X道，"的巧合同现会混进表里
             //   （余华语料实测穿帮）。
             .Where(m => QuoteNearby(body, m.Index, m.Length))
             .Select(m => m.Groups[1].Value)
             .Where(w => !notTagExact.Contains(w) && !notTagSuffix.Any(w.EndsWith))
-            // ★ 贪婪捕获会把主语一起吞进来：「齐夏说道」→ 引导语表第一位是角色名，
-            //   写进锚定块等于让模型拿别人的主角名当模板（《十日终焉》实测穿帮）。
-            .Select(NormalizeTag)
-            .Where(w => w != null)
-            .Select(w => w!)
+            .ToList();
+
+        // ★ 原先只收「X道」，把「他说/我问」整类漏掉了：余华语料「他说」0.82/千字，
+        //   是「说道」0.09 的 9 倍，一个都没统计到——于是每个作者的引导语表都被
+        //   「道」系垄断，锚定块只会教模型用「说道」（实测生成里 6 篇全是「说道」）。
+        //   补上后归一成「说」「问」。不会与「道」系重复命中：`说道，` 的「说」后面
+        //   跟的是「道」而不是逗号，`说[，：]` 匹配不到它。
+        var notSayExact = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "就是说", "也就是说", "比如说", "虽说", "再说", "听说", "要说", "只是说",
+            "应该说", "可以说", "或者说", "这么说", "那么说", "怎么说", "别说", "不如说",
+            "换句话说", "总之说", "简单说", "老实说", "实话说", "说实话", "据说", "按说",
+            "照说", "论说", "且说", "却说",
+        };
+        var sayRaw = Regex.Matches(body, @"([\u4e00-\u9fa5]{0,3}(?:说|问))[，：]")
+            .Where(m => QuoteNearby(body, m.Index, m.Length))
+            .Select(m => m.Groups[1].Value)
+            .Where(w => !notSayExact.Contains(w))
+            .ToList();
+
+        // ★ 贪婪捕获会把主语一起吞进来：「齐夏说道」→ 引导语表第一位是角色名，
+        //   写进锚定块等于让模型拿别人的主角名当模板（《十日终焉》实测穿帮）。
+        var tags = daoRaw.Select(NormalizeTag).Where(w => w != null).Select(w => w!)
+            .Concat(sayRaw.Select(w => w.EndsWith("说", StringComparison.Ordinal) ? "说" : "问"))
             .GroupBy(w => w)
             .OrderByDescending(g => g.Count())
             .Take(8)
             .Select(g => g.Key)
             .ToList();
+
+        // 引导语总频次：只用于给锚定块一个"每千字几处"的预算。
+        // 分母必须用 body 的可见字——超长语料截了尾部，拿全量算会系统性偏低。
+        var bodyVisible = VisibleChars(body);
+        var tagPerK = bodyVisible == 0 ? 0 : (daoRaw.Count + sayRaw.Count) * 1000.0 / bodyVisible;
 
         // ── L2 样本池 ──
         // 把全书 L1 指纹当"典型"的靶子传进去：挑样不再只看签名词密度，
@@ -364,6 +414,7 @@ public static class AuthorStyleBuilder
             DialogueRunMedian = Math.Round(Median(dialogueRuns), 1),
             SignatureWords = sig,
             DialogueTags = tags,
+            DialogueTagPerK = Math.Round(tagPerK, 2),
             Samples = samples,
         };
     }
@@ -417,12 +468,17 @@ public static class AuthorStyleBuilder
             : Health(dialogueRatio, profile.DialogueRatio, 1.2);
 
         // 签名词：逐词比对实际频次与目标频次（没出现=0.1，不是"没扣分"——
-        // 签名词是这位作者的呼吸，一篇里一次都没有就不像他）
+        // 签名词是这位作者的呼吸，一篇里一次都没有就不像他）。
+        // ★ 贴合度只算风格词：通用叙述词不可控（不提也会自然出现，提了就爆），
+        //   算进平均分会让分数被"看着/声音"绑架。通用词只在超量时单独报警。
         var sigDetail = new List<string>();
+        var piling = new List<string>();
+        var scoredWords = profile.SignatureWords.Where(w => !NonStyleWords.Contains(w.Word)).ToList();
+        if (scoredWords.Count == 0) scoredWords = profile.SignatureWords.ToList();   // 全是通用词时退回全量
         var sigHealth = 0.0;
-        if (profile.SignatureWords.Count > 0)
+        if (scoredWords.Count > 0)
         {
-            foreach (var w in profile.SignatureWords)
+            foreach (var w in scoredWords)
             {
                 var actual = CountOf(text, w.Word) * 1000.0 / visible;
                 var h = actual <= 0 ? 0.1 : Health(actual, w.PerK, 1.3);
@@ -430,25 +486,40 @@ public static class AuthorStyleBuilder
                 if (h < 0.5)
                     sigDetail.Add($"  {w.Word}：目标 {w.PerK:0.00}/千字，实际 {actual:0.00}");
             }
-            sigHealth /= profile.SignatureWords.Count;
+            sigHealth /= scoredWords.Count;
         }
         else sigHealth = 1;
 
-        // 引导语：文中的"X道，"命中档案词表的比例（无对话给中性分）
+        // 堆砌：单个词超目标 3 倍要单列。平均分会被"没出现的词"稀释，看不出来是谁在爆
+        // （实测「看着」2.96 对目标 0.49，六个风格词归零，总分只表现为"贴合度偏低"）。
+        foreach (var w in profile.SignatureWords)
+        {
+            if (w.PerK <= 0) continue;
+            var actual = CountOf(text, w.Word) * 1000.0 / visible;
+            if (actual > w.PerK * 3 && actual > 0.6)
+                piling.Add($"「{w.Word}」{actual:0.00}/千字（目标 {w.PerK:0.00}，{actual / w.PerK:0.0} 倍）");
+        }
+
+        // 引导语：文中「X道，」「他说，」命中档案词表的比例（无对话给中性分）
         var tagHealth = 1.0;
         var tagNote = "";
         if (profile.DialogueTags.Count > 0 && text.Contains('“'))
         {
-            var matches = Regex.Matches(text, @"([一-龥]{1,3}道)[，：]")
+            var matches = Regex.Matches(text, @"([一-龥]{0,3}(?:道|说|问))[，：]")
                 .Select(m => m.Groups[1].Value)
+                .Select(raw => raw.EndsWith("道", StringComparison.Ordinal)
+                    ? NormalizeTag(raw)
+                    : raw.EndsWith("说", StringComparison.Ordinal) ? "说" : "问")
+                .Where(t => t != null)
+                .Select(t => t!)
                 .ToList();
             if (matches.Count > 0)
             {
-                var hit = matches.Count(m => profile.DialogueTags.Any(t => t.EndsWith(m) || m.EndsWith(t)));
+                var hit = matches.Count(m => profile.DialogueTags.Any(t => t == m || m.EndsWith(t)));
                 tagHealth = (double)hit / matches.Count;
                 tagNote = $"（引导语 {hit}/{matches.Count} 命中档案词表）";
             }
-            else tagNote = "（文中没有「X道」引导语，档案惯例是「" +
+            else tagNote = "（文中没有对话引导语，档案惯例是「" +
                            string.Join("、", profile.DialogueTags.Take(3)) + "」）";
         }
 
@@ -468,6 +539,8 @@ public static class AuthorStyleBuilder
                       $"中位段长 {Median(seg.ParagraphLengths):0}（目标 {profile.ParagraphMedian:0}）、" +
                       $"对话 {dialogueRatio:P0}（目标 {profile.DialogueRatio:P0}）");
         sb.AppendLine($"· 签名词贴合度 {sigHealth:P0}{(sigDetail.Count > 0 ? "\n" + string.Join("\n", sigDetail.Take(4)) : "")}");
+        if (piling.Count > 0)
+            sb.AppendLine($"· ⚠ 单词堆砌：{string.Join("；", piling)}——同一个词反复出现，比少用更显机器");
         sb.AppendLine($"· 引导语贴合度 {tagHealth:P0}{tagNote}");
         if (pathological.Count > 0)
             sb.Append($"· 病态扣分：{string.Join("、", pathological.Select(h => h.Kind))}（-{4 * pathological.Count}）");
@@ -558,20 +631,41 @@ public static class AuthorStyleBuilder
                           "一章里至少安排一两处人物交谈。");
             sb.AppendLine($"· 连续对话以 {N(p.DialogueRunMedian)} 段为常见长度；不要整章只有叙述。");
         }
-        sb.AppendLine((p.DialogueTags.Count > 0
-                          ? $"引导语用「{string.Join("、", p.DialogueTags.Take(5))}」这类表达，不要用翻译腔的「他说/他说道」堆砌。"
-                          : "引导语用简短的说话动词，不要堆砌。"));
+        // ★ 旧句「引导语用「说道、问道…」这类表达，不要用翻译腔的「他说/他说道」堆砌」
+        //   自相矛盾：同一个词前半句让用、后半句让别用，模型只能挑一半执行。
+        //   现在只给「用哪些 + 总共几处」，反堆砌靠频次约束，不靠口号。
+        if (p.DialogueTags.Count > 0)
+        {
+            var tagLine = "· 对话引导语用「" + string.Join("、", p.DialogueTags.Take(5)
+                .Select(t => t == "说" ? "他说/她说" : t == "问" ? "他问/她问" : t)) + "」这类说法";
+            if (p.DialogueTagPerK > 0)
+                tagLine += $"，每千字约 {p.DialogueTagPerK:0.0} 处（三千字一章约 {p.DialogueTagPerK * 3:0} 处）";
+            sb.AppendLine(tagLine + "；其余对话段直接上引号，不必每句都标明谁在说，连续几句对话时干脆不写引导语。");
+        }
+        else sb.AppendLine("· 对话引导语用简短的说话动词，不必每句都标注。");
         sb.AppendLine("· 不要为凑比例让角色没话找话。");
 
-        // ── 用词：把 PerK 目标频次真正写进去（旧版只给词表，没给频次）──
-        if (p.SignatureWords.Count > 0)
+        // ── 用词：总预算 + 配比，不给逐词区间 ──
+        //   旧版「每词每千字约 lo~hi 次」把 1.32 的「点头」和 0.34 的「眼神」
+        //   压成同一个区间，实测模型于是平均铺：两个通用词超 6 倍、六个风格词归零，
+        //   总量 7.77/千字（原书 5.54，+40%）。改成「总共多少 + 谁挑大梁」。
+        //   通用叙述词/题材词整段不提——实测提示了只会超（看着 ×6、声音 ×5.9）。
+        var styleWords = p.SignatureWords.Where(w => !NonStyleWords.Contains(w.Word)).ToList();
+        if (styleWords.Count > 0)
         {
+            var budget = styleWords.Sum(w => w.PerK);
+            var lead = styleWords.Take(5).ToList();
             sb.AppendLine();
             sb.AppendLine("【用词】");
-            var lo = p.SignatureWords.Min(w => w.PerK);
-            var hi = p.SignatureWords.Max(w => w.PerK);
-            sb.AppendLine($"· 标志词按自然频次使用：{string.Join("、", p.SignatureWords.Take(10).Select(w => w.Word))}…" +
-                          $"（每词每千字约 {lo:0.0}~{hi:0.0} 次）；同一词不在相邻两段重复，不要堆砌。");
+            sb.AppendLine($"· 风格词合计每千字约 {budget:0.0} 次（三千字一章共约 {budget * 3:0} 处），分散开用：" +
+                          string.Join("、", lead.Select(w => $"「{w.Word}」{w.PerK:0.0}")) +
+                          "（每千字次数）" +
+                          (styleWords.Count > lead.Count
+                              ? $"；其余{string.Join("、", styleWords.Skip(5).Select(w => $"「{w.Word}」"))}零星点一两处即可。"
+                              : "。"));
+            // ★ 只写"宁少不多"实测会被理解成"可以完全不用"：5 个风格词里 4 个归零
+            //   （忽然 1.19 是唯一的幸存者）。改成双向——上界防堆砌，下界防归零。
+            sb.AppendLine("· 同一个词不在相邻两段重复，一段里不叠两个同义修饰；不为凑词硬塞，也别整章一个都不用。");
         }
 
         sb.AppendLine();

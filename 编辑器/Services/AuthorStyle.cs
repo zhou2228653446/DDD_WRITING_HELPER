@@ -40,6 +40,14 @@ public sealed record AuthorStyleProfile
     public double ParagraphMedian { get; init; }
     public double ParagraphP25 { get; init; }
     public double ParagraphP75 { get; init; }
+
+    /// <summary>
+    /// 段长 P90。用于长段配额——旧版拿「2 × 中位」当厚段上界（余华 60 字），
+    /// 但余华真实的 P90 是 164 字，等于把中位以上四分之一全砍掉，
+    /// 生成因此永远写不出"松弛段落"（实测最长段 114 字，原书 1779）。
+    /// 旧档案没有这个字段，反序列化得 0，锚定块会退回 P75 × 1.5 估算。
+    /// </summary>
+    public double ParagraphP90 { get; init; }
     public double DialogueRatio { get; init; }
 
     /// <summary>平均每句逗号数——标点习惯：连缀长句（土豆≈2.5）vs 短促断句（余华≈1.2）。</summary>
@@ -396,7 +404,8 @@ public static class AuthorStyleBuilder
             Median(sentenceLens),
             sentenceTotal == 0 ? 0 : (double)commaTotal / sentenceTotal,
             dialogueRatio,
-            Median(paraLens));
+            Median(paraLens),
+            Quantile(paraLens, 0.90));
 
         return new AuthorStyleProfile
         {
@@ -408,6 +417,7 @@ public static class AuthorStyleBuilder
             ParagraphMedian = Math.Round(Median(paraLens), 1),
             ParagraphP25 = Math.Round(Quantile(paraLens, 0.25), 1),
             ParagraphP75 = Math.Round(Quantile(paraLens, 0.75), 1),
+            ParagraphP90 = Math.Round(Quantile(paraLens, 0.90), 1),
             DialogueRatio = Math.Round(dialogueRatio, 3),
             CommaPerSentence = sentenceTotal == 0 ? 0 : Math.Round((double)commaTotal / sentenceTotal, 2),
             ShortSentenceRatio = sentenceTotal == 0 ? 0 : Math.Round((double)shortSentences / sentenceTotal, 3),
@@ -610,8 +620,16 @@ public static class AuthorStyleBuilder
         sb.AppendLine($"· 段长以 {N(p.ParagraphMedian)} 字为中心：多数段落 " +
                       $"{N(p.ParagraphMedian * 0.7)}~{N(p.ParagraphMedian * 1.5)} 字，" +
                       $"全章段长的中位数要达到 {N(p.ParagraphMedian)} 字左右。");
-        sb.AppendLine($"· 超过 {N(p.ParagraphMedian * 2)} 字的厚段全章不超过两三处；" +
-                      "段落按动作、视线或对话的自然切换断开，不要为凑长度把几句并成一段。");
+        // ★ 2026-11-19：上界从「2 × 中位」改成 P90。旧写法对余华 = 60 字，
+        //   而他真实的 P90 是 164 字、最长 1779——最松弛的那批段落被规则直接禁掉，
+        //   生成于是每段都在中等强度用力（读者反馈「每个段落都有两三个细节，没有松弛段落」）。
+        //   长段不是失控，是节奏的另一端：留白、时间流逝、重复动作都靠它。
+        var p90 = p.ParagraphP90 > 0 ? p.ParagraphP90 : p.ParagraphP75 * 1.5;
+        sb.AppendLine($"· 长段是节奏的一部分：全章可以有一两段写到 {N(p90)} 字上下，允许一段到 {N(p90 * 1.35)} 字。" +
+                      "这种段落用来写环境、写天色暗下来、写一个人反复做同一件事——" +
+                      "它不推进情节，只是让时间过去，不要往里塞动作和细节。");
+        sb.AppendLine("· 其余段落按动作、视线或对话的自然切换断开，不要为凑长度把几句并成一段；" +
+                      "该短句成段的地方就让它单独成段，不要每段都撑到中等长度。");
 
         // ── 对话：高对话作者必须写成"主要推进手段" ──
         //   实测（杀虫队队员 32%）：旧措辞写「至少安排一两处人物交谈」，
@@ -933,7 +951,7 @@ public static class AuthorStyleBuilder
     internal static List<AuthorStyleProfile.StyleSample> PickSamples(
         List<string> chapters, string allText, int visible,
         double targetSentence = 0, double targetComma = 0,
-        double targetDialogue = 0, double targetPara = 0)
+        double targetDialogue = 0, double targetPara = 0, double paraP90 = 0)
     {
         // 场景分桶：对话交锋 / 战斗冲突 / 环境氛围 / 日常推进。
         // ★ 先按段分类，再把**同场景连续段落**聚成 250~350 字的窗口——
@@ -960,8 +978,11 @@ public static class AuthorStyleBuilder
                 }
                 windowScene = scene;
                 window.Add(p);
-                winChars += VisibleChars(p);
-                if (winChars >= 300)
+                var pn = VisibleChars(p);
+                winChars += pn;
+                // ★ 单段本身就超长时立刻收窗：300 字的上限会把长段切碎，
+                //   余华那种 160~500 字的长段永远拼不进样本池（构建期 P90=164）。
+                if (winChars >= 300 || pn >= 260)
                 {
                     Flush(window, winChars, windowScene, buckets, source);
                     window = new List<string>();
@@ -1015,17 +1036,39 @@ public static class AuthorStyleBuilder
 
             // ★ 贴合度排序很便宜、StyleAudit.Analyze 很贵：先排序取候选，
             //   再对候选跑病态检查。百万字语料下比"每个窗口都 Analyze 一遍"快一个量级。
-            var ranked = windows
+            var scored = windows
                 .Select(w => (W: w, Fit: WindowFit(w, meanSig,
                     targetSentence, targetComma, targetDialogue, targetPara)))
                 .OrderByDescending(x => x.Fit)
-                .Take(SamplesPerScene * 8)
                 .ToList();
+            var ranked = scored.Take(SamplesPerScene * 8).ToList();
+
+            // ★ 2026-11-19 第二层：每场景强制掺两段「非典型」。
+            //   WindowFit 的五维距离全是往中位拉的，长段和短促段天然低分——
+            //   旧版 48 段样本里一段都没有，模型只学会「中等强度用力」。
+            //   读者反馈的「没有松弛段落」「句长起伏不够」都指向这里。
+            //   从全量 scored 里找而不是 ranked，否则低分的长段早被 Top64 截断了。
+            var forced = new List<(SampleWindow W, double Fit, string Kind)>();
+            if (paraP90 > 0)
+            {
+                var longSeg = scored
+                    .Where(x => x.W.Chars <= 600          // 余华语料有 1779 字的合并整节，当范本会过犹不及
+                             && MedianParaOf(x.W) >= paraP90 * 0.8
+                             && DialogueRatioOf(x.W) < 0.10)
+                    .OrderByDescending(x => MedianParaOf(x.W))
+                    .FirstOrDefault();
+                if (longSeg.W != null) forced.Add((longSeg.W, longSeg.Fit, "松弛长段"));
+            }
+            var shortSeg = scored
+                .Where(x => MedianParaOf(x.W) <= 15 && x.W.Paragraphs.Count >= 4)
+                .OrderByDescending(x => x.W.Paragraphs.Count)
+                .FirstOrDefault();
+            if (shortSeg.W != null) forced.Add((shortSeg.W, shortSeg.Fit, "短促段"));
 
             var grams = new List<HashSet<string>>();
             var perChapter = new Dictionary<string, int>(StringComparer.Ordinal);
             var taken = 0;
-            foreach (var (w, fit) in ranked)
+            foreach (var (w, fit, kind) in forced.Concat(ranked.Select(x => (x.W, x.Fit, ""))))
             {
                 if (taken >= SamplesPerScene || picked.Count >= MaxSamples) break;
                 var text = string.Join("\n", w.Paragraphs);
@@ -1045,7 +1088,13 @@ public static class AuthorStyleBuilder
                 {
                     Id = $"s{seq++:00}",
                     Source = w.Source,
-                    Note = DescribeSample(text),
+                    // Note 是写给模型看的：掺进来的非典型段必须说明「它示范什么」，
+                    // 否则模型只看到一段长的，会理解成「每段都要这么长」。
+                    Note = kind.Length == 0
+                        ? DescribeSample(text)
+                        : $"{kind}（{DescribeSample(text)}）——" + (kind == "松弛长段"
+                            ? "示范不推进情节的写法：只写环境、天色或重复动作，全章至多一两处"
+                            : "示范单句成段：用短段剁节奏，不要每段都撑到中等长度"),
                     Fit = Math.Round(fit, 3),
                     Enabled = true,
                 });
@@ -1110,6 +1159,20 @@ public static class AuthorStyleBuilder
         if (a.Count == 0 || b.Count == 0) return 0;
         var inter = a.Count(x => b.Contains(x));
         return (double)inter / (a.Count + b.Count - inter);
+    }
+
+    /// <summary>窗口内的中位段长——挑「长段/短促段」样本时看它，不看 Fit。</summary>
+    private static double MedianParaOf(SampleWindow w)
+    {
+        var lens = w.Paragraphs.Select(VisibleChars).Where(n => n >= 4).ToList();
+        return lens.Count == 0 ? 0 : Median(lens);
+    }
+
+    /// <summary>窗口的对话占比（0~1）。松弛长段要求低于 10%——有对话就不算留白。</summary>
+    private static double DialogueRatioOf(SampleWindow w)
+    {
+        var text = string.Join("\n", w.Paragraphs);
+        return (double)CountDialogueChars(text) / Math.Max(1, VisibleChars(text));
     }
 
     /// <summary>把"这段示范了什么"写成一行，注入时让模仿从隐式变半显式。</summary>

@@ -10,9 +10,17 @@ using Xunit;
 namespace 编辑器.Tests;
 
 /// <summary>
+/// AuthorStyleStore 的目录是静态的（SetDirForTests），多个测试类并行会互相踩。
+/// 把用到它的类放进同一个 collection，xunit 就会串行执行。
+/// </summary>
+[CollectionDefinition("author-style-store")]
+public class AuthorStyleStoreCollection { }
+
+/// <summary>
 /// 作者风格档案：多作者库 + 按书绑定（用户明确：模仿对象不止一个，
 /// 不同书用不同作者的文风——所以档案一人一份、书通过 AuthorStyleId 绑定）。
 /// </summary>
+[Collection("author-style-store")]
 public class AuthorStyleTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "astyle-" + Guid.NewGuid().ToString("N")[..8]);
@@ -25,7 +33,11 @@ public class AuthorStyleTests : IDisposable
 
     public void Dispose()
     {
-        AuthorStyleStore.ClearDirForTests();
+        // ★ 不要在这里 ClearDirForTests：override 一清空，Directory 立刻指向
+        //   真实的 %APPDATA%/TdxClaw/author_profiles，而另一个测试实例可能还在跑，
+        //   结果把测试数据写进真实档案库（2026-11-24 踩过：余华档案被写入
+        //   QuietMode=force / ShortParaMin=0.3）。目录删掉即可，下一个实例
+        //   构造时会重新 SetDirForTests；进程结束 override 自然失效。
         try { Directory.Delete(_dir, recursive: true); } catch { }
     }
 
@@ -233,7 +245,7 @@ public class AuthorStyleTests : IDisposable
         Assert.Contains("反例", anchor);
         Assert.Contains("作者守则", anchor);
         Assert.Contains("统计参照", anchor);
-        Assert.Contains("一律以区间为准", anchor);  // 守则 / few-shot 与区间冲突时的优先级
+        Assert.Contains("以守则为准", anchor);  // 守则 > 区间 > 示例（2026-11-24 改：留手动覆盖口子）
         Assert.Contains("不要为凑长度把几句并成一段", anchor);
         Assert.DoesNotContain("允许少量更厚的段落", anchor);  // 这句曾把段长推到 72~115
 

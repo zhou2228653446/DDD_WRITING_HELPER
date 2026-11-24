@@ -195,10 +195,106 @@ public static class AuthorStyleStore
             System.Text.Json.JsonSerializer.Serialize(lines, JsonOpts));
     }
 
+    // ── 调参（tuning）：覆盖自动推导的开关与措辞 ──
+    //   与 rules.json 分开存：守则是内容要求，调参是机制参数。
+    //   重新 import 只重算指纹/样本，不会冲掉这两份人工文件。
+
+    private static string TuningFile(string id) => Path.Combine(Directory, id + StyleTuning.FileSuffix);
+
+    public static StyleTuning LoadTuning(string id)
+    {
+        if (!ValidId(id)) return new StyleTuning();
+        var file = TuningFile(id);
+        if (!File.Exists(file)) return new StyleTuning();
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<StyleTuning>(
+                       File.ReadAllText(file), JsonOpts) ?? new StyleTuning();
+        }
+        catch { return new StyleTuning(); }   // 坏文件不炸生成，退回全自动
+    }
+
+    /// <summary>写调参。全空则删文件（回到全自动）。</summary>
+    public static void SaveTuning(string id, StyleTuning tuning)
+    {
+        if (!ValidId(id)) throw new ArgumentException($"非法档案 Id：{id}");
+        var file = TuningFile(id);
+        if (tuning.IsEmpty)
+        {
+            if (File.Exists(file)) File.Delete(file);
+            return;
+        }
+        // 空字典/空表归一成 null，别在 JSON 里留空壳
+        if (tuning.Overrides is { Count: 0 }) tuning.Overrides = null;
+        if (tuning.Extra is { Count: 0 }) tuning.Extra = null;
+        System.IO.Directory.CreateDirectory(Directory);
+        File.WriteAllText(file, System.Text.Json.JsonSerializer.Serialize(tuning, JsonOpts));
+    }
+
+    /// <summary>清空调参，回到全自动。</summary>
+    public static void ResetTuning(string id) => SaveTuning(id, new StyleTuning());
+
+    private static string PendingFile(string id) => Path.Combine(Directory, id + ".pending.json");
+    private static string AuditFile(string id) => Path.Combine(Directory, id + ".audit.log");
+
+    public static StylePendingChange? LoadPending(string id)
+    {
+        if (!ValidId(id)) return null;
+        var file = PendingFile(id);
+        if (!File.Exists(file)) return null;
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<StylePendingChange>(
+                File.ReadAllText(file), JsonOpts);
+        }
+        catch { return null; }
+    }
+
+    public static void SavePending(string id, StylePendingChange? pending)
+    {
+        if (!ValidId(id)) return;
+        var file = PendingFile(id);
+        if (pending == null)
+        {
+            if (File.Exists(file)) File.Delete(file);
+            return;
+        }
+        System.IO.Directory.CreateDirectory(Directory);
+        File.WriteAllText(file, System.Text.Json.JsonSerializer.Serialize(pending, JsonOpts));
+    }
+
+    /// <summary>
+    /// 审计：高风险变更落盘时追加一行。改坏了能查「什么时候、改了什么、用的哪个码」。
+    /// 不记录 API Key 之类——这里只有调参内容。
+    /// </summary>
+    public static void AppendAudit(string id, string line)
+    {
+        if (!ValidId(id)) return;
+        try
+        {
+            System.IO.Directory.CreateDirectory(Directory);
+            File.AppendAllText(AuditFile(id),
+                $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss} {line}{Environment.NewLine}");
+        }
+        catch { /* 审计失败不该让主流程挂 */ }
+    }
+
+    public static IReadOnlyList<string> LoadAudit(string id, int max = 20)
+    {
+        if (!ValidId(id)) return Array.Empty<string>();
+        var file = AuditFile(id);
+        if (!File.Exists(file)) return Array.Empty<string>();
+        try
+        {
+            var lines = File.ReadAllLines(file).Where(l => l.Trim().Length > 0).ToList();
+            return lines.Skip(Math.Max(0, lines.Count - max)).ToList();
+        }
+        catch { return Array.Empty<string>(); }
+    }
+
     /// <summary>全部档案（按创建时间降序）。目录不存在返回空表。</summary>
     public static List<AuthorStyleProfile> List()
-    {
-        var result = new List<AuthorStyleProfile>();
+    {        var result = new List<AuthorStyleProfile>();
         if (!System.IO.Directory.Exists(Directory)) return result;
         foreach (var file in System.IO.Directory.GetFiles(Directory, "*.json"))
         {
@@ -438,14 +534,19 @@ public static class AuthorStyleBuilder
         var longParaRatio = Math.Round((double)longIdx.Count / paraCount, 3);
         var quietLongRatio = longIdx.Count == 0 ? 0 : Math.Round((double)quietLong / longIdx.Count, 3);
 
+        // 阈值与开关走 tuning：使用者用 style_profile_tuning 改档位后，
+        // 样本池与锚定块必须同时跟着变，否则会「说不教留白，却仍掺留白样本」。
+        var tuneForBuild = AuthorStyleStore.LoadTuning(ToId(name));
+        var quietForBuild = tuneForBuild.ResolveQuiet(quietLongRatio, longParaRatio);
+
         var samples = PickSamples(chapters, allText, visible,
             Median(sentenceLens),
             sentenceTotal == 0 ? 0 : (double)commaTotal / sentenceTotal,
             dialogueRatio,
             Median(paraLens),
             Quantile(paraLens, 0.90),
-            wantQuietLong: quietLongRatio >= 0.45 && longParaRatio >= 0.08,
-            wantShortSegment: shortParaRatio >= 0.25);
+            wantQuietLong: quietForBuild != "none",
+            wantShortSegment: tuneForBuild.ResolveShortPara(shortParaRatio));
 
         return new AuthorStyleProfile
         {
@@ -616,9 +717,23 @@ public static class AuthorStyleBuilder
     public static string BuildAnchorBlock(AuthorStyleProfile p, bool sceneBound = false)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"【作者文风锚定 —— 目标作者：{p.Name}】");
-        sb.AppendLine("以下区间统计自该作者的真实作品。题材、人物、情节一律以本书设定为准；");
-        sb.AppendLine("只让句子、段落、用词与对话的节奏向这些区间靠拢。");
+
+        // ★ 2026-11-24：锚定块里的每一条都能被使用者覆盖（见 StylePromptKeys）。
+        //   工具是 style_profile_tuning，存 {id}.tuning.json，重新 import 不覆盖。
+        //   优先级：单条覆盖 > 结构化开关 > 档案统计 > 代码默认。
+        var tune = AuthorStyleStore.LoadTuning(p.Id);
+
+        // 空串 = 删掉这一条（不是恢复默认），便于使用者把整段规则关掉。
+        void Emit(string key, string text)
+        {
+            var t = tune.Resolve(key, text);
+            if (t != null) sb.AppendLine(t);
+        }
+
+        Emit(StylePromptKeys.Intro,
+            $"【作者文风锚定 —— 目标作者：{p.Name}】\n" +
+            "以下区间统计自该作者的真实作品。题材、人物、情节一律以本书设定为准；\n" +
+            "只让句子、段落、用词与对话的节奏向这些区间靠拢。");
 
         // ── 句子：主区间要让实测偏差落在区间外，才有纠偏作用 ──
         var m = p.SentenceMedian;
@@ -630,28 +745,36 @@ public static class AuthorStyleBuilder
             // 实验分支（ai_write anchor=scene）：不把离散度当指标，改成「长度跟场景走」。
             // 理由：直接要求"句长有变化"会换来机械顿挫（长-短-长-短），
             // 而人的长短起伏是内容驱动的，所以只绑定场景，不给 CV 数字。
-            sb.AppendLine($"· 句长跟着场景走，不要全章一个节奏：动作、冲突、视线切换处用短句" +
-                          $"（{N(m * 0.3)}~{N(m * 0.55)} 字，允许一句一段）；交代往事、说明规则、" +
-                          $"铺陈环境时用长句（{N(m * 1.3)}~{N(m * 1.9)} 字，带 3~5 个逗号），" +
-                          "可以连着两三句长句。");
-            sb.AppendLine($"· 全章中位句长落在 {N(m * 0.9)}~{N(m * 1.1)} 字即可，不要求每段都靠近这个数。");
-            sb.AppendLine($"· 8 字以内的短句全章约占 {p.ShortSentenceRatio:P0}，出现在动作与对话的间隙；" +
-                          "不要为了制造节奏在叙述中间硬插短句。");
-            sb.AppendLine("  禁止项：「他停住。风很大。灯灭了。」——为顿挫而顿挫的三连短句，比通篇长句更假。");
-            sb.AppendLine($"· 每句平均 {comma:0.0} 个逗号（多数句子 " +
-                          $"{Math.Max(0.5, comma * 0.85):0.0}~{comma * 1.1:0.0} 个）：长句靠逗号推进，" +
-                          "短句不带逗号；不为凑数硬加。");
+            Emit(StylePromptKeys.SentenceShort,
+                $"· 句长跟着场景走，不要全章一个节奏：动作、冲突、视线切换处用短句" +
+                $"（{N(m * 0.3)}~{N(m * 0.55)} 字，允许一句一段）；交代往事、说明规则、" +
+                $"铺陈环境时用长句（{N(m * 1.3)}~{N(m * 1.9)} 字，带 3~5 个逗号），" +
+                "可以连着两三句长句。");
+            Emit(StylePromptKeys.SentenceMedian,
+                $"· 全章中位句长落在 {N(m * 0.9)}~{N(m * 1.1)} 字即可，不要求每段都靠近这个数。");
+            Emit(StylePromptKeys.SentenceShortRatio,
+                $"· 8 字以内的短句全章约占 {p.ShortSentenceRatio:P0}，出现在动作与对话的间隙；" +
+                "不要为了制造节奏在叙述中间硬插短句。");
+            Emit(StylePromptKeys.SentenceCounter,
+                "  禁止项：「他停住。风很大。灯灭了。」——为顿挫而顿挫的三连短句，比通篇长句更假。");
+            Emit(StylePromptKeys.SentenceComma,
+                $"· 每句平均 {comma:0.0} 个逗号（多数句子 " +
+                $"{Math.Max(0.5, comma * 0.85):0.0}~{comma * 1.1:0.0} 个）：长句靠逗号推进，" +
+                "短句不带逗号；不为凑数硬加。");
         }
         else
         {
-            sb.AppendLine($"· 中位句长 {N(m)} 字（句长 CV {p.SentenceCv:0.00}）：多数句子落在 " +
-                          $"{N(m * 0.75)}~{N(m * 1.35)} 字，长短要有起伏，不要通篇一个长度。");
-            sb.AppendLine($"· 每句平均 {comma:0.0} 个逗号，多数句子 {Math.Max(0.5, comma * 0.85):0.0}~{comma * 1.1:0.0} 个；" +
-                          $"每章要有几句 {N(m * 1.1)} 字以上、带 {N(comma)}~{N(comma) + 1} 个逗号的长句，" +
-                          "也要有不带逗号的短句。不为凑数硬加逗号。");
-            sb.AppendLine($"· 8 字以内的短句约占 {p.ShortSentenceRatio:P0}，" +
-                          $"不超过 {ShortCap(p.ShortSentenceRatio):P0}，且不要连续三句短句。");
-            sb.AppendLine(ShortCounterExample(p));
+            Emit(StylePromptKeys.SentenceMedian,
+                $"· 中位句长 {N(m)} 字（句长 CV {p.SentenceCv:0.00}）：多数句子落在 " +
+                $"{N(m * 0.75)}~{N(m * 1.35)} 字，长短要有起伏，不要通篇一个长度。");
+            Emit(StylePromptKeys.SentenceComma,
+                $"· 每句平均 {comma:0.0} 个逗号，多数句子 {Math.Max(0.5, comma * 0.85):0.0}~{comma * 1.1:0.0} 个；" +
+                $"每章要有几句 {N(m * 1.1)} 字以上、带 {N(comma)}~{N(comma) + 1} 个逗号的长句，" +
+                "也要有不带逗号的短句。不为凑数硬加逗号。");
+            Emit(StylePromptKeys.SentenceShortRatio,
+                $"· 8 字以内的短句约占 {p.ShortSentenceRatio:P0}，" +
+                $"不超过 {ShortCap(p.ShortSentenceRatio):P0}，且不要连续三句短句。");
+            Emit(StylePromptKeys.SentenceCounter, ShortCounterExample(p));
         }
 
         // ── 段落：档案已有四分位，直接当区间用 ──
@@ -680,48 +803,59 @@ public static class AuthorStyleBuilder
         //     杀虫    长段  0.8%，其中  7% 无引号，≤15 字段 18.6%
         //   「长段 + 没人说话」是余华式白描的结构特征；杀虫的长段 93% 带对话，
         //   他靠人物开口推进。给他「每章留一处空转」等于让他放弃自己的写法。
-        var hasQuietLong = p.QuietLongRatio >= 0.45 && p.LongParagraphRatio >= 0.08;
-        var quietDominant = p.QuietLongRatio >= 0.75;
+        //   阈值与档位现在都走 tuning（默认 0.45/0.75/0.08，见 StyleTuning），
+        //   使用者可以用 style_profile_tuning 强制 off/anchor/force。
+        var quietMode = tune.ResolveQuiet(p);      // none | anchor | force
+        var wantShortPara = tune.ResolveShortPara(p);
 
-        if (hasQuietLong)
+        if (quietMode != "none")
         {
             // 例子必须去题材化：这里原本写「麻雀落下来、钟声从学校传来、风把叶子吹进脸盆」，
             // 全是余华的乡村意象，给玄幻作者（天蚕土豆）就是错的道具。
-            sb.AppendLine("· 长段要有一个「锚」：一个人坐着不动，或者手上做着一件重复的事（擦刀、等水开、数着什么），" +
-                          "别的东西自己进入他的视野——一只鸟落下来、远处传来声音、风把什么吹进屋里。" +
-                          "是他正好看到，不是「这里还有一件事」。一段里只放一个不动的人。");
-            sb.AppendLine($"· 这种段落全章可以有一两段，写到 {N(p90)} 字上下，允许一段到 {N(p90 * 1.35)} 字。" +
-                          "它不推进情节，也不交代任何信息，只是让时间过去。");
-            sb.AppendLine(quietDominant
-                ? "· 每一章都要留至少一处这样的空转，哪怕这一章要装三件事——事件和事件之间要有一段什么都不发生的。"
-                : "· 留白不必每章都有，但长段不要全用来交代信息——留一段什么都不发生的。");
+            Emit(StylePromptKeys.ParaAnchor,
+                "· 长段要有一个「锚」：一个人坐着不动，或者手上做着一件重复的事（擦刀、等水开、数着什么），" +
+                "别的东西自己进入他的视野——一只鸟落下来、远处传来声音、风把什么吹进屋里。" +
+                "是他正好看到，不是「这里还有一件事」。一段里只放一个不动的人。");
+            Emit(StylePromptKeys.ParaQuietQuota,
+                $"· 这种段落全章可以有一两段，写到 {N(p90)} 字上下，允许一段到 {N(p90 * 1.35)} 字。" +
+                "它不推进情节，也不交代任何信息，只是让时间过去。");
+            if (quietMode == "force")
+                Emit(StylePromptKeys.ParaQuietForce,
+                    "· 每一章都要留至少一处这样的空转，哪怕这一章要装三件事——事件和事件之间要有一段什么都不发生的。");
+            else
+                Emit(StylePromptKeys.ParaQuietSoft,
+                    "· 留白不必每章都有，但长段不要全用来交代信息——留一段什么都不发生的。");
         }
         else
         {
             // 长段靠事件/对话推进的作者：只给长度上界，不提留白，避免把他改成余华。
             // ★ 别写「写到 {P90} 字上下」——实测（杀虫，P90=54）模型会当成硬上限，
             //   最长段只到 63 字，而原书是 152。给一个明显高于 P90 的数当「个别段」的余地。
-            sb.AppendLine($"· 长段按需使用：全章可以有一两段写到 {N(p90 * 1.8)} 字左右（常态段长的两三倍），" +
-                          "但长段里通常是事件在推进或人物在说话，不要为了留白而留白。");
+            Emit(StylePromptKeys.ParaLongLoose,
+                $"· 长段按需使用：全章可以有一两段写到 {N(p90 * 1.8)} 字左右（常态段长的两三倍），" +
+                "但长段里通常是事件在推进或人物在说话，不要为了留白而留白。");
         }
 
-        if (p.ShortParagraphRatio >= 0.25)
+        if (wantShortPara)
         {
-            // 单句成段是这位作者的主要呼吸方式（余华 38.5%），值得单独量化；
-            // 网文作者只有 9%（土豆），要求他写 38% 的短段会拆掉他的推进节奏。
-            sb.AppendLine($"· 单句成段约占全章 {p.ShortParagraphRatio:P0}：很多段落只有一句话，甚至只有一个动作、" +
-                          "一句对白。这是这位作者的呼吸方式，不要为了整齐把它们并成厚段。");
+            // 单句成段是这位作者的主要呼吸方式（余华 32.5%），值得单独量化；
+            // 网文作者只有 8%（土豆），要求他写三成短段会拆掉他的推进节奏。
+            Emit(StylePromptKeys.ParaShort,
+                $"· 单句成段约占全章 {p.ShortParagraphRatio:P0}：很多段落只有一句话，甚至只有一个动作、" +
+                "一句对白。这是这位作者的呼吸方式，不要为了整齐把它们并成厚段。");
         }
         else
         {
-            sb.AppendLine("· 段落按动作、视线或对话的自然切换断开，不要为凑长度把几句并成一段；" +
-                          "该短句成段的地方就让它单独成段，不要每段都撑到中等长度。");
+            Emit(StylePromptKeys.ParaBreak,
+                "· 段落按动作、视线或对话的自然切换断开，不要为凑长度把几句并成一段；" +
+                "该短句成段的地方就让它单独成段，不要每段都撑到中等长度。");
         }
 
         // 这条不随档案变：量词堆砌是模型的通病（生成 16~21/千字，三位作者原书都只有
         // 7.7~10.7），不是某位作者的特征。⚠ 实测（2026-11-24）压不住，降幅在噪声内，
         // 留着是提醒，别指望它生效。
-        sb.AppendLine("· 不要数着写：每件事都带上精确数量（六下、三步、半壶），文字会变成说明书，让动作自己流过去。");
+        Emit(StylePromptKeys.ParaNoCounting,
+            "· 不要数着写：每件事都带上精确数量（六下、三步、半壶），文字会变成说明书，让动作自己流过去。");
 
         // ── 对话：高对话作者必须写成"主要推进手段" ──
         //   实测（杀虫队队员 32%）：旧措辞写「至少安排一两处人物交谈」，
@@ -731,15 +865,19 @@ public static class AuthorStyleBuilder
         sb.AppendLine("【对话】");
         if (p.DialogueRatio >= 0.25)
         {
-            sb.AppendLine($"· 对话是主要推进手段：约占全篇 {p.DialogueRatio:P0}（每千字约 {p.DialogueRatio * 1000:0} 字），" +
-                          "大致每三段就有一段是带引号的人物对话。规则、冲突、信息都让人物开口说出来，不要压成叙述概述。");
-            sb.AppendLine("· 允许人物连着说话，不要刚说两句就切回环境描写；也不要整章只有叙述。");
+            Emit(StylePromptKeys.DialogueMain,
+                $"· 对话是主要推进手段：约占全篇 {p.DialogueRatio:P0}（每千字约 {p.DialogueRatio * 1000:0} 字），" +
+                "大致每三段就有一段是带引号的人物对话。规则、冲突、信息都让人物开口说出来，不要压成叙述概述。");
+            Emit(StylePromptKeys.DialogueRun,
+                "· 允许人物连着说话，不要刚说两句就切回环境描写；也不要整章只有叙述。");
         }
         else
         {
-            sb.AppendLine($"· 带引号的对话约占全篇 {p.DialogueRatio:P0}（每千字约 {p.DialogueRatio * 1000:0} 字）；" +
-                          "一章里至少安排一两处人物交谈。");
-            sb.AppendLine($"· 连续对话以 {N(p.DialogueRunMedian)} 段为常见长度；不要整章只有叙述。");
+            Emit(StylePromptKeys.DialogueMain,
+                $"· 带引号的对话约占全篇 {p.DialogueRatio:P0}（每千字约 {p.DialogueRatio * 1000:0} 字）；" +
+                "一章里至少安排一两处人物交谈。");
+            Emit(StylePromptKeys.DialogueRun,
+                $"· 连续对话以 {N(p.DialogueRunMedian)} 段为常见长度；不要整章只有叙述。");
         }
         // ★ 旧句「引导语用「说道、问道…」这类表达，不要用翻译腔的「他说/他说道」堆砌」
         //   自相矛盾：同一个词前半句让用、后半句让别用，模型只能挑一半执行。
@@ -750,10 +888,12 @@ public static class AuthorStyleBuilder
                 .Select(t => t == "说" ? "他说/她说" : t == "问" ? "他问/她问" : t)) + "」这类说法";
             if (p.DialogueTagPerK > 0)
                 tagLine += $"，每千字约 {p.DialogueTagPerK:0.0} 处（三千字一章约 {p.DialogueTagPerK * 3:0} 处）";
-            sb.AppendLine(tagLine + "；其余对话段直接上引号，不必每句都标明谁在说，连续几句对话时干脆不写引导语。");
+            Emit(StylePromptKeys.DialogueTag,
+                tagLine + "；其余对话段直接上引号，不必每句都标明谁在说，连续几句对话时干脆不写引导语。");
         }
-        else sb.AppendLine("· 对话引导语用简短的说话动词，不必每句都标注。");
-        sb.AppendLine("· 不要为凑比例让角色没话找话。");
+        else
+            Emit(StylePromptKeys.DialogueTag, "· 对话引导语用简短的说话动词，不必每句都标注。");
+        Emit(StylePromptKeys.DialogueNoPadding, "· 不要为凑比例让角色没话找话。");
 
         // ── 用词：总预算 + 配比，不给逐词区间 ──
         //   旧版「每词每千字约 lo~hi 次」把 1.32 的「点头」和 0.34 的「眼神」
@@ -767,24 +907,36 @@ public static class AuthorStyleBuilder
             var lead = styleWords.Take(5).ToList();
             sb.AppendLine();
             sb.AppendLine("【用词】");
-            sb.AppendLine($"· 风格词合计每千字约 {budget:0.0} 次（三千字一章共约 {budget * 3:0} 处），分散开用：" +
-                          string.Join("、", lead.Select(w => $"「{w.Word}」{w.PerK:0.0}")) +
-                          "（每千字次数）" +
-                          (styleWords.Count > lead.Count
-                              ? $"；其余{string.Join("、", styleWords.Skip(5).Select(w => $"「{w.Word}」"))}零星点一两处即可。"
-                              : "。"));
+            Emit(StylePromptKeys.WordBudget,
+                $"· 风格词合计每千字约 {budget:0.0} 次（三千字一章共约 {budget * 3:0} 处），分散开用：" +
+                string.Join("、", lead.Select(w => $"「{w.Word}」{w.PerK:0.0}")) +
+                "（每千字次数）" +
+                (styleWords.Count > lead.Count
+                    ? $"；其余{string.Join("、", styleWords.Skip(5).Select(w => $"「{w.Word}」"))}零星点一两处即可。"
+                    : "。"));
             // ★ 只写"宁少不多"实测会被理解成"可以完全不用"：5 个风格词里 4 个归零
             //   （忽然 1.19 是唯一的幸存者）。改成双向——上界防堆砌，下界防归零。
-            sb.AppendLine("· 同一个词不在相邻两段重复，一段里不叠两个同义修饰；不为凑词硬塞，也别整章一个都不用。");
+            Emit(StylePromptKeys.WordRepeat,
+                "· 同一个词不在相邻两段重复，一段里不叠两个同义修饰；不为凑词硬塞，也别整章一个都不用。");
         }
 
         sb.AppendLine();
         // ★ 三级优先：作者守则 > 数字区间 > 原文示例。
         //   守则是人工确认过的，代表使用者对这个作者的明确要求——
         //   自动推导的分支（留白、单句成段）不可能覆盖所有情况，得留手动改的口子。
-        sb.AppendLine("（以上是统计参照，不是逐句硬指标；读起来自然优先。下面的作者守则是人工确认的硬约束，" +
-                      "与上述数字区间冲突时**以守则为准**——「不要留白」「多写厚段」这类要求直接按守则执行；" +
-                      "原文示例只用于学句式接续、情绪处理与结构习惯，与区间冲突时以区间为准。）");
+        Emit(StylePromptKeys.Closing,
+            "（以上是统计参照，不是逐句硬指标；读起来自然优先。下面的作者守则是人工确认的硬约束，" +
+            "与上述数字区间冲突时**以守则为准**——「不要留白」「多写厚段」这类要求直接按守则执行；" +
+            "原文示例只用于学句式接续、情绪处理与结构习惯，与区间冲突时以区间为准。）");
+
+        // 使用者的追加指令（tuning.extra）——低风险，直接生效，排在守则之前。
+        if (tune.Extra is { Count: > 0 })
+        {
+            sb.AppendLine();
+            sb.AppendLine("【补充要求】");
+            foreach (var e in tune.Extra.Where(x => !string.IsNullOrWhiteSpace(x)))
+                sb.AppendLine($"- {e.Trim()}");
+        }
 
         if (p.Rules.Count > 0)
         {

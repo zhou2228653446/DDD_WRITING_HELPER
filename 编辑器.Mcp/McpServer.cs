@@ -528,6 +528,39 @@ internal static class McpServer
         },
         new ToolDef
         {
+            name = "style_profile_tuning",
+            description = "调作者风格档案的生成参数与前缀措辞（不改指纹、不改样本池）。" +
+                          "action=get 看当前生效档位；keys 列可覆盖的提示词条目；" +
+                          "set key=quietMode|shortParaMode|quietLongMin|quietDominant|longParaMin|shortParaMin|extra|para.anchor|sentence.median… value=…；" +
+                          "reset 清空回全自动；pending 看待确认；approve 确认落盘。" +
+                          "⚠ 风险分级是硬性契约：低风险（extra）直接生效；" +
+                          "中风险（quietMode/shortParaMode）必须带 confirm=yes，且调用前要先向使用者说明影响；" +
+                          "高风险（阈值、任何提示词条目覆盖）不会立即生效——工具返回确认码，" +
+                          "你必须把「档案/变更/影响」完整告诉使用者，拿到明确同意后才能 action=approve，" +
+                          "严禁自行填写确认码、严禁未经使用者同意就 approve。",
+            inputSchema = new ToolSchema
+            {
+                properties = new Dictionary<string, ToolProp>
+                {
+                    ["id"] = new() { description = "档案 Id；留空用当前书绑定的档案" },
+                    ["action"] = new() { description = "get（默认）/ keys / set / reset / pending / approve" },
+                    ["key"] = new()
+                    {
+                        description = "set 用：quietMode、shortParaMode、quietLongMin、quietDominant、" +
+                                      "longParaMin、shortParaMin、extra，或 action=keys 里的任意提示词条目",
+                    },
+                    ["value"] = new()
+                    {
+                        description = "set 的新值；覆盖提示词条目时传空字符串 = 删掉这一条。" +
+                                      "approve 时这里放确认码。",
+                    },
+                    ["confirm"] = new() { description = "中风险操作传 yes；高风险不走这里，走 approve" },
+                },
+                required = new List<string>(),
+            },
+        },
+        new ToolDef
+        {
             name = "chapter_write",
             description = "写章节正文。mode=replace 覆盖（会丢原内容，慎用），mode=append 追加。",
             inputSchema = new ToolSchema
@@ -1127,6 +1160,13 @@ internal static class McpServer
                 {
                     // 只改档案库（author_profiles/），不碰项目文件。
                     var r0 = AuthorStyleTools.Samples(session, args);
+                    PublishToolDone(name, args, r0, projectModified: false, session);
+                    return ToolText(r0.Text, r0.IsError);
+                }
+                case "style_profile_tuning":
+                {
+                    // 只改档案库的调参文件，不碰项目正文。
+                    var r0 = AuthorStyleTools.Tuning(session, args);
                     PublishToolDone(name, args, r0, projectModified: false, session);
                     return ToolText(r0.Text, r0.IsError);
                 }

@@ -352,6 +352,42 @@ public class AuthorStyleTuningTests : IDisposable
         Assert.True(AuthorStyleStore.LoadTuning(p.Id).IsEmpty);
     }
 
+    // ── A1 对话闲话（2026-11-24）──
+    //   旧版只有「不要为凑比例让角色没话找话」，把不推进剧情的对话一起禁掉了。
+
+    [Fact]
+    public void 对话闲话_文学档允许岔开_且不再有反着挡的那句()
+    {
+        var block = Block(Profile());   // 留白 0.9 → force 档
+        Assert.Contains("对话不必句句有用", block);
+        Assert.Contains("岔出去", block);
+        Assert.DoesNotContain("没话找话", block);
+    }
+
+    [Fact]
+    public void 对话闲话_网文档只给一处且要短()
+    {
+        var block = Block(Profile(quietLong: 0.03, longPara: 0.01, shortPara: 0.1));
+        Assert.Contains("对话不必句句有用", block);
+        Assert.Contains("一处两三句就够", block);
+        Assert.DoesNotContain("岔出去", block);   // 网文不能岔开三段
+    }
+
+    [Fact]
+    public void 对话闲话可整条关掉()
+    {
+        var p = Profile();
+        AuthorStyleStore.Save(p);
+        AuthorStyleStore.SaveTuning(p.Id, new StyleTuning
+        {
+            Overrides = new() { [StylePromptKeys.DialogueChatter] = "" },
+        });
+
+        var block = Block(p);
+        Assert.DoesNotContain("对话不必句句有用", block);
+        Assert.Contains("不为凑对话比例注水", block);   // 另一条不受影响
+    }
+
     [Fact]
     public void 未知key与非法值要拒绝_别静默走错分支()
     {

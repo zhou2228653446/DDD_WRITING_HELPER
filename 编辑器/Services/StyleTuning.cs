@@ -160,7 +160,8 @@ public static class StylePromptKeys
     public const string DialogueMain = "dialogue.main";         // 对话是主要推进手段
     public const string DialogueRun = "dialogue.run";           // 连续对话长度
     public const string DialogueTag = "dialogue.tag";           // 引导语
-    public const string DialogueNoPadding = "dialogue.noPadding"; // 不要没话找话
+    public const string DialogueChatter = "dialogue.chatter";   // 对话不必句句有用（闲话）
+    public const string DialogueNoPadding = "dialogue.noPadding"; // 不复述、不为凑比例撑对话
     public const string WordBudget = "word.budget";             // 风格词预算
     public const string WordRepeat = "word.repeat";             // 同词不连段
     public const string Closing = "closing";                    // 结尾声明
@@ -170,7 +171,7 @@ public static class StylePromptKeys
         Intro, SentenceShort, SentenceMedian, SentenceComma, SentenceShortRatio, SentenceCounter,
         ParaCenter, ParaAnchor, ParaQuietQuota, ParaQuietForce, ParaQuietSoft, ParaLongLoose,
         ParaShort, ParaBreak, ParaNoCounting,
-        DialogueMain, DialogueRun, DialogueTag, DialogueNoPadding,
+        DialogueMain, DialogueRun, DialogueTag, DialogueChatter, DialogueNoPadding,
         WordBudget, WordRepeat, Closing,
     };
 }

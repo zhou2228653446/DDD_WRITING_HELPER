@@ -25,7 +25,10 @@ public sealed class StyleTuning
     public const double DefaultQuietLongMin = 0.45;    // 长段无引号占比 ≥ 此值才教「锚」
     public const double DefaultQuietDominant = 0.75;   // ≥ 此值才要求「每章一处空转」
     public const double DefaultLongParaMin = 0.08;     // 长段占比 ≥ 此值才认为「他有长段」
-    public const double DefaultShortParaMin = 0.25;    // 短段占比 ≥ 此值才给单句成段量化
+    // ★ 0.25 → 0.18（2026-11-24）：三位作者的实测是 余华 32.5%、杀虫 19.9%、土豆 8.3%。
+    //   0.25 把杀虫（移动端网文，五分之一是单句段）也挡在外面——而单句成段正是
+    //   手机阅读最关键的版面特征，挡掉等于让网文档拿不到这条指令。
+    public const double DefaultShortParaMin = 0.18;    // 短段占比 ≥ 此值才给单句成段量化
 
     /// <summary>
     /// 留白档位：auto（按档案统计）| off（不提留白）| anchor（只给锚点）| force（每章强制一处）。

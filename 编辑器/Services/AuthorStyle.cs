@@ -714,9 +714,19 @@ public static class AuthorStyleBuilder
     /// 对话 3~5%，系统性偏离目标 27 字 / 1.82 / 14%。现在改成「区间 + 边界 + 反例」，
     /// 且**所有数字从档案推导**，多作者各自出数，不硬编码任何作者的统计量。
     /// </summary>
-    public static string BuildAnchorBlock(AuthorStyleProfile p, bool sceneBound = false)
+    public static string BuildAnchorBlock(AuthorStyleProfile p, bool sceneBound = false,
+        AuthorStyleProfile? rhythm = null)
     {
         var sb = new StringBuilder();
+
+        // ★ 混合档（2026-11-24）：句法与版面节奏是两件事，可以取自两份档案。
+        //   马伯庸的句子 21~23 字、1.7 逗号，本来就落在移动端网文的区间里；
+        //   但他的段长 52~70、长段 15~24%、留白 48~72% 是纸书排版。
+        //   按网文发就得把段落压到 25 字上下，句子不动——这不是「套别人」，
+        //   是同一个作者的两种版面形态。
+        //   分工：句子 / 用词 / 引导语 → p；段长 / 长段 / 留白 / 单句成段 / 对话占比 → r。
+        var r = rhythm ?? p;
+        var hybrid = rhythm != null && !ReferenceEquals(rhythm, p);
 
         // ★ 2026-11-24：锚定块里的每一条都能被使用者覆盖（见 StylePromptKeys）。
         //   工具是 style_profile_tuning，存 {id}.tuning.json，重新 import 不覆盖。
@@ -734,6 +744,12 @@ public static class AuthorStyleBuilder
             $"【作者文风锚定 —— 目标作者：{p.Name}】\n" +
             "以下区间统计自该作者的真实作品。题材、人物、情节一律以本书设定为准；\n" +
             "只让句子、段落、用词与对话的节奏向这些区间靠拢。");
+
+        if (hybrid)
+        {
+            // 分开写清楚，否则模型看到两组数字会自己平均
+            sb.AppendLine($"（本书为混合档：句子与用词学「{p.Name}」，段落与对话节奏按「{r.Name}」的版面。）");
+        }
 
         // ── 句子：主区间要让实测偏差落在区间外，才有纠偏作用 ──
         var m = p.SentenceMedian;
@@ -783,14 +799,14 @@ public static class AuthorStyleBuilder
         // ★ 别直接把 P25~P75 当「多数段落」区间：余华是 12~85，跨度太宽，
         //   模型一律往上界靠（实测段长 41→72、段数 33→16），反而离中位 30 更远。
         //   区间围绕中位值收窄，并明确厚段配额与断段依据。
-        sb.AppendLine($"· 段长以 {N(p.ParagraphMedian)} 字为中心：多数段落 " +
-                      $"{N(p.ParagraphMedian * 0.7)}~{N(p.ParagraphMedian * 1.5)} 字，" +
-                      $"全章段长的中位数要达到 {N(p.ParagraphMedian)} 字左右。");
+        sb.AppendLine($"· 段长以 {N(r.ParagraphMedian)} 字为中心：多数段落 " +
+                      $"{N(r.ParagraphMedian * 0.7)}~{N(r.ParagraphMedian * 1.5)} 字，" +
+                      $"全章段长的中位数要达到 {N(r.ParagraphMedian)} 字左右。");
         // ★ 2026-11-19：上界从「2 × 中位」改成 P90。旧写法对余华 = 60 字，
         //   而他真实的 P90 是 164 字、最长 1779——最松弛的那批段落被规则直接禁掉，
         //   生成于是每段都在中等强度用力（读者反馈「每个段落都有两三个细节，没有松弛段落」）。
         //   长段不是失控，是节奏的另一端：留白、时间流逝、重复动作都靠它。
-        var p90 = p.ParagraphP90 > 0 ? p.ParagraphP90 : p.ParagraphP75 * 1.5;
+        var p90 = r.ParagraphP90 > 0 ? r.ParagraphP90 : r.ParagraphP75 * 1.5;
         // ★ 2026-11-19 二轮：光给长度没用。实测 229 字的长段是「清单式扫视」——
         //   太阳→蝉→拖拉机→黑烟→小军→木屑→老陈→饭盒，十六个对象靠「还有一件事」串，
         //   长度够了但一点不松；真正松弛的那段有物理锚点（老陈坐在马扎上一动不动，
@@ -805,8 +821,9 @@ public static class AuthorStyleBuilder
         //   他靠人物开口推进。给他「每章留一处空转」等于让他放弃自己的写法。
         //   阈值与档位现在都走 tuning（默认 0.45/0.75/0.08，见 StyleTuning），
         //   使用者可以用 style_profile_tuning 强制 off/anchor/force。
-        var quietMode = tune.ResolveQuiet(p);      // none | anchor | force
-        var wantShortPara = tune.ResolveShortPara(p);
+        //   ★ 混合档下用 r 的统计（tune 仍是 p 的——使用者是在 p 上调参）。
+        var quietMode = tune.ResolveQuiet(r);      // none | anchor | force
+        var wantShortPara = tune.ResolveShortPara(r);
 
         if (quietMode != "none")
         {
@@ -840,9 +857,12 @@ public static class AuthorStyleBuilder
         {
             // 单句成段是这位作者的主要呼吸方式（余华 32.5%），值得单独量化；
             // 网文作者只有 8%（土豆），要求他写三成短段会拆掉他的推进节奏。
+            // ★ 数字是 ShortParagraphRatio（15 字以内的段），旧文案写成「单句成段约占 X%」
+            //   是两回事：杀虫 15 字以内只占 25%，但「只有一句话的段」占 54%。
+            //   文案比数字小一半，模型就按小的走——实测短段只有 10~12%。
             Emit(StylePromptKeys.ParaShort,
-                $"· 单句成段约占全章 {p.ShortParagraphRatio:P0}：很多段落只有一句话，甚至只有一个动作、" +
-                "一句对白。这是这位作者的呼吸方式，不要为了整齐把它们并成厚段。");
+                $"· 15 字以内的短段约占全章 {r.ShortParagraphRatio:P0}：很多段落只有一句话，" +
+                "甚至只有一个动作、一句对白。这是这位作者的呼吸方式，不要为了整齐把它们并成厚段。");
         }
         else
         {
@@ -863,10 +883,12 @@ public static class AuthorStyleBuilder
         //   和旧版「短句剁节奏」压掉句长数字是同一个病。
         sb.AppendLine();
         sb.AppendLine("【对话】");
-        if (p.DialogueRatio >= 0.25)
+        // ★ 混合档下「对话占比」跟段落一起取 r（属于版面节奏），
+        //   而「引导语用哪些词」留在 p（属于句法/用词）。
+        if (r.DialogueRatio >= 0.25)
         {
             Emit(StylePromptKeys.DialogueMain,
-                $"· 对话是主要推进手段：约占全篇 {p.DialogueRatio:P0}（每千字约 {p.DialogueRatio * 1000:0} 字），" +
+                $"· 对话是主要推进手段：约占全篇 {r.DialogueRatio:P0}（每千字约 {r.DialogueRatio * 1000:0} 字），" +
                 "大致每三段就有一段是带引号的人物对话。规则、冲突、信息都让人物开口说出来，不要压成叙述概述。");
             Emit(StylePromptKeys.DialogueRun,
                 "· 允许人物连着说话，不要刚说两句就切回环境描写；也不要整章只有叙述。");
@@ -874,10 +896,10 @@ public static class AuthorStyleBuilder
         else
         {
             Emit(StylePromptKeys.DialogueMain,
-                $"· 带引号的对话约占全篇 {p.DialogueRatio:P0}（每千字约 {p.DialogueRatio * 1000:0} 字）；" +
+                $"· 带引号的对话约占全篇 {r.DialogueRatio:P0}（每千字约 {r.DialogueRatio * 1000:0} 字）；" +
                 "一章里至少安排一两处人物交谈。");
             Emit(StylePromptKeys.DialogueRun,
-                $"· 连续对话以 {N(p.DialogueRunMedian)} 段为常见长度；不要整章只有叙述。");
+                $"· 连续对话以 {N(r.DialogueRunMedian)} 段为常见长度；不要整章只有叙述。");
         }
         // ★ 旧句「引导语用「说道、问道…」这类表达，不要用翻译腔的「他说/他说道」堆砌」
         //   自相矛盾：同一个词前半句让用、后半句让别用，模型只能挑一半执行。
@@ -942,7 +964,7 @@ public static class AuthorStyleBuilder
         {
             sb.AppendLine();
             sb.AppendLine("【作者守则】");
-            foreach (var r in p.Rules) sb.AppendLine($"- {r}");
+            foreach (var rule in p.Rules) sb.AppendLine($"- {rule}");
         }
         return sb.ToString().TrimEnd();
     }
@@ -976,7 +998,11 @@ public static class AuthorStyleBuilder
         if (Has(h, "开篇", "起笔", "opening")) return "开篇起笔";
         if (Has(h, "章末", "收束", "结尾", "ending")) return "章末收束";
         if (Has(h, "战斗", "打斗", "大战", "冲突", "厮杀", "交手", "battle", "action")) return "战斗冲突";
-        if (Has(h, "对话", "交谈", "争执", "dialogue")) return "对话交锋";
+        // ★ 2026-11-24：补「说话 / 问 / 答 / 寒暄」。旧表只有「对话/交谈/争执」，
+        //   而大纲写的是「两人在楼道门口说话」——一个纯对话章判不出场景，
+        //   退化去看上一章末尾（恰好是环境描写），于是整章拿到三段「对话 0%」的样本。
+        if (Has(h, "对话", "交谈", "争执", "说话", "谈话", "问话", "对答", "寒暄", "聊天",
+                "dialogue", "conversation")) return "对话交锋";
         if (Has(h, "环境", "氛围", "景物", "scene")) return "环境氛围";
         if (Has(h, "日常", "过渡", "推进")) return "日常推进";
         return null;
@@ -1113,20 +1139,49 @@ public static class AuthorStyleBuilder
 
     /// <summary>动态样本块（进不可缓存段）。每段带场景、出处与「示范了什么」。</summary>
     public static string BuildSampleBlock(
-        AuthorStyleProfile p, IReadOnlyList<AuthorStyleProfile.StyleSample> samples)
+        AuthorStyleProfile p, IReadOnlyList<AuthorStyleProfile.StyleSample> samples,
+        string? rhythmName = null,
+        IReadOnlyList<AuthorStyleProfile.StyleSample>? rhythmSamples = null)
     {
-        if (samples.Count == 0) return "";
+        var hasRhythm = rhythmSamples is { Count: > 0 };
+        if (samples.Count == 0 && !hasRhythm) return "";
         var sb = new StringBuilder();
-        sb.AppendLine($"【本次风格示例 —— {p.Name} 原文】");
-        sb.AppendLine($"以下是与本次写作场景最接近的 {samples.Count} 段原文。模仿它的句式、节奏、对话接续与情绪处理；");
-        sb.AppendLine("只学怎么写，不要抄情节、人名、专名与题材词。");
-        sb.AppendLine("接着上文写时向示例的句法靠拢，但内容与人物一律以本书设定为准。");
-        foreach (var s in samples)
+
+        if (hasRhythm)
         {
-            sb.AppendLine();
-            sb.AppendLine($"──{s.Scene}｜{s.Source}" +
-                          (string.IsNullOrWhiteSpace(s.Note) ? "" : "｜" + s.Note) + "──");
-            sb.AppendLine(s.Text);
+            // ★ 混合档：两组样本必须**说明各自的用途**。否则模型看到一组 25 字的段、
+            //   一组 60 字的段，会自己折中成 40 字，两边的目标同时落空。
+            sb.AppendLine($"【本次风格示例 —— 句式：{p.Name}；段落节奏：{rhythmName}】");
+            sb.AppendLine($"前 {samples.Count} 段示范句子怎么写（句长、逗号、用词、引导语），" +
+                          $"后 {rhythmSamples!.Count} 段示范怎么分段（段长、单句成段、对话密度）。");
+            sb.AppendLine("句子照前一组写，段落长度与对话占比照后一组——两组的数字冲突时，句子让位于前者，段落让位于后者。");
+            sb.AppendLine("只学怎么写，不要抄情节、人名、专名与题材词。");
+        }
+        else
+        {
+            sb.AppendLine($"【本次风格示例 —— {p.Name} 原文】");
+            sb.AppendLine($"以下是与本次写作场景最接近的 {samples.Count} 段原文。模仿它的句式、节奏、对话接续与情绪处理；");
+            sb.AppendLine("只学怎么写，不要抄情节、人名、专名与题材词。");
+        }
+        sb.AppendLine("接着上文写时向示例的句法靠拢，但内容与人物一律以本书设定为准。");
+
+        void Dump(IReadOnlyList<AuthorStyleProfile.StyleSample> list, string? section)
+        {
+            if (section != null) { sb.AppendLine(); sb.AppendLine($"＝{section}＝"); }
+            foreach (var s in list)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"──{s.Scene}｜{s.Source}" +
+                              (string.IsNullOrWhiteSpace(s.Note) ? "" : "｜" + s.Note) + "──");
+                sb.AppendLine(s.Text);
+            }
+        }
+
+        if (!hasRhythm) Dump(samples, null);
+        else
+        {
+            if (samples.Count > 0) Dump(samples, $"句式示范（{p.Name}）");
+            Dump(rhythmSamples!, $"分段示范（{rhythmName}）");
         }
         return sb.ToString().TrimEnd();
     }

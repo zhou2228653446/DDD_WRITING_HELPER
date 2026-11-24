@@ -164,17 +164,27 @@ def main():
         print("[第1章] 已写回作为前情\n", flush=True)
 
         # ── 逐个档案生成第 2 章 ──
+        # styles 里可以用「A@B」表示混合档：句子/用词学 A，段落与对话节奏取 B。
         rows = []
-        for style in styles:
+        tags = []
+        for spec in styles:
+            style, _, rhythm = spec.partition("@")
+            style, rhythm = style.strip(), rhythm.strip()
             prof = load_profile(style)
-            ok, _ = mcp.call("style_profile_bind", {"id": style})
+            bindArgs = {"id": style}
+            if rhythm:
+                bindArgs["rhythmFrom"] = rhythm
+            ok, _ = mcp.call("style_profile_bind", bindArgs)
             print("=" * 60, flush=True)
-            print("绑定:", style, "| 目标 句长", prof["SentenceMedian"],
+            print("绑定:", style + (f"（节奏取自 {rhythm}）" if rhythm else ""),
+                  "| 目标 句长", prof["SentenceMedian"],
                   "段长", prof["ParagraphMedian"], "对话%", round(prof["DialogueRatio"] * 100, 1),
                   "| 短段", round(prof.get("ShortParagraphRatio", 0) * 100, 1),
                   "留白", round(prof.get("QuietLongRatio", 0) * 100, 1), flush=True)
+            tag = style + (f"x{rhythm}" if rhythm else "")
+            tags.append(tag)
             for r in range(1, a.repeat + 1):
-                print(f"[{style}] 生成 {r}/{a.repeat}…", flush=True)
+                print(f"[{tag}] 生成 {r}/{a.repeat}…", flush=True)
                 args = {"task": "continue", "number": 2, "writeBack": False,
                         "maxTokens": a.max_tokens, "instruction": INSTRUCTION,
                         "sampling": a.sampling}
@@ -186,19 +196,19 @@ def main():
                     print("  ⚠", type(ex).__name__, str(ex)[:80], "→ 重启连接", flush=True)
                     sa.Mcp.restart(mcp)
                     mcp.call("project_open", {"path": proj}, timeout=120)
-                    mcp.call("style_profile_bind", {"id": style})
+                    mcp.call("style_profile_bind", bindArgs)
                     continue
-                sa.save(out, f"raw_{style}_{r}.txt", raw or "")
+                sa.save(out, f"raw_{tag}_{r}.txt", raw or "")
                 body = clean_body(raw or "")
                 head = (raw or "").split("\n")[0]
                 print("  头部:", head[:150], flush=True)
                 if sa.vis(body) < 400:
                     print("  失败或空正文", flush=True)
                     continue
-                sa.save(out, f"ch2_{style}_{r}.txt", body)
+                sa.save(out, f"ch2_{tag}_{r}.txt", body)
                 m = sa.metrics(body, [])
                 m.update(para_stats(body))
-                m["作者"] = style
+                m["作者"] = tag
                 m["轮次"] = r
                 rows.append(m)
                 print("  ", {k: m[k] for k in ("字数", "句长", "CV", "逗号", "P50", "P90", "max",
@@ -210,18 +220,19 @@ def main():
         keys = ["字数", "句长", "CV", "逗号", "P50", "P75", "P90", "max",
                 "单句段%", "对话%", "量词", "段数"]
         lines = ["# 多作者同场景对照 · " + " / ".join(styles), "",
-                 "> 同一本书、同一份第 1 章前情、同一段第 2 章指令，只换绑定的作者档案。", "",
+                 "> 同一本书、同一份第 1 章前情、同一段第 2 章指令，只换绑定的作者档案。",
+                 "> `A@B` = 混合档：句子与用词学 A，段落与对话节奏取 B。", "",
                  "| 作者 | " + " | ".join(keys) + " |",
                  "|---" * (len(keys) + 1) + "|"]
-        for style in styles:
-            sub = [x for x in rows if x["作者"] == style]
+        for tag in tags:
+            sub = [x for x in rows if x["作者"] == tag]
             if not sub:
                 continue
             for x in sub:
-                lines.append("| %s #%d | " % (style, x["轮次"]) +
+                lines.append("| %s #%d | " % (tag, x["轮次"]) +
                              " | ".join(str(x.get(k, "")) for k in keys) + " |")
             if len(sub) > 1:
-                lines.append("| **%s 中位** | " % style + " | ".join(
+                lines.append("| **%s 中位** | " % tag + " | ".join(
                     "%g" % statistics.median([x[k] for x in sub]) for k in keys) + " |")
         pf = os.path.join(out, "report.md")
         io.open(pf, "w", encoding="utf-8").write("\n".join(lines))

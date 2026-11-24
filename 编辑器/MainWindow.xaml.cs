@@ -2928,8 +2928,16 @@ namespace 编辑器
             var isReview = task == ResolveTaskText(AiPrompts.Keys.Review, AiPrompts.Task.Review);
             if (!isReview && !string.IsNullOrWhiteSpace(_currentProject?.AuthorStyleId))
                 authorStyle = AuthorStyleStore.Get(_currentProject!.AuthorStyleId);
+            // 混合档：段落与对话节奏取自另一份档案（见 NovelProject.AuthorRhythmId）
+            AuthorStyleProfile? rhythmStyle = null;
+            if (authorStyle != null && !string.IsNullOrWhiteSpace(_currentProject?.AuthorRhythmId))
+            {
+                var rp = AuthorStyleStore.Get(_currentProject!.AuthorRhythmId!);
+                if (rp != null && rp.Id != authorStyle.Id) rhythmStyle = rp;
+            }
             if (authorStyle != null)
-                stable = AuthorStyleBuilder.BuildAnchorBlock(authorStyle) + "\n\n" + stable;
+                stable = AuthorStyleBuilder.BuildAnchorBlock(authorStyle, false, rhythmStyle)
+                         + "\n\n" + stable;
 
             var related = BuildRelatedChaptersContext();
             var volatileParts = new List<string>();
@@ -2940,7 +2948,14 @@ namespace 编辑器
                 var scene = AuthorStyleBuilder.GuessScene(ch?.Title, null, ch?.Content);
                 var samples = AuthorStyleBuilder.SelectSamples(
                     authorStyle, scene, ch?.ChapterNumber ?? 0);
-                var sampleBlock = AuthorStyleBuilder.BuildSampleBlock(authorStyle, samples);
+                IReadOnlyList<AuthorStyleProfile.StyleSample>? rhythmSamples = null;
+                if (rhythmStyle != null)
+                    rhythmSamples = AuthorStyleBuilder
+                        .SelectSamples(rhythmStyle, scene, ch?.ChapterNumber ?? 0, count: 1)
+                        .Where(x => samples.All(y => y.Text != x.Text))
+                        .ToList();
+                var sampleBlock = AuthorStyleBuilder.BuildSampleBlock(
+                    authorStyle, samples, rhythmStyle?.Name, rhythmSamples);
                 if (!string.IsNullOrWhiteSpace(sampleBlock)) volatileParts.Add(sampleBlock);
             }
             return AiPrompts.BuildSections(task, stable,

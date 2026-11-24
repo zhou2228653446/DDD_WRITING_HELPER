@@ -494,12 +494,19 @@ internal static class McpServer
         {
             name = "style_profile_bind",
             description = "把某份作者风格档案绑定到当前打开的书（写进项目文件，长期生效）；" +
-                          "不传 id 则解绑。只想临时换风格时不要绑定，用 ai_write 的 style 参数。",
+                          "不传 id 则解绑。只想临时换风格时不要绑定，用 ai_write 的 style 参数。" +
+                          "rhythmFrom 是混合档：句子/用词/引导语仍学 id，段落与对话节奏改取另一份档案——" +
+                          "用于「学某位作者的句法，但按网文版面发」（如 id=马伯庸, rhythmFrom=杀虫队队员）。",
             inputSchema = new ToolSchema
             {
                 properties = new Dictionary<string, ToolProp>
                 {
                     ["id"] = new() { description = "档案 Id（style_profile_list 里看）；不传 = 解绑" },
+                    ["rhythmFrom"] = new()
+                    {
+                        description = "可选。段落/长段/留白/单句成段/对话占比改取这份档案；" +
+                                      "空串 = 取消混合（回到单一档案）；不传 = 保持现状",
+                    },
                 },
                 required = new List<string>(),
             },

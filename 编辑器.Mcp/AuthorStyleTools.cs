@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using 编辑器.Services;
 
@@ -102,15 +103,24 @@ public static class AuthorStyleTools
     {
         if (!s.TryGet(out var p, out var err)) return err;
 
+        // rhythmFrom：段落与对话节奏改取另一份档案（混合档）。
+        // 不传 = 保持现状；传空串 = 取消混合，回到单一档案。
+        var hasRhythm = args.TryGetProperty("rhythmFrom", out var rhEl)
+                        && rhEl.ValueKind == JsonValueKind.String;
+        var rhythmId = hasRhythm ? (rhEl.GetString() ?? "").Trim() : null;
+
         var id = NovelTools.Str(args, "id").Trim();
         if (string.IsNullOrWhiteSpace(id))
         {
             var old = p.AuthorStyleId;
+            var oldRhythm = p.AuthorRhythmId;
             p.AuthorStyleId = null;
+            p.AuthorRhythmId = null;
             s.Save();
-            return ToolResult.Ok(old == null
-                ? "本书本来就没有绑定作者风格。"
-                : $"已解除本书与「{old}」的绑定。");
+            if (old == null) return ToolResult.Ok("本书本来就没有绑定作者风格。");
+            return ToolResult.Ok(oldRhythm == null
+                ? $"已解除本书与「{old}」的绑定。"
+                : $"已解除本书与「{old}」的绑定（节奏原取自「{oldRhythm}」）。");
         }
 
         var profile = AuthorStyleStore.Get(id);
@@ -118,10 +128,46 @@ public static class AuthorStyleTools
             return ToolResult.Fail($"没有档案「{id}」。style_profile_list 看现有档案。");
 
         p.AuthorStyleId = profile.Id;
+
+        if (hasRhythm)
+        {
+            if (rhythmId!.Length == 0 || string.Equals(rhythmId, profile.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                // 空串或与句法档案同一份 → 等于不混合
+                p.AuthorRhythmId = null;
+            }
+            else
+            {
+                var rhythm = AuthorStyleStore.Get(rhythmId);
+                if (rhythm == null)
+                    return ToolResult.Fail(
+                        $"没有叫「{rhythmId}」的档案，rhythmFrom 无法生效。style_profile_list 看现有档案。");
+                p.AuthorRhythmId = rhythm.Id;
+            }
+        }
+        else if (p.AuthorRhythmId != null
+                 && string.Equals(p.AuthorRhythmId, profile.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            p.AuthorRhythmId = null;   // 换了个句法档案，原来的节奏档案正好同名 → 清掉
+        }
+
         s.Save();
-        return ToolResult.Ok($"本书已绑定作者风格 [{profile.Id}] {profile.Name}。\n" +
-                             $"之后的 ai_write（style 参数未覆盖时）都会带它的文风锚定段；" +
-                             $"请求级换风格只传 style 参数，不动这里的绑定。");
+
+        var msg = new StringBuilder();
+        msg.Append($"本书已绑定作者风格 [{profile.Id}] {profile.Name}。");
+        if (p.AuthorRhythmId != null)
+        {
+            var rhythm = AuthorStyleStore.Get(p.AuthorRhythmId)!;
+            msg.Append($"\n段落与对话节奏取自 [{rhythm.Id}] {rhythm.Name}（混合档）：\n" +
+                       $"  · 句子 / 用词 / 引导语 → {profile.Name}（句长 {profile.SentenceMedian} 字、" +
+                       $"每句 {profile.CommaPerSentence:0.0} 逗号）\n" +
+                       $"  · 段长 / 长段 / 留白 / 单句成段 / 对话占比 → {rhythm.Name}（段长 " +
+                       $"{rhythm.ParagraphMedian:0.#} 字、单句成段 {rhythm.ShortParagraphRatio:P0}、" +
+                       $"对话 {rhythm.DialogueRatio:P0}）");
+        }
+        msg.Append("\n之后的 ai_write（style 参数未覆盖时）都会带它的文风锚定段；" +
+                   "请求级换风格只传 style 参数，不动这里的绑定。");
+        return ToolResult.Ok(msg.ToString());
     }
 
     /// <summary>

@@ -156,6 +156,19 @@ internal static class AiTools
                     "或 style_profile_import 从作品 txt 导入新的。");
         }
 
+        // 混合档：段落与对话节奏取自另一份档案（书级绑定 AuthorRhythmId）。
+        // 只在「本次用的就是本书绑定那份」时生效——请求级 style 临时覆盖时，
+        // 不该悄悄带上另一份档案的版面节奏，否则 agent 换风格会得到意外的段落密度。
+        AuthorStyleProfile? rhythmProfile = null;
+        if (styleProfile != null
+            && !string.IsNullOrWhiteSpace(p.AuthorRhythmId)
+            && string.Equals(styleProfile.Id, p.AuthorStyleId, StringComparison.OrdinalIgnoreCase))
+        {
+            var rp = AuthorStyleStore.Get(p.AuthorRhythmId);
+            if (rp != null && !string.Equals(rp.Id, styleProfile.Id, StringComparison.OrdinalIgnoreCase))
+                rhythmProfile = rp;
+        }
+
         // 本次风格示例：按场景命中 + 章号确定性轮换，只取 2~3 段，进**不可缓存段**。
         // ★ 缓存前缀只放指纹与守则（见 BuildAnchorBlock），不随章节变化——
         //   样本每次换也不打断 prompt caching，这正是 BuildSections 第三个参数的用途。
@@ -183,7 +196,16 @@ internal static class AiTools
             styleSamples = AuthorStyleBuilder.SelectSamples(
                 styleProfile, styleScene, number > 0 ? number : 0,
                 spread: sceneBound || spreadOnly);
-            volatileStyle = AuthorStyleBuilder.BuildSampleBlock(styleProfile, styleSamples);
+            // 混合档再取 1 段节奏档案的样本，与句式样本一起去重后分开标注用途。
+            IReadOnlyList<AuthorStyleProfile.StyleSample>? rhythmSamples = null;
+            if (rhythmProfile != null)
+                rhythmSamples = AuthorStyleBuilder
+                    .SelectSamples(rhythmProfile, styleScene, number > 0 ? number : 0, count: 1,
+                        spread: sceneBound || spreadOnly)
+                    .Where(x => styleSamples.All(y => y.Text != x.Text))
+                    .ToList();
+            volatileStyle = AuthorStyleBuilder.BuildSampleBlock(
+                styleProfile, styleSamples, rhythmProfile?.Name, rhythmSamples);
         }
 
         // 技能：界面在 AI 面板选一个，命中功能的生成就用该手法。MCP 侧同样要生效，
@@ -234,7 +256,7 @@ internal static class AiTools
         // 这里只有 L1 数值指令 + L3 守则；原文样本在下面的不可缓存段注入。
         if (styleProfile != null)
         {
-            var anchor = AuthorStyleBuilder.BuildAnchorBlock(styleProfile, sceneBound);
+            var anchor = AuthorStyleBuilder.BuildAnchorBlock(styleProfile, sceneBound, rhythmProfile);
             stable = anchor + "\n\n" + stable;
         }
 
@@ -453,6 +475,7 @@ internal static class AiTools
         // 时不用猜：场景判定和样本轮换结果一眼可见。
         var styleHead = styleProfile == null ? "" :
             $" · 文风={styleProfile.Name}" +
+            (rhythmProfile == null ? "" : $" · 节奏={rhythmProfile.Name}") +
             $" · 场景={styleScene ?? "自动"}" +
             $" · 样本={string.Join(",", (styleSamples ?? Array.Empty<AuthorStyleProfile.StyleSample>())
                 .Select(x => x.Id))}" +

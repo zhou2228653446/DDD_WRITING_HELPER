@@ -68,7 +68,7 @@ public class AuthorStyleTuningTests : IDisposable
 
         Assert.Contains("长段要有一个「锚」", block);
         Assert.Contains("每一章都要留至少一处这样的空转", block);
-        Assert.Contains("单句成段约占全章", block);
+        Assert.Contains("15 字以内的短段约占全章", block);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class AuthorStyleTuningTests : IDisposable
         Assert.DoesNotContain("长段要有一个「锚」", block);
         Assert.DoesNotContain("空转", block);
         Assert.Contains("长段按需使用", block);
-        Assert.DoesNotContain("单句成段约占全章", block);   // 短段低 → 退回通用断段规则
+        Assert.DoesNotContain("15 字以内的短段约占全章", block);   // 短段低 → 退回通用断段规则
         Assert.Contains("段落按动作、视线或对话的自然切换断开", block);
     }
 
@@ -112,14 +112,14 @@ public class AuthorStyleTuningTests : IDisposable
     public void 短段量化可以强制打开和关掉()
     {
         var p = Profile(shortPara: 0.05);
-        Assert.DoesNotContain("单句成段约占全章", Block(p));
+        Assert.DoesNotContain("15 字以内的短段约占全章", Block(p));
 
         AuthorStyleStore.SaveTuning(p.Id, new StyleTuning { ShortParaMode = "on" });
-        Assert.Contains("单句成段约占全章", Block(p));
+        Assert.Contains("15 字以内的短段约占全章", Block(p));
 
         AuthorStyleStore.SaveTuning(p.Id, new StyleTuning { ShortParaMode = "off" });
         p = Profile(shortPara: 0.9);
-        Assert.DoesNotContain("单句成段约占全章", Block(p));
+        Assert.DoesNotContain("15 字以内的短段约占全章", Block(p));
     }
 
     [Fact]

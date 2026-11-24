@@ -50,6 +50,19 @@ namespace 编辑器
             Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
         public string? AuthorStyleId { get; set; }
 
+        /// <summary>
+        /// 段落与对话节奏取自哪份档案（混合档）。null = 全部用 <see cref="AuthorStyleId"/>。
+        ///
+        /// 用途：同一个作者的「句法」和「版面节奏」在出版形态上不是一回事。
+        /// 马伯庸的句子短（21~23 字、1.7 逗号）本来就适合移动端，但段长 52~70、
+        /// 长段占 15~24% 是纸书排版；按网文发就要把段落压到 25 字上下。
+        /// 绑上 rhythmFrom 后：句子/用词/引导语仍取 AuthorStyleId，
+        /// 段长/长段/留白/单句成段/对话占比改取这份。
+        /// </summary>
+        [System.Text.Json.Serialization.JsonIgnore(
+            Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        public string? AuthorRhythmId { get; set; }
+
         // 论文导出用：摘要与关键词（论文模式导出时进摘要页；留空则该页省略）
         public string PaperAbstract { get; set; } = "";
         public string PaperKeywords { get; set; } = "";   // 分号或逗号分隔

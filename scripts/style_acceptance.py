@@ -166,6 +166,61 @@ class Mcp:
         self._start()
 
 
+# ── A4：拿到一段「合格正文」才算一次样本 ────────────────────────────
+#   2026-11-24 的教训：杀虫那篇只出 648 字、断在「寻不着，不在」，
+#   旧门槛是 400 字，于是残篇被当成合格样本进了统计（对话 9.7% 就是这么来的）；
+#   另一次网关抖动直接「模型没有返回可用内容」，脚本打印一行就进入下一轮，
+#   样本悄悄从 2 变 1，中位数照算。这两类都必须重试，重试不掉就显式排除。
+
+END_PUNCT = "。！？…～」”’）】》—"
+
+
+def looks_truncated(body):
+    """结尾没有句末标点/收引号 = 模型在中途停了。"""
+    t = (body or "").rstrip()
+    return (not t) or (t[-1] not in END_PUNCT)
+
+
+def gen_body(mcp, args, clean=None, timeout=420, retries=2, min_words=800,
+             on_restart=None, log=print):
+    """调 ai_write，直到拿到一段合格正文。
+
+    不合格四类：bad/空、过短（< min_words）、断尾（无句末标点）。
+    返回 (raw, body, note)；body == "" 表示重试用尽，调用方必须把它排除在统计外。
+    """
+    clean = clean or extract_body
+    reason = ""
+    for attempt in range(retries + 1):
+        try:
+            raw, _bad = mcp.call("ai_write", args, timeout=timeout)
+        except McpTimeout as ex:
+            reason = f"超时 {ex}"
+            log(f"  ⚠ {reason} → 重启连接后重试")
+            try:
+                mcp.restart()
+                if on_restart:      # 新进程没有「当前项目」，调用方负责恢复会话
+                    on_restart()
+            except Exception:
+                pass
+            continue
+        raw = raw or ""
+        body = clean(raw)
+        if not body:
+            reason = "无可用内容"
+        elif vis(body) < min_words:
+            reason = f"过短 {vis(body)} 字"
+        elif looks_truncated(body):
+            reason = "断尾"
+        else:
+            note = f"重试 {attempt} 次后成功（上次：{reason}）" if attempt else ""
+            if note:
+                log(f"  ↻ {note}")
+            return raw, body, note
+        log(f"  ✗ 第 {attempt + 1} 次不合格：{reason}")
+
+    return "", "", f"{reason}，重试 {retries} 次仍不合格 → 已排除，不进统计"
+
+
 def say(*parts):
     print(" ".join(str(x) for x in parts), flush=True)
 

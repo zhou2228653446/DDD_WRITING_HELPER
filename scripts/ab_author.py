@@ -107,6 +107,8 @@ def main():
     ap.add_argument("--baseline", default="", help="固定前情 txt；不给就先生成第 1 章并复用")
     ap.add_argument("--out", default="")
     ap.add_argument("--timeout", type=int, default=420)
+    ap.add_argument("--retries", type=int, default=2, help="不合格返回的重试次数（A4）")
+    ap.add_argument("--min-words", type=int, default=800, help="低于此字数视为残篇（A4）")
     ap.add_argument("--exe", default=sa.DEFAULT_EXE)
     a = ap.parse_args()
 
@@ -150,14 +152,16 @@ def main():
                     "sampling": a.sampling}
             if a.profile:
                 args["profile"] = a.profile
-            raw, bad = mcp.call("ai_write", args, timeout=a.timeout)
+            raw, base_text, note = sa.gen_body(
+                mcp, args, clean=clean_body, timeout=a.timeout,
+                retries=a.retries, min_words=a.min_words,
+                on_restart=lambda: mcp.call("project_open", {"path": proj}, timeout=120))
             sa.save(out, "raw_baseline_ch1.txt", raw or "")
-            base_text = clean_body(raw or "")
-            if sa.vis(base_text) < 400:
-                print("前情生成失败:", (raw or "")[:300])
+            if not base_text:
+                print("前情生成失败:", note)
                 return 1
             sa.save(out, "baseline_ch1.txt", base_text)
-            print("[第1章] 生成 %d 字" % sa.vis(base_text), flush=True)
+            print("[第1章] 生成 %d 字%s" % (sa.vis(base_text), "　" + note if note else ""), flush=True)
 
         mcp.call("chapter_write", {"number": 1, "content": base_text, "mode": "append"}, timeout=60)
         mcp.call("chapter_create", {"title": TITLES[1]}, timeout=60)
@@ -166,6 +170,7 @@ def main():
         # ── 逐个档案生成第 2 章 ──
         # styles 里可以用「A@B」表示混合档：句子/用词学 A，段落与对话节奏取 B。
         rows = []
+        skipped = []
         tags = []
         for spec in styles:
             style, _, rhythm = spec.partition("@")
@@ -190,21 +195,21 @@ def main():
                         "sampling": a.sampling}
                 if a.profile:
                     args["profile"] = a.profile
-                try:
-                    raw, bad = mcp.call("ai_write", args, timeout=a.timeout)
-                except Exception as ex:
-                    print("  ⚠", type(ex).__name__, str(ex)[:80], "→ 重启连接", flush=True)
-                    sa.Mcp.restart(mcp)
-                    mcp.call("project_open", {"path": proj}, timeout=120)
-                    mcp.call("style_profile_bind", bindArgs)
-                    continue
+                raw, body, note = sa.gen_body(
+                    mcp, args, clean=clean_body, timeout=a.timeout,
+                    retries=a.retries, min_words=a.min_words,
+                    on_restart=lambda: (mcp.call("project_open", {"path": proj}, timeout=120),
+                                        mcp.call("style_profile_bind", bindArgs)))
                 sa.save(out, f"raw_{tag}_{r}.txt", raw or "")
-                body = clean_body(raw or "")
+                if not body:
+                    # ★ 不合格样本不许静默跳过：明确记一行，并在报告里标出来
+                    print("  ✗ 样本作废：", note, flush=True)
+                    skipped.append(f"{tag} #{r}：{note}")
+                    continue
                 head = (raw or "").split("\n")[0]
                 print("  头部:", head[:150], flush=True)
-                if sa.vis(body) < 400:
-                    print("  失败或空正文", flush=True)
-                    continue
+                if note:
+                    print("  ↻", note, flush=True)
                 sa.save(out, f"ch2_{tag}_{r}.txt", body)
                 m = sa.metrics(body, [])
                 m.update(para_stats(body))
@@ -234,6 +239,14 @@ def main():
             if len(sub) > 1:
                 lines.append("| **%s 中位** | " % tag + " | ".join(
                     "%g" % statistics.median([x[k] for x in sub]) for k in keys) + " |")
+        total = len(styles) * a.repeat
+        lines.append("")
+        if skipped:
+            lines.append(f"样本 {len(rows)}/{total} 合格；{len(skipped)} 篇不合格已排除（不进中位数）：")
+            lines += [f"- {s}" for s in skipped]
+        else:
+            lines.append(f"样本 {len(rows)}/{total} 全部合格"
+                         f"（A4：bad/空、<{a.min_words} 字、断尾均自动重试）")
         pf = os.path.join(out, "report.md")
         io.open(pf, "w", encoding="utf-8").write("\n".join(lines))
         print()

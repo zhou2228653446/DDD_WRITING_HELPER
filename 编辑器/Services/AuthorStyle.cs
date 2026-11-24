@@ -48,6 +48,30 @@ public sealed record AuthorStyleProfile
     /// 旧档案没有这个字段，反序列化得 0，锚定块会退回 P75 × 1.5 估算。
     /// </summary>
     public double ParagraphP90 { get; init; }
+
+    /// <summary>
+    /// ≤15 字的段落占比——「短句成段」的密度。余华 0.385、杀虫 0.186、土豆 0.092。
+    /// ★ 这是**作者差异**而非通用目标：余华靠单句成段呼吸，网文作者靠厚段推进。
+    /// 拿余华的标准（38.5%）去要求土豆（9.2%），等于让他放弃自己的节奏。
+    /// 旧档案没有这个字段（得 0），锚定块退回不给量化。
+    /// </summary>
+    public double ShortParagraphRatio { get; init; }
+
+    /// <summary>
+    /// ≥100 字的段落占比——「长段」在文中的存在感。余华 0.194、土豆 0.118、杀虫 0.008。
+    /// 长段少的作者（杀虫 0.8%），给「写到 164 字」是错的。
+    /// </summary>
+    public double LongParagraphRatio { get; init; }
+
+    /// <summary>
+    /// 长段（≥100 字）里**不含引号**的比例——「留白倾向」。
+    /// 余华 0.91（长段多是纯环境/纯动作，没人说话）、土豆 0.61、
+    /// 杀虫 0.07（长段几乎都是对话，靠人物开口推进）。
+    /// ★ 只有这个值高，才该教「长段要有锚、每章留一处空转」——
+    /// 「空转段」是余华式白描的特征，不是所有作者都有，更不是通用好文的标准。
+    /// </summary>
+    public double QuietLongRatio { get; init; }
+
     public double DialogueRatio { get; init; }
 
     /// <summary>平均每句逗号数——标点习惯：连缀长句（土豆≈2.5）vs 短促断句（余华≈1.2）。</summary>
@@ -298,10 +322,13 @@ public static class AuthorStyleBuilder
         // ── L1 指纹 ──
         var sentenceLens = new List<int>();
         foreach (var ch in chapters) CollectSentences(ch, sentenceLens);
-        var paraLens = new List<int>();
+        // ★ 段落同时保留正文：判断「长段是不是留白」要看里面有没有引号，
+        //   只存长度做不到（2026-11-24 加，见 QuietLongRatio）。
+        var paraTexts = new List<string>();
         foreach (var ch in chapters)
             foreach (var p in ch.Split('\n'))
-                if (VisibleChars(p) >= 4) paraLens.Add(VisibleChars(p));
+                if (VisibleChars(p) >= 4) paraTexts.Add(p.Trim());
+        var paraLens = paraTexts.Select(VisibleChars).ToList();
 
         var dialogueChars = chapters.Sum(CountDialogueChars);
         var dialogueRatio = visible == 0 ? 0 : (double)dialogueChars / visible;
@@ -400,12 +427,25 @@ public static class AuthorStyleBuilder
         // ── L2 样本池 ──
         // 把全书 L1 指纹当"典型"的靶子传进去：挑样不再只看签名词密度，
         // 句长/标点/对话/段长都要靠近全书均值，才配当 few-shot 锚点。
+        // ── 段落形状：短段密度 / 长段密度 / 长段留白倾向 ──
+        // ★ 这三个都是**作者差异**，不是通用好文标准。锚定块据此决定
+        //   「教不教留白」，样本池据此决定「掺不掺长段/短促段」。
+        //   杀虫队队员的长段 93% 带对话，教他写空转就是改他风格。
+        var paraCount = Math.Max(1, paraLens.Count);
+        var longIdx = Enumerable.Range(0, paraLens.Count).Where(i => paraLens[i] >= 100).ToList();
+        var quietLong = longIdx.Count(i => !paraTexts[i].Contains('“') && !paraTexts[i].Contains('「'));
+        var shortParaRatio = Math.Round((double)paraLens.Count(x => x <= 15) / paraCount, 3);
+        var longParaRatio = Math.Round((double)longIdx.Count / paraCount, 3);
+        var quietLongRatio = longIdx.Count == 0 ? 0 : Math.Round((double)quietLong / longIdx.Count, 3);
+
         var samples = PickSamples(chapters, allText, visible,
             Median(sentenceLens),
             sentenceTotal == 0 ? 0 : (double)commaTotal / sentenceTotal,
             dialogueRatio,
             Median(paraLens),
-            Quantile(paraLens, 0.90));
+            Quantile(paraLens, 0.90),
+            wantQuietLong: quietLongRatio >= 0.45 && longParaRatio >= 0.08,
+            wantShortSegment: shortParaRatio >= 0.25);
 
         return new AuthorStyleProfile
         {
@@ -418,6 +458,9 @@ public static class AuthorStyleBuilder
             ParagraphP25 = Math.Round(Quantile(paraLens, 0.25), 1),
             ParagraphP75 = Math.Round(Quantile(paraLens, 0.75), 1),
             ParagraphP90 = Math.Round(Quantile(paraLens, 0.90), 1),
+            ShortParagraphRatio = shortParaRatio,
+            LongParagraphRatio = longParaRatio,
+            QuietLongRatio = quietLongRatio,
             DialogueRatio = Math.Round(dialogueRatio, 3),
             CommaPerSentence = sentenceTotal == 0 ? 0 : Math.Round((double)commaTotal / sentenceTotal, 2),
             ShortSentenceRatio = sentenceTotal == 0 ? 0 : Math.Round((double)shortSentences / sentenceTotal, 3),
@@ -629,15 +672,56 @@ public static class AuthorStyleBuilder
         //   太阳→蝉→拖拉机→黑烟→小军→木屑→老陈→饭盒，十六个对象靠「还有一件事」串，
         //   长度够了但一点不松；真正松弛的那段有物理锚点（老陈坐在马扎上一动不动，
         //   麻雀自己落下来又飞走）。差别不在长度，在有没有一个「不动的人」。
-        sb.AppendLine("· 长段要有一个「锚」：一个人坐着不动，或者手上做着一件重复的事（擦刀、等水开、拧螺丝），" +
-                      "别的东西自己进入他的视野——麻雀落下来、钟声从学校传过来、风把叶子吹进脸盆。" +
-                      "是他正好看到，不是「这里还有一件事」。一段里只放一个不动的人。");
-        sb.AppendLine($"· 这种段落全章可以有一两段，写到 {N(p90)} 字上下，允许一段到 {N(p90 * 1.35)} 字。" +
-                      "它不推进情节，也不交代任何信息，只是让时间过去。");
-        sb.AppendLine("· 每一章都要留至少一处这样的空转，哪怕这一章要装三件事——事件和事件之间要有一段什么都不发生的。");
-        sb.AppendLine("· 其余段落按动作、视线或对话的自然切换断开，不要为凑长度把几句并成一段；" +
-                      "该短句成段的地方就让它单独成段，不要每段都撑到中等长度。");
-        sb.AppendLine("· 不要数着写：连用「刮了六下」「绕了一圈」「倒了半壶」会把文字变成说明书，让动作自己流过去。");
+        // ★ 2026-11-24：从这一行起，长段/空转是**按档案开启**的，不再全局写死。
+        //   起因：用户指出「不同的模仿对象要不同的提示词」。实测三位作者的段落形状
+        //   （各取语料中段 30 万字）：
+        //     余华     长段 19.4%，其中 91% 无引号，≤15 字段 38.5%
+        //     天蚕土豆 长段 11.8%，其中 61% 无引号，≤15 字段  9.2%
+        //     杀虫    长段  0.8%，其中  7% 无引号，≤15 字段 18.6%
+        //   「长段 + 没人说话」是余华式白描的结构特征；杀虫的长段 93% 带对话，
+        //   他靠人物开口推进。给他「每章留一处空转」等于让他放弃自己的写法。
+        var hasQuietLong = p.QuietLongRatio >= 0.45 && p.LongParagraphRatio >= 0.08;
+        var quietDominant = p.QuietLongRatio >= 0.75;
+
+        if (hasQuietLong)
+        {
+            // 例子必须去题材化：这里原本写「麻雀落下来、钟声从学校传来、风把叶子吹进脸盆」，
+            // 全是余华的乡村意象，给玄幻作者（天蚕土豆）就是错的道具。
+            sb.AppendLine("· 长段要有一个「锚」：一个人坐着不动，或者手上做着一件重复的事（擦刀、等水开、数着什么），" +
+                          "别的东西自己进入他的视野——一只鸟落下来、远处传来声音、风把什么吹进屋里。" +
+                          "是他正好看到，不是「这里还有一件事」。一段里只放一个不动的人。");
+            sb.AppendLine($"· 这种段落全章可以有一两段，写到 {N(p90)} 字上下，允许一段到 {N(p90 * 1.35)} 字。" +
+                          "它不推进情节，也不交代任何信息，只是让时间过去。");
+            sb.AppendLine(quietDominant
+                ? "· 每一章都要留至少一处这样的空转，哪怕这一章要装三件事——事件和事件之间要有一段什么都不发生的。"
+                : "· 留白不必每章都有，但长段不要全用来交代信息——留一段什么都不发生的。");
+        }
+        else
+        {
+            // 长段靠事件/对话推进的作者：只给长度上界，不提留白，避免把他改成余华。
+            // ★ 别写「写到 {P90} 字上下」——实测（杀虫，P90=54）模型会当成硬上限，
+            //   最长段只到 63 字，而原书是 152。给一个明显高于 P90 的数当「个别段」的余地。
+            sb.AppendLine($"· 长段按需使用：全章可以有一两段写到 {N(p90 * 1.8)} 字左右（常态段长的两三倍），" +
+                          "但长段里通常是事件在推进或人物在说话，不要为了留白而留白。");
+        }
+
+        if (p.ShortParagraphRatio >= 0.25)
+        {
+            // 单句成段是这位作者的主要呼吸方式（余华 38.5%），值得单独量化；
+            // 网文作者只有 9%（土豆），要求他写 38% 的短段会拆掉他的推进节奏。
+            sb.AppendLine($"· 单句成段约占全章 {p.ShortParagraphRatio:P0}：很多段落只有一句话，甚至只有一个动作、" +
+                          "一句对白。这是这位作者的呼吸方式，不要为了整齐把它们并成厚段。");
+        }
+        else
+        {
+            sb.AppendLine("· 段落按动作、视线或对话的自然切换断开，不要为凑长度把几句并成一段；" +
+                          "该短句成段的地方就让它单独成段，不要每段都撑到中等长度。");
+        }
+
+        // 这条不随档案变：量词堆砌是模型的通病（生成 16~21/千字，三位作者原书都只有
+        // 7.7~10.7），不是某位作者的特征。⚠ 实测（2026-11-24）压不住，降幅在噪声内，
+        // 留着是提醒，别指望它生效。
+        sb.AppendLine("· 不要数着写：每件事都带上精确数量（六下、三步、半壶），文字会变成说明书，让动作自己流过去。");
 
         // ── 对话：高对话作者必须写成"主要推进手段" ──
         //   实测（杀虫队队员 32%）：旧措辞写「至少安排一两处人物交谈」，
@@ -695,8 +779,12 @@ public static class AuthorStyleBuilder
         }
 
         sb.AppendLine();
-        sb.AppendLine("（以上是统计参照，不是逐句硬指标；读起来自然优先。下面的作者守则与原文示例只用于" +
-                      "学句式接续、情绪处理与结构习惯；一旦与上述数字区间冲突，一律以区间为准。）");
+        // ★ 三级优先：作者守则 > 数字区间 > 原文示例。
+        //   守则是人工确认过的，代表使用者对这个作者的明确要求——
+        //   自动推导的分支（留白、单句成段）不可能覆盖所有情况，得留手动改的口子。
+        sb.AppendLine("（以上是统计参照，不是逐句硬指标；读起来自然优先。下面的作者守则是人工确认的硬约束，" +
+                      "与上述数字区间冲突时**以守则为准**——「不要留白」「多写厚段」这类要求直接按守则执行；" +
+                      "原文示例只用于学句式接续、情绪处理与结构习惯，与区间冲突时以区间为准。）");
 
         if (p.Rules.Count > 0)
         {
@@ -959,7 +1047,10 @@ public static class AuthorStyleBuilder
     internal static List<AuthorStyleProfile.StyleSample> PickSamples(
         List<string> chapters, string allText, int visible,
         double targetSentence = 0, double targetComma = 0,
-        double targetDialogue = 0, double targetPara = 0, double paraP90 = 0)
+        double targetDialogue = 0, double targetPara = 0, double paraP90 = 0,
+        // ★ 2026-11-24：掺样也按档案开启。默认 false = 不掺，
+        //   避免「用余华的形状给所有作者选样本」。
+        bool wantQuietLong = false, bool wantShortSegment = false)
     {
         // 场景分桶：对话交锋 / 战斗冲突 / 环境氛围 / 日常推进。
         // ★ 先按段分类，再把**同场景连续段落**聚成 250~350 字的窗口——
@@ -1057,7 +1148,7 @@ public static class AuthorStyleBuilder
             //   读者反馈的「没有松弛段落」「句长起伏不够」都指向这里。
             //   从全量 scored 里找而不是 ranked，否则低分的长段早被 Top64 截断了。
             var forced = new List<(SampleWindow W, double Fit, string Kind)>();
-            if (paraP90 > 0)
+            if (wantQuietLong && paraP90 > 0)
             {
                 var longSeg = scored
                     .Where(x => x.W.Chars <= 600          // 余华语料有 1779 字的合并整节，当范本会过犹不及
@@ -1067,11 +1158,14 @@ public static class AuthorStyleBuilder
                     .FirstOrDefault();
                 if (longSeg.W != null) forced.Add((longSeg.W, longSeg.Fit, "松弛长段"));
             }
-            var shortSeg = scored
-                .Where(x => MedianParaOf(x.W) <= 15 && x.W.Paragraphs.Count >= 4)
-                .OrderByDescending(x => x.W.Paragraphs.Count)
-                .FirstOrDefault();
-            if (shortSeg.W != null) forced.Add((shortSeg.W, shortSeg.Fit, "短促段"));
+            if (wantShortSegment)
+            {
+                var shortSeg = scored
+                    .Where(x => MedianParaOf(x.W) <= 15 && x.W.Paragraphs.Count >= 4)
+                    .OrderByDescending(x => x.W.Paragraphs.Count)
+                    .FirstOrDefault();
+                if (shortSeg.W != null) forced.Add((shortSeg.W, shortSeg.Fit, "短促段"));
+            }
 
             var grams = new List<HashSet<string>>();
             var perChapter = new Dictionary<string, int>(StringComparer.Ordinal);

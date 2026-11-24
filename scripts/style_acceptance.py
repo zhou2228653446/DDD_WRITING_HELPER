@@ -27,7 +27,9 @@ import tempfile
 import threading
 import time
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+# ★ 脚本在 scripts/ 下，仓库根是上一级——别写回 dirname(__file__)，
+#   那样 DEFAULT_EXE 会指到 scripts/编辑器.Mcp/…（2026-11-24 整理目录时踩过）。
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_EXE = os.path.join(
     ROOT, "编辑器.Mcp", "bin", "Debug", "net10.0-windows", "TdxClaw.Mcp.exe")
 

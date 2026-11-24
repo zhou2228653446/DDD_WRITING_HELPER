@@ -308,7 +308,7 @@ style_profile_tuning { id: "余华", action: "reset", confirm: "yes" }          
 34~52 甚至 7~52 的相似度分数，调任何参数都会被噪声淹没。
 
 ```bash
-python style_acceptance.py --profile gemini --sampling stable \
+python scripts/style_acceptance.py --profile gemini --sampling stable \
     --repeat 3 --out <产物目录>
 ```
 
@@ -370,8 +370,8 @@ python style_acceptance.py --profile gemini --sampling stable \
 **复现命令（不需要加任何配置）**：两轮都用同一份固定基准，各跑一档：
 
 ```bash
-python style_acceptance.py --profile gemini --compare default --repeat 3 --chapters 2 --timeout 90 --baseline <baseline.txt 路径> --out <目录A>
-python style_acceptance.py --profile gemini --compare stable  --repeat 3 --chapters 2 --timeout 90 --baseline <同一个 baseline.txt 路径> --out <目录B>
+python scripts/style_acceptance.py --profile gemini --compare default --repeat 3 --chapters 2 --timeout 90 --baseline <baseline.txt 路径> --out <目录A>
+python scripts/style_acceptance.py --profile gemini --compare stable  --repeat 3 --chapters 2 --timeout 90 --baseline <同一个 baseline.txt 路径> --out <目录B>
 ```
 
 `--chapters 2` 跳过连载、只测方差。两份 `report.md` 的方差表可直接合并比较。
